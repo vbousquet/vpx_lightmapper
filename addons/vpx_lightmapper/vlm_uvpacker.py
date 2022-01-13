@@ -15,5 +15,4 @@
 
 import bpy
 
-
-
+# TODO implement bridge for uv packer

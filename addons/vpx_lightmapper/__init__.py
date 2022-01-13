@@ -50,10 +50,6 @@ if "vlm_collections" in locals():
     importlib.reload(vlm_collections)
 else:
     from . import vlm_collections
-if "vlm_lzw" in locals():
-    importlib.reload(vlm_lzw)
-else:
-    from . import vlm_lzw
 if "vlm_utils" in locals():
     importlib.reload(vlm_utils)
 else:

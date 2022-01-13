@@ -26,7 +26,6 @@ from math import radians
 from bpy_extras.io_utils import axis_conversion
 from . import vlm_utils
 from . import vlm_collections
-from . import vlm_lzw
 
 # Dependencies which need a custom install (not included in the Blender install)
 from PIL import Image
