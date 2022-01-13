@@ -943,7 +943,7 @@ def read_vpx(context, filepath):
                     obj.data.materials.append(bpy.data.materials["VPX.Core.Mat.Light.Socket"])
                     update_location(obj, x * global_scale, -y * global_scale, halo_height * global_scale - obj.data.extrude)
                     created_objects.append(obj)
-                    hidden_col.objects.link(obj)
+                    indirect_col.objects.link(obj)
                     z = -1 # Move below playfield to light through translucent material
                     bake_col.objects.unlink(obj)
                     obj.name = f"VPX.Light.Shape.{name}"
