@@ -151,16 +151,16 @@ def full_bake(context):
     for light_col in lights_col.children:
         group_lights = light_col.vlmSettings.light_mode
         if group_lights:
-            light_merge_groups[strip_vlm(light_col.name)] = []
+            light_merge_groups[vlm_utils.strip_vlm(light_col.name)] = []
         else:
             for light in [l for l in light_col.objects if l.type=='LIGHT']:
-                light_merge_groups[f"{strip_vlm(light_col.name)}-{light.name}"] = []
+                light_merge_groups[f"{vlm_utils.strip_vlm(light_col.name)}-{light.name}"] = []
 
     # FIXME render overlay collection and save it, activate composer accordingly for the next renders
 
     bake_results = []
     for bake_col in root_bake_col.children:
-        bake_group_name = strip_vlm(bake_col.name)
+        bake_group_name = vlm_utils.strip_vlm(bake_col.name)
         baked_objects = [obj for obj in bake_col.objects]
         bakepath = f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/{bake_group_name}/"
         bake_mode = bake_col.vlmSettings.bake_mode # either 'default' / 'movable' / 'playfield' see vlm_commons
@@ -229,7 +229,7 @@ def full_bake(context):
                 tmp_col.objects.link(obj)
             
             def perform_render(group_name):
-                print(f". Rendering group #{index+1}/{len(object_groups)} for {group_name} lighting ({len(objects)} objects)")
+                print(f". Rendering group #{index+1}/{len(object_groups)} ({len(objects)} objects) for {group_name} lighting")
                 context.scene.render.filepath = f"{bakepath}Render groups/{group_name} - Group {index}.png"
                 if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
                     cg = vlm_utils.push_color_grading(True)
@@ -252,7 +252,7 @@ def full_bake(context):
                             previous_light_collections.append(light.users_collection)
                             [col.objects.unlink(light) for col in light.users_collection]
                             tmp_col.objects.link(light)
-                        perform_render(f"{strip_vlm(light_col.name)}")
+                        perform_render(f"{vlm_utils.strip_vlm(light_col.name)}")
                         for light, previous_light_collection in zip(lights, previous_light_collections):
                             tmp_col.objects.unlink(light)
                             [col.objects.link(light) for col in previous_light_collection]
@@ -261,7 +261,7 @@ def full_bake(context):
                         previous_light_collections = light.users_collection
                         [col.objects.unlink(light) for col in light.users_collection]
                         tmp_col.objects.link(light)
-                        perform_render(f"{strip_vlm(light_col.name)} - {light.name}")
+                        perform_render(f"{vlm_utils.strip_vlm(light_col.name)} - {light.name}")
                         tmp_col.objects.unlink(light)
                         [col.objects.link(light) for col in previous_light_collections]
             context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
@@ -296,7 +296,7 @@ def full_bake(context):
                     bpy.ops.object.mode_set(mode='OBJECT')
                     tmp_col.objects.unlink(obj)
                     obj = context.view_layer.objects.active
-                    apply_split_normals(obj.data)
+                    vlm_utils.apply_split_normals(obj.data)
                 else:
                     bpy.ops.object.select_all(action='DESELECT')
                     tmp_col.objects.link(obj)
@@ -631,10 +631,10 @@ def full_bake(context):
             group_lights = light_col.vlmSettings.light_mode
             if group_lights:
                 if light_col.hide_render == False and len(lights) > 0:
-                    bake_packmap(strip_vlm(light_col.name), True, f"{bakepath}Render groups/{strip_vlm(light_col.name)} - Group {{0}}.png", f"{bakepath}{light_col.name} - HeatMap {{0}}.png")
+                    bake_packmap(vlm_utils.strip_vlm(light_col.name), True, f"{bakepath}Render groups/{vlm_utils.strip_vlm(light_col.name)} - Group {{0}}.png", f"{bakepath}{light_col.name} - HeatMap {{0}}.png")
             else:
                 for light in lights:
-                    bake_packmap(f"{strip_vlm(light_col.name)}-{light.name}", True, f"{bakepath}Render groups/{strip_vlm(light_col.name)} - {light.name} - Group {{0}}.png", f"{bakepath}{light_col.name} - {light.name} - HeatMap {{0}}.png")
+                    bake_packmap(f"{vlm_utils.strip_vlm(light_col.name)}-{light.name}", True, f"{bakepath}Render groups/{vlm_utils.strip_vlm(light_col.name)} - {light.name} - Group {{0}}.png", f"{bakepath}{light_col.name} - {light.name} - HeatMap {{0}}.png")
 
         # Clean up for next bake group
         tmp_col.objects.unlink(bake_target)
