@@ -29,24 +29,19 @@ from PIL import Image # External dependency
 global_scale = vlm_utils.global_scale
 
 # TODO
-# - Object groups are created per bake group: they should be made per scene to limit the number of renders
 # - Allow to use either internal UV packing or UVPacker addon
 # - Support pack mapping to a non square texture
 # - Combine multiple light pack maps into a single pack map
-# - Save renders as HDR images (OpenEXR 16 bits, eventually 32 bits, to be evaluated) since colorgrading is performed on final export
 # - Allow to have an object (or a group) to be baked to a target object (like bake seclected to active) for inserts, for playfield with text overlay,...
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
 # - Allow to have 'overlays' (for insert overlays) which are not baked but overlayed on all others
 #     Render overlay group (with depth pass) and save to an OpenEXR Multilayer file
 #     Compose all renders with overlay pass, filtering by z and alpha
-# - Do not load renders when creating bake models since this will cause an OOM crash with high number of lights, add an operator to load them on demand
 # - Split the baking process for a more interactive use
 #  x  Stage 1: compute render groups => ability to invalidate cache, store group ownership for each object, show it in UI
 #  x  Stage 2: rendering => ability to invalidate cache / recompute individually or globally the renders
 #     Stage 3: create bake mesh, create packmap groups (merge of multiple lightmaps), pack UVs
 #     Stage 4: review meshes, edit packmaps groups, adapt UV packing (ability to load/unload the renders to avoid crashing by OOM)
-
-
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -111,7 +106,7 @@ def get_n_render_groups(context):
 
 def compute_render_groups(context):
     """Evaluate the set of bake groups (groups of objects that do not overlap when rendered 
-    from the camera point of view) and  store the result in the object properties.
+    from the camera point of view) and store the result in the object properties.
     """
     start_time = time.time()
     print(f"\nEvaluating render groups")
@@ -140,11 +135,10 @@ def compute_render_groups(context):
 
     object_groups = []
     bakepath = vlm_utils.get_bakepath(context)
-    if not os.path.exists(bpy.path.abspath(f"{bakepath}Object masks/")):
-        os.mkdir(bpy.path.abspath(f"{bakepath}Object masks/"))
+    vlm_utils.mkpath(f"{bakepath}Object masks/")
     all_objects = [obj for obj in root_bake_col.all_objects]
     for i, obj in enumerate(all_objects, start=1):
-        print(f". Evaluating object mask #{i:>3}/{1+len(all_objects)} for '{obj.name}'")
+        print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}'")
         # Render object visibility mask (basic low res render)
         context.scene.render.filepath = f"{bakepath}Object masks/{obj.name}.png"
         if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
@@ -176,10 +170,8 @@ def render_all_groups(context):
     """Render all render groups for all lighting situations
     """
     start_time = time.time()
-    print("\nRendering all bake groups for all lighting situations")
     bakepath = f"{vlm_utils.get_bakepath(context)}Render groups/"
-    if not os.path.exists(bpy.path.abspath(bakepath)):
-        os.mkdir(bpy.path.abspath(bakepath))
+    vlm_utils.mkpath(bakepath)
     vlmProps = context.scene.vlmSettings
     opt_tex_size = vlmProps.tex_size
     opt_force_render = False # Force rendering even if cache is available
@@ -211,14 +203,25 @@ def render_all_groups(context):
         vlm_collections.find_layer_collection(rlc, bake_col).indirect_only = True
     vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
 
+    n_render_groups = get_n_render_groups(context)
+    n_lighting_situations = 1
+    for light_col in lights_col.children:
+        lights = light_col.objects
+        if light_col.hide_render == False and len(lights) > 0:
+            if light_col.vlmSettings.light_mode:
+                n_lighting_situations += 1
+            else:
+                n_lighting_situations += len(lights)
+
+    print(f"\nRendering {n_render_groups} render groups for {n_lighting_situations} lighting situations")
+
     # FIXME render overlay collection and save it, activate composer accordingly to overlay it on object group renders (z masked)
 
     n_render_performed = 0
-    n_render_groups = get_n_render_groups(context)
     for group_index in range(n_render_groups):
         objects = [obj for obj in root_bake_col.all_objects if obj.vlmSettings.render_group == group_index]
         n_objects = len(objects)
-        print(f"\nRendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for all lighting situations")
+        print(f"\nRendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for {n_lighting_situations} lighting situations")
 
         def perform_render(lighting_name):
             print(f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{lighting_name}'")
@@ -235,7 +238,7 @@ def render_all_groups(context):
         context.scene.world = bpy.data.worlds["VPX.Env.Black"]
         context.scene.render.film_transparent = False
         for light_col in lights_col.children:
-            lights = light_col.objects
+            lights = [l for l in light_col.objects]
             if light_col.hide_render == False and len(lights) > 0:
                 if light_col.vlmSettings.light_mode:
                     previous_light_collections = vlm_collections.move_all_to_col(lights, tmp_col)
@@ -725,7 +728,3 @@ def create_bake_meshes(context):
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
     print(f"\nbake meshes created in {int(time.time() - start_time)}s.")
-
-
-def full_bake(context):
-    pass

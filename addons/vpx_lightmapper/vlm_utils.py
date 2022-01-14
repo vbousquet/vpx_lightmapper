@@ -16,6 +16,7 @@
 import bpy
 import array
 import os
+import pathlib
 
 
 global_scale = 0.01
@@ -62,3 +63,6 @@ def image_by_path(path):
             return image
     return None
 
+
+def mkpath(path):
+    pathlib.Path(bpy.path.abspath(path)).mkdir(parents=True, exist_ok=True)
