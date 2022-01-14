@@ -37,7 +37,7 @@ from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, C
 from rna_prop_ui import PropertyPanel
 
 # TODO
-# - Move bake results properties to object properties and provide adequate UI
+# - Export packmap needs to use object properties
 
 
 
@@ -224,12 +224,14 @@ class VLM_OT_bake_all(Operator):
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
-        vlmProps = context.scene.vlmSettings
+        vlm_baker.compute_render_groups(context)
 
-        # Full bake
-        vlm_baker.full_bake(context)
+        vlm_baker.render_all_groups(context)
+
+        vlm_baker.create_bake_meshes(context)
     
         # Eventually export the result, baking the final packmap
+        vlmProps = context.scene.vlmSettings
         opt_export_on_bake = vlmProps.export_on_bake # True if we want the packmap to be rendered
         opt_save_webp = vlmProps.export_webp # Additionally convert the exported pack map to webp (keeping the default png as well)
         if opt_export_on_bake:
