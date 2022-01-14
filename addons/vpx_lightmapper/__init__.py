@@ -82,18 +82,22 @@ if dependencies_installed:
 
 
 class VLM_Scene_props(PropertyGroup):
-    # Importer
+    # Importer options
     light_size: FloatProperty(name="Light Size", description="Light size factor from VPX to Blender", default = 5.0)
-    light_intensity: FloatProperty(name="Light Intensity", description="Light intensity factor from VPX to Blender", default = 25.0)
-    table_file: StringProperty(name="Table", description="Table filename", default="")
-    playfield_size: FloatVectorProperty(name="Playfield size:", description="Size of the playfield in VP unit", default=(0, 0, 0, 0), size=4)
-    # Baker
+    light_intensity: FloatProperty(name="Light Intensity", description="Light intensity factor from VPX to Blender", default = 250.0)
+    process_inserts: BoolProperty(name="Convert inserts", description="Detect inserts and converts them", default = True)
+    process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
+    bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 0.0)
+    # Baker options
     tex_size: IntProperty(name="Tex Size:", description="Texture size", default = 256, min = 8)
     padding: IntProperty(name="Padding:", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
     export_on_bake: BoolProperty(name="Export after bake", description="Export all meshes and packmaps after baking", default = False)
-    # Exporter
+    # Exporter options
     export_webp: BoolProperty(name="Export WebP", description="Additionally to the PNG, export WebP", default = False)
+    # Active table informations
+    table_file: StringProperty(name="Table", description="Table filename", default="")
+    playfield_size: FloatVectorProperty(name="Playfield size:", description="Size of the playfield in VP unit", default=(0, 0, 0, 0), size=4)
 
 
 class VLM_Collection_props(PropertyGroup):
@@ -109,8 +113,14 @@ class VLM_Collection_props(PropertyGroup):
 
 
 class VLM_Object_props(PropertyGroup):
+    # Bake objects properties
     import_mesh: BoolProperty(name="Mesh", description="Update mesh on import", default = True)
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
+    render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
+    # Bake result properties
+    bake_name: StringProperty(name="Bake Name", description="Lighting situation identifier", default="")
+    bake_is_light: BoolProperty(name="Light Bake", description="True for light map bakes", default = False)
+    bake_tex_factor: FloatProperty(name="Bake Tex Ratio", description="Texture size factor", default=1)
 
 
 class VLM_OT_new(Operator):
@@ -171,6 +181,39 @@ class VLM_OT_texsize(Operator):
 
     def execute(self, context):
         context.scene.vlmSettings.tex_size = self.size
+        return {"FINISHED"}
+
+
+class VLM_OT_compute_render_groups(Operator):
+    bl_idname = "vlm.compute_render_groups_operator"
+    bl_label = "Groups"
+    bl_description = "Evaluate render groups"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        vlm_baker.compute_render_groups(context)
+        return {"FINISHED"}
+
+
+class VLM_OT_render_all_groups(Operator):
+    bl_idname = "vlm.render_all_groups_operator"
+    bl_label = "Render"
+    bl_description = "Render all groups for all lighting situation"
+    bl_options = {"REGISTER"}
+    
+    def execute(self, context):
+        vlm_baker.render_all_groups(context)
+        return {"FINISHED"}
+
+
+class VLM_OT_create_bake_meshes(Operator):
+    bl_idname = "vlm.create_bake_meshes_operator"
+    bl_label = "Bake Meshes"
+    bl_description = "Create all bake meshes for all lighting situation"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        vlm_baker.create_bake_meshes(context)
         return {"FINISHED"}
 
 
@@ -352,6 +395,38 @@ class VLM_OT_export_packmap(Operator):
         return {"FINISHED"}
 
 
+class VLM_OT_load_render_images(Operator):
+    bl_idname = "vlm.load_render_images_operator"
+    bl_label = "(Un)Load Renders"
+    bl_description = "Load/Unload render images for preview"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    @classmethod
+    def poll(cls, context):
+        object_col = vlm_collections.get_collection('BAKE RESULT', create=False)
+        if object_col is not None:
+            for obj in context.selected_objects:
+                if obj.name in object_col.all_objects:
+                    return True
+        return False
+
+    def execute(self, context):
+        vlmProps = context.scene.vlmSettings
+        result_col = vlm_collections.get_collection('BAKE RESULT')
+        bakepath = f"{vlm_utils.get_bakepath(context)}Render groups/"
+        for obj in context.selected_objects:
+            if obj.name in result_col.all_objects:
+                paths = [f"{bakepath}{obj.vlmSettings.bake_name} - Group {i}.exr" for i,_ in enumerate(obj.data.materials)]
+                all_loaded = all((vlm_utils.image_by_path(path) is not None for path in paths))
+                if all_loaded:
+                    for path in paths:
+                        bpy.data.images.remove(vlm_utils.image_by_path(path))
+                else:
+                    for path, mat in zip(paths, obj.data.materials):
+                        mat.node_tree.nodes["BakeTex"].image = bpy.data.images.load(path, check_existing=True)
+        return {"FINISHED"}
+
+
 class VLM_OT_export_all(Operator):
     bl_idname = "vlm.export_all_operator"
     bl_label = "Export All"
@@ -381,10 +456,15 @@ class VLM_PT_Properties(bpy.types.Panel):
         row.operator(VLM_OT_new.bl_idname)
         row.operator(VLM_OT_new_from_vpx.bl_idname)
         row.operator(VLM_OT_update.bl_idname)
+        layout.prop(vlmProps, "table_file")
+        row = layout.row()
+        row.prop(vlmProps, "process_plastics")
+        row.prop(vlmProps, "bevel_plastics")
+        row = layout.row()
+        row.prop(vlmProps, "process_inserts")
         row = layout.row()
         row.prop(vlmProps, "light_size")
         row.prop(vlmProps, "light_intensity")
-        layout.label(text=vlmProps.table_file)
 
         layout.separator()
 
@@ -403,6 +483,13 @@ class VLM_PT_Properties(bpy.types.Panel):
         row = layout.row()
         row.prop(vlmProps, "remove_backface")
         row.prop(vlmProps, "export_on_bake")
+
+        row = layout.row()
+        row.scale_y = 1.5
+        row.operator(VLM_OT_compute_render_groups.bl_idname)
+        row.operator(VLM_OT_render_all_groups.bl_idname)
+        row.operator(VLM_OT_create_bake_meshes.bl_idname)
+
         row = layout.row()
         row.scale_y = 1.5
         row.operator(VLM_OT_bake_all.bl_idname)
@@ -455,40 +542,54 @@ class VLM_PT_3D(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         show_info = True
-
         root_col = vlm_collections.get_collection('ROOT', create=False)
-        if root_col is not None:
-            bake_objects = [obj for obj in context.selected_objects if obj.name in root_col.all_objects]
-            if bake_objects:
-                show_info = False
-                layout.label(text="Import options:")
-                row = layout.row(align=True)
-                row.scale_y = 1.5
-                if all((x.vlmSettings.import_mesh for x in bake_objects)):
-                    row.operator(VLM_OT_state_import_mesh.bl_idname, text='On', icon='MESH_DATA').enable_import = False
-                elif all((not x.vlmSettings.import_mesh for x in bake_objects)):
-                    row.operator(VLM_OT_state_import_mesh.bl_idname, text='Off', icon='MESH_DATA').enable_import = True
-                else:
-                    row.operator(VLM_OT_state_import_mesh.bl_idname, text='-', icon='MESH_DATA').enable_import = True
-                if all((x.vlmSettings.import_transform for x in bake_objects)):
-                    row.operator(VLM_OT_state_import_transform.bl_idname, text='On', icon='OBJECT_ORIGIN').enable_transform = False
-                elif all((not x.vlmSettings.import_transform for x in bake_objects)):
-                    row.operator(VLM_OT_state_import_transform.bl_idname, text='Off', icon='OBJECT_ORIGIN').enable_transform = True
-                else:
-                    row.operator(VLM_OT_state_import_transform.bl_idname, text='-', icon='MATERIAL').enable_transform = True
-                layout.separator()
-                layout.label(text="Bake visibility:")
-                row = layout.row(align=True)
-                row.scale_y = 1.5
-                row.operator(VLM_OT_state_hide.bl_idname)
-                row.operator(VLM_OT_state_indirect.bl_idname)
-                row.operator(VLM_OT_state_bake.bl_idname)
-
         result_col = vlm_collections.get_collection('BAKE RESULT', create=False)
+        
+        bake_objects = [obj for obj in context.selected_objects if (root_col is not None and obj.name in root_col.all_objects) and (result_col is None or obj.name not in result_col)]
+        if bake_objects:
+            show_info = False
+            layout.label(text="Import options:")
+            row = layout.row(align=True)
+            row.scale_y = 1.5
+            if all((x.vlmSettings.import_mesh for x in bake_objects)):
+                row.operator(VLM_OT_state_import_mesh.bl_idname, text='On', icon='MESH_DATA').enable_import = False
+            elif all((not x.vlmSettings.import_mesh for x in bake_objects)):
+                row.operator(VLM_OT_state_import_mesh.bl_idname, text='Off', icon='MESH_DATA').enable_import = True
+            else:
+                row.operator(VLM_OT_state_import_mesh.bl_idname, text='-', icon='MESH_DATA').enable_import = True
+            if all((x.vlmSettings.import_transform for x in bake_objects)):
+                row.operator(VLM_OT_state_import_transform.bl_idname, text='On', icon='OBJECT_ORIGIN').enable_transform = False
+            elif all((not x.vlmSettings.import_transform for x in bake_objects)):
+                row.operator(VLM_OT_state_import_transform.bl_idname, text='Off', icon='OBJECT_ORIGIN').enable_transform = True
+            else:
+                row.operator(VLM_OT_state_import_transform.bl_idname, text='-', icon='MATERIAL').enable_transform = True
+            layout.separator()
+            layout.label(text="Bake visibility:")
+            row = layout.row(align=True)
+            row.scale_y = 1.5
+            row.operator(VLM_OT_state_hide.bl_idname)
+            row.operator(VLM_OT_state_indirect.bl_idname)
+            row.operator(VLM_OT_state_bake.bl_idname)
+            
+            single_group = -1
+            for obj in bake_objects:
+                if single_group == -1:
+                    single_group = obj.vlmSettings.render_group
+                elif single_group != obj.vlmSettings.render_group:
+                    single_group = -2
+            if single_group == -2:
+                layout.label(text="Multiple render groups")
+            elif single_group == -1:
+                layout.label(text="Undefined render groups")
+            else:
+                layout.label(text=f"Render group #{single_group}")
+
         if result_col is not None and next((x for x in context.selected_objects if x.name in result_col.all_objects), None) is not None:
             show_info = False
             layout.separator()
             layout.operator(VLM_OT_export_packmap.bl_idname)
+            layout.separator()
+            layout.operator(VLM_OT_load_render_images.bl_idname)
 
         if show_info:
             layout.label(text="Select a baked object or a bake result") 
@@ -588,6 +689,9 @@ classes = (
     VLM_OT_new_from_vpx,
     VLM_OT_update,
     VLM_OT_texsize,
+    VLM_OT_compute_render_groups,
+    VLM_OT_render_all_groups,
+    VLM_OT_create_bake_meshes,
     VLM_OT_bake_all,
     VLM_OT_state_hide,
     VLM_OT_state_indirect,
@@ -595,6 +699,7 @@ classes = (
     VLM_OT_state_import_mesh,
     VLM_OT_state_import_transform,
     VLM_OT_export_packmap,
+    VLM_OT_load_render_images,
     VLM_OT_export_all,
     )
 preference_classes = (VLM_PT_3D_warning_panel, VLM_PT_Props_warning_panel, VLM_OT_install_dependencies, VLM_preferences)

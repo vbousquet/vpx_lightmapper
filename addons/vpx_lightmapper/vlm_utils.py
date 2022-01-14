@@ -15,6 +15,7 @@
 
 import bpy
 import array
+import os
 
 
 global_scale = 0.01
@@ -45,9 +46,19 @@ def apply_split_normals(me):
 	me.use_auto_smooth = True
 
 
+def get_bakepath(context):
+    return f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/"
+
+
 def strip_vlm(name):
     if name.startswith('VLM.'):
         return name[4:]
     return name
     
+
+def image_by_path(path):
+    for image in bpy.data.images:
+        if image.filepath == path:
+            return image
+    return None
 

@@ -37,6 +37,7 @@ global_scale = vlm_utils.global_scale
 # TODO
 # - Implement surface positionning relative to a ramp
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
+# - Add automatic plastic beveling, allowing to have beveled for bake and unbeveled for export
 
 
 class BIFF_reader:
@@ -181,7 +182,7 @@ class VPX_Material(object):
             group.inputs[13].default_value = 0
 
 
-def update_material(mesh, slot, materials, mat_name, image):
+def update_material(mesh, slot, materials, mat_name, image, translucency=-1):
     # Find/Create material (see https://docs.blender.org/api/current/bpy.types.ShaderNode.html)
     mat_name = f"{mat_name.casefold()}"
     if image == "":
@@ -241,6 +242,11 @@ def update_material(mesh, slot, materials, mat_name, image):
             materials[mat_name].apply(group)
         elif mat_name != "":
             print(f"Missing material {mat_name}")
+        if translucency >= 0.0:
+            if mat_name in materials and materials[mat_name].is_metal:
+                group.inputs[14].default_value = 0
+            else:
+                group.inputs[14].default_value = translucency
         group.inputs[2].default_value = use_image
 
 
@@ -369,7 +375,15 @@ def read_vpx(context, filepath):
 
     opt_light_size = context.scene.vlmSettings.light_size
     opt_light_intensity = context.scene.vlmSettings.light_intensity
+    opt_process_inserts = context.scene.vlmSettings.process_inserts
+    opt_process_plastics = context.scene.vlmSettings.process_plastics
+    opt_plastic_translucency = 1.0
+    opt_bevel_plastics = context.scene.vlmSettings.bevel_plastics
     opt_bevel_thin_walls = False # This causes artifact on complex walls
+    if opt_process_inserts:
+        opt_playfield_translucency = 0.5
+    else:
+        opt_playfield_translucency = 0.0
     
     # Purge unlinked datas to avoid reusing them
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -735,12 +749,10 @@ def read_vpx(context, filepath):
                 obj = update_object(context, obj_name, obj.data, top_visible or side_visible, bake_col, hidden_col)
                 update_location(obj, 0, 0, global_scale * 0.5 * (height_top + height_bottom))
 
-                # FIXME add using core plastic as an option, and use translucent instead of diffuse for the bottom material
-                is_thin = 2.5 < (height_top - height_bottom) < 3.5
-                is_plastic = is_thin and 45 < height_bottom < 55
+                is_plastic = 2.5 < (height_top - height_bottom) < 3.5 # and 45 < height_bottom < 55
 
                 bevel_size = min(0.5 * extrude_height, global_scale * 1)
-                if opt_bevel_thin_walls and is_thin and bevel_size > 0 and not existing:
+                if opt_bevel_thin_walls and is_plastic and bevel_size > 0 and not existing:
                     bpy.ops.object.select_all(action='DESELECT')
                     obj.select_set(True)
                     context.view_layer.objects.active = obj
@@ -750,12 +762,16 @@ def read_vpx(context, filepath):
                     obj.modifiers["Bevel"].segments = 2
                 created_objects.append(obj)
 
-                update_material(obj.data, 0, materials, top_material, top_image)
-                update_material(obj.data, 1, materials, side_material, side_image)
-                update_material(obj.data, 2, materials, top_material, top_image)
-                if is_plastic:
+                while len(mesh.materials) < 3:
+                    mesh.materials.append(None)
+                if opt_process_plastics and is_plastic:
                     obj.data.materials[0] = bpy.data.materials["VPX.Core.Mat.Plastic"]
                     obj.data.materials[1] = bpy.data.materials["VPX.Core.Mat.Plastic"]
+                    update_material(obj.data, 2, materials, top_material, top_image, opt_plastic_translucency)
+                else:
+                    update_material(obj.data, 0, materials, top_material, top_image)
+                    update_material(obj.data, 1, materials, side_material, side_image)
+                    obj.data.materials[2] = bpy.data.materials["VPX.Core.Mat.Invisible"]
                 if not top_visible:
                     obj.data.materials[0] = bpy.data.materials["VPX.Core.Mat.Invisible"]
                     obj.data.materials[2] = bpy.data.materials["VPX.Core.Mat.Invisible"]
@@ -763,6 +779,7 @@ def read_vpx(context, filepath):
                     obj.data.materials[1] = bpy.data.materials["VPX.Core.Mat.Invisible"]
                              
             elif item_type == 1: # Flipper
+                # FIXME add an option to create a cylinder in the indirect baking to get the base projected shadow
                 pass
             
             elif item_type == 2: # Timer
@@ -934,13 +951,13 @@ def read_vpx(context, filepath):
                 obj.select_set(True)
                 context.view_layer.objects.active = obj
                 
-                # FIXME Some tables expect the bulb halo to be cut by the light mesh (like a mask for insrets for example) but others use the mesh to create fake shadows...
+                # Some tables expect the bulb halo to be cut by the light mesh (like a mask for insrets for example) but others use the mesh to create fake shadows...
                 is_insert = not is_gi and (bulb or image == playfield_image) and halo_height == 0 and surface == ''
-                if is_insert:
+                if opt_process_inserts and is_insert:
                     obj.data.fill_mode = 'BACK'
                     obj.data.extrude = 5 * global_scale
                     obj.data.transform(mathutils.Matrix.Translation((-x * global_scale, y * global_scale, 0.0)))
-                    obj.data.materials.append(bpy.data.materials["VPX.Core.Mat.Light.Socket"])
+                    obj.data.materials.append(bpy.data.materials["VPX.Core.Mat.Inserts.Back"])
                     update_location(obj, x * global_scale, -y * global_scale, halo_height * global_scale - obj.data.extrude)
                     created_objects.append(obj)
                     indirect_col.objects.link(obj)
@@ -1759,7 +1776,7 @@ def read_vpx(context, filepath):
         mesh.use_auto_smooth = True
         mesh.normals_split_custom_set([(0,0,1) for i in mesh.loops])
         uv_layer = mesh.uv_layers.new()
-        update_material(mesh, 0, materials, playfield_material, playfield_image)
+        update_material(mesh, 0, materials, playfield_material, playfield_image, opt_playfield_translucency)
         if "VPX.Playfield" in context.scene.objects:
             obj = context.scene.objects["VPX.Playfield"]
             obj.data = mesh

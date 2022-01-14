@@ -101,3 +101,28 @@ def pop_state(state):
         find_layer_collection(bpy.context.view_layer.layer_collection, col).exclude = s[0]
         col.hide_render = s[1]
         col.hide_viewport = s[2]
+
+
+def move_to_col(obj, target_col):
+    initial_collections = [col for col in obj.users_collection]
+    [col.objects.unlink(obj) for col in initial_collections]
+    target_col.objects.link(obj)
+    return (obj, initial_collections)
+    
+    
+def restore_col_links(saved_state):
+    [col.objects.unlink(saved_state[0]) for col in saved_state[0].users_collection]
+    [col.objects.link(saved_state[0]) for col in saved_state[1]]
+
+
+def move_all_to_col(objects, target_col):
+    initial_collections = []
+    for obj in objects:
+        initial_collections.append(move_to_col(obj, target_col))
+    return initial_collections
+
+
+def restore_all_col_links(saved_state):
+    for state in saved_state:
+        restore_col_links(state)
+

@@ -153,4 +153,17 @@ Exporting consist of:
 
 ## Advanced use
 
-*TODO* To be completed
+### Plastics
+
+The importer has an option to detect plastic walls and process them accordingly. If set, all wall with a thickness from 2.5 to 3.5 VP units will be processed like this:
+- place the top material at the bottom,
+- set sides and top material to a predefined transparent plastic material,
+- set the bottom material to be shaded as translucent instead of diffuse,
+- *TODO* bevel the edges of the resulting mesh.
+
+### Inserts
+
+The importer has an option to detect inserts (lights placed on the playfield, with a name which does not start by 'gi') and apply the following process:
+- move light slightly below playfield,
+- generate a cup mesh, opened on the top side, corresponding to the VPX light shape, with a core reflective material,
+- adjust the playfield material to be partly translucent.
