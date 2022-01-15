@@ -332,26 +332,6 @@ class VLM_OT_state_import_mesh(Operator):
         return {"FINISHED"}
 
 
-class VLM_OT_state_import_material(Operator):
-    bl_idname = "vlm.state_import_material"
-    bl_label = "Material"
-    bl_description = "Update material on import"
-    bl_options = {"REGISTER", "UNDO"}
-    enable_material: bpy.props.BoolProperty()
-    
-    @classmethod
-    def poll(cls, context):
-        bake_col = vlm_collections.get_collection('ROOT', create=False)
-        return bake_col is not None and next((obj for obj in context.selected_objects if obj.name in bake_col.all_objects), None) is not None
-
-    def execute(self, context):
-        bake_col = vlm_collections.get_collection('ROOT', create=False)
-        if bake_col is not None:
-            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects]:
-                obj.vlmSettings.import_material = self.enable_material
-        return {"FINISHED"}
-
-
 class VLM_OT_state_import_transform(Operator):
     bl_idname = "vlm.state_import_transform"
     bl_label = "Transform"
@@ -369,6 +349,41 @@ class VLM_OT_state_import_transform(Operator):
         if bake_col is not None:
             for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects]:
                 obj.vlmSettings.import_transform = self.enable_transform
+        return {"FINISHED"}
+
+
+class VLM_OT_clear_render_group_cache(Operator):
+    bl_idname = "vlm.clear_render_group_cache"
+    bl_label = "Clear Cache"
+    bl_description = "Remove render group from cache"
+    bl_options = {"REGISTER"}
+    
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        return {"FINISHED"}
+
+
+class VLM_OT_select_render_group(Operator):
+    bl_idname = "vlm.select_render_group"
+    bl_label = "Select"
+    bl_description = "Select all object from this render group"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    @classmethod
+    def poll(cls, context):
+        bake_col = vlm_collections.get_collection('BAKE', create=False)
+        return bake_col is not None and next((obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.render_group >= 0), None) is not None
+
+    def execute(self, context):
+        bake_col = vlm_collections.get_collection('BAKE', create=False)
+        if bake_col is not None:
+            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.render_group >= 0]:
+                for other in bake_col.all_objects:
+                    if other.vlmSettings.render_group == obj.vlmSettings.render_group:
+                        other.select_set(True)
         return {"FINISHED"}
 
 
@@ -399,7 +414,7 @@ class VLM_OT_export_packmap(Operator):
 
 class VLM_OT_load_render_images(Operator):
     bl_idname = "vlm.load_render_images_operator"
-    bl_label = "(Un)Load Renders"
+    bl_label = "Load/Unload Renders"
     bl_description = "Load/Unload render images for preview"
     bl_options = {"REGISTER", "UNDO"}
     
@@ -547,7 +562,7 @@ class VLM_PT_3D(bpy.types.Panel):
         root_col = vlm_collections.get_collection('ROOT', create=False)
         result_col = vlm_collections.get_collection('BAKE RESULT', create=False)
         
-        bake_objects = [obj for obj in context.selected_objects if (root_col is not None and obj.name in root_col.all_objects) and (result_col is None or obj.name not in result_col)]
+        bake_objects = [obj for obj in context.selected_objects if (root_col is not None and obj.name in root_col.all_objects) and (result_col is None or obj.name not in result_col.all_objects)]
         if bake_objects:
             show_info = False
             layout.label(text="Import options:")
@@ -585,14 +600,22 @@ class VLM_PT_3D(bpy.types.Panel):
                 layout.label(text="Undefined render groups")
             else:
                 layout.label(text=f"Render group #{single_group}")
+            row = layout.row(align=True)
+            row.operator(VLM_OT_clear_render_group_cache.bl_idname)
+            row.operator(VLM_OT_select_render_group.bl_idname)
 
-        if result_col is not None and next((x for x in context.selected_objects if x.name in result_col.all_objects), None) is not None:
+        result_objects = [obj for obj in context.selected_objects if result_col is not None and obj.name in result_col.all_objects]
+        if result_objects:
             show_info = False
+            if len(result_objects) == 1:
+                layout.prop(result_objects[0].vlmSettings, 'bake_name', text='Name', expand=True)
+                layout.prop(result_objects[0].vlmSettings, 'bake_is_light', expand=True)
+                layout.prop(result_objects[0].vlmSettings, 'bake_tex_factor', expand=True)
             layout.separator()
             layout.operator(VLM_OT_export_packmap.bl_idname)
             layout.separator()
             layout.operator(VLM_OT_load_render_images.bl_idname)
-
+            
         if show_info:
             layout.label(text="Select a baked object or a bake result") 
 
@@ -700,6 +723,8 @@ classes = (
     VLM_OT_state_bake,
     VLM_OT_state_import_mesh,
     VLM_OT_state_import_transform,
+    VLM_OT_clear_render_group_cache,
+    VLM_OT_select_render_group,
     VLM_OT_export_packmap,
     VLM_OT_load_render_images,
     VLM_OT_export_all,
