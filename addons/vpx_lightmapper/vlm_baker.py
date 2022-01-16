@@ -34,9 +34,6 @@ global_scale = vlm_utils.global_scale
 # - Combine multiple light pack maps into a single pack map
 # - Allow to have an object (or a group) to be baked to a target object (like bake seclected to active) for inserts, for playfield with text overlay,...
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
-# - Allow to have 'overlays' (for insert overlays) which are not baked but overlayed on all others
-#     Render overlay group (with depth pass) and save to an OpenEXR Multilayer file
-#     Compose all renders with overlay pass, filtering by z and alpha
 # - Split the baking process for a more interactive use
 #  x  Stage 1: compute render groups => ability to invalidate cache, store group ownership for each object, show it in UI
 #  x  Stage 2: rendering => ability to invalidate cache / recompute individually or globally the renders
@@ -93,6 +90,30 @@ def compute_uvmap_density(mesh, uv_layer):
     return area_sum
 
 
+def get_lightings(context):
+    """Return the list of lighting situations to be rendered as list of tuples
+        (scenario id, light collection, single light, custom data)
+    """
+    light_scenarios = {"Environment": ["Environment", None, None, None]}
+    lights_col = vlm_collections.get_collection('LIGHTS', create=False)
+    if lights_col is not None:
+        for light_col in lights_col.children:
+            lights = light_col.objects
+            if light_col.hide_render == False and len(lights) > 0:
+                if light_col.vlmSettings.light_mode:
+                    name = vlm_utils.strip_vlm(light_col.name)
+                    light_scenarios[name] = [name, light_col, None, None]
+                else:
+                    for light in lights:
+                        name = f"{vlm_utils.strip_vlm(light_col.name)} - {light.name}"
+                        light_scenarios[name] = [name, light_col, light, None]
+    return light_scenarios
+
+
+def get_n_lightings(context):
+    return len(get_lightings(context))
+    
+    
 def get_n_render_groups(context):
     i = 0
     root_bake_col = vlm_collections.get_collection('BAKE', create=False)
@@ -132,6 +153,7 @@ def compute_render_groups(context):
     context.scene.render.image_settings.color_mode = 'RGBA'
     context.scene.render.image_settings.color_depth = '8'
     context.scene.world = bpy.data.worlds["VPX.Env.Black"]
+    context.scene.use_nodes = False
 
     object_groups = []
     bakepath = vlm_utils.get_bakepath(context)
@@ -180,16 +202,19 @@ def render_all_groups(context):
     context.scene.render.image_settings.file_format = 'OPEN_EXR'
     context.scene.render.image_settings.color_mode = 'RGBA'
     context.scene.render.image_settings.color_depth = '16'
+    context.scene.view_layers["ViewLayer"].use_pass_z = True
+    context.scene.use_nodes = False
     cg = vlm_utils.push_color_grading(True)
+    n_render_performed = 0
 
     col_state = vlm_collections.push_state()
-
     rlc = context.view_layer.layer_collection
     tmp_col = vlm_collections.get_collection('BAKETMP')
     indirect_col = vlm_collections.get_collection('INDIRECT')
     result_col = vlm_collections.get_collection('BAKE RESULT')
     lights_col = vlm_collections.get_collection('LIGHTS')
     root_bake_col = vlm_collections.get_collection('BAKE')
+    overlay_col = vlm_collections.get_collection('OVERLAY')
     vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('HIDDEN')).exclude = True
     vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('TRASH')).exclude = True
     vlm_collections.find_layer_collection(rlc, result_col).exclude = True
@@ -204,53 +229,107 @@ def render_all_groups(context):
     vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
 
     n_render_groups = get_n_render_groups(context)
-    n_lighting_situations = 1
-    for light_col in lights_col.children:
-        lights = light_col.objects
-        if light_col.hide_render == False and len(lights) > 0:
-            if light_col.vlmSettings.light_mode:
-                n_lighting_situations += 1
-            else:
-                n_lighting_situations += len(lights)
+    light_scenarios = get_lightings(context)
+    n_lighting_situations = len(light_scenarios)
+
+    def setup_light_scenario(context, scenario):
+        tmp_col = vlm_collections.get_collection('BAKETMP')
+        if scenario[1] is None: # Base render
+            context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
+            context.scene.render.film_transparent = True
+            return 0, lambda a : a
+        else:
+            context.scene.world = bpy.data.worlds["VPX.Env.Black"]
+            context.scene.render.film_transparent = False
+            if scenario[2] is None: # Light group render
+                previous_light_collections = vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col)
+                return previous_light_collections, lambda initial_state : vlm_collections.restore_all_col_links(initial_state)
+            else: # single light render
+                previous_light_collections = vlm_collections.move_to_col(scenario[2], tmp_col)
+                return previous_light_collections, lambda initial_state : vlm_collections.restore_col_links(initial_state)
+
+    overlays = [obj for obj in overlay_col.all_objects]
+    if overlays:
+        print(f"\nPreparing overlays for {n_lighting_situations} lighting situations")
+        # FIXME render overlay collection and save it, activate composer accordingly to overlay it on object group renders (z masked)
+        initial_collections = vlm_collections.move_all_to_col(overlays, tmp_col)
+        context.scene.render.image_settings.use_zbuffer = True
+        for name, scenario in light_scenarios.items():
+            context.scene.render.filepath = f"{bakepath}{scenario[0]} - Overlays.exr"
+            if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
+                print(f". Rendering overlay ({len(overlays)} objects) for '{scenario[0]}'")
+                state, restore_func = setup_light_scenario(context, scenario)
+                n_render_performed = n_render_performed + 1
+                bpy.ops.render.render(write_still=True)
+                restore_func(state)
+        vlm_collections.restore_all_col_links(initial_collections)
+        context.scene.use_nodes = True
+        if 'OverlayImage' not in bpy.data.scenes["Scene"].node_tree:
+            # Create default overlay composer
+            nodes = bpy.data.scenes["Scene"].node_tree.nodes
+            links = bpy.data.scenes["Scene"].node_tree.links
+            rl = nodes.new("CompositorNodeRLayers")
+            rl.location.x = -400
+            rl.location.y = 100
+
+            il = nodes.new("CompositorNodeImage")
+            # We need to load an image with a z layer to enable the outputs of the image node
+            overlay = bpy.data.images.load(context.scene.render.filepath, check_existing=False)
+            il.image = overlay
+            il.name = 'OverlayImage'
+            il.location.x = -400
+            il.location.y = -400
+            
+            malpha = nodes.new("CompositorNodeMath")
+            malpha.operation = 'MULTIPLY'
+            malpha.location.x = 0
+            malpha.location.y = -200
+            links.new(rl.outputs[1], malpha.inputs[0])
+            links.new(il.outputs[1], malpha.inputs[1])
+            
+            setalpha = nodes.new("CompositorNodeSetAlpha")
+            setalpha.location.x = 300
+            setalpha.location.y = -400
+            links.new(il.outputs[0], setalpha.inputs[0])
+            links.new(malpha.outputs[0], setalpha.inputs[1])
+            
+            zc = nodes.new("CompositorNodeZcombine")
+            zc.use_alpha = True
+            zc.location.x = 600
+            links.new(rl.outputs[0], zc.inputs[0])
+            links.new(rl.outputs[2], zc.inputs[1])
+            links.new(setalpha.outputs[0], zc.inputs[2])
+            links.new(il.outputs[2], zc.inputs[3])
+
+            out = nodes.new("CompositorNodeComposite")
+            out.location.x = 900
+            links.new(zc.outputs[0], out.inputs[0])
+            
+            bpy.data.images.remove(overlay) 
 
     print(f"\nRendering {n_render_groups} render groups for {n_lighting_situations} lighting situations")
-
-    # FIXME render overlay collection and save it, activate composer accordingly to overlay it on object group renders (z masked)
-
-    n_render_performed = 0
     for group_index in range(n_render_groups):
         objects = [obj for obj in root_bake_col.all_objects if obj.vlmSettings.render_group == group_index]
         n_objects = len(objects)
         print(f"\nRendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for {n_lighting_situations} lighting situations")
-
-        def perform_render(lighting_name):
-            print(f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{lighting_name}'")
-            context.scene.render.filepath = f"{bakepath}{lighting_name} - Group {group_index}.exr"
-            if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
-                nonlocal n_render_performed
-                n_render_performed = n_render_performed + 1
-                bpy.ops.render.render(write_still=True)
-    
         initial_collections = vlm_collections.move_all_to_col(objects, tmp_col)
-        context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
-        context.scene.render.film_transparent = True
-        perform_render("Environment")
-        context.scene.world = bpy.data.worlds["VPX.Env.Black"]
-        context.scene.render.film_transparent = False
-        for light_col in lights_col.children:
-            lights = [l for l in light_col.objects]
-            if light_col.hide_render == False and len(lights) > 0:
-                if light_col.vlmSettings.light_mode:
-                    previous_light_collections = vlm_collections.move_all_to_col(lights, tmp_col)
-                    perform_render(f"{vlm_utils.strip_vlm(light_col.name)}")
-                    vlm_collections.restore_all_col_links(previous_light_collections)
-                else:
-                    for light in lights:
-                        previous_light_collections = vlm_collections.move_to_col(light, tmp_col)
-                        perform_render(f"{vlm_utils.strip_vlm(light_col.name)} - {vlm_utils.strip_vlm(light.name)}")
-                        vlm_collections.restore_col_links(previous_light_collections)
+        context.scene.render.image_settings.use_zbuffer = False
+        for name, scenario in light_scenarios.items():
+            context.scene.render.filepath = f"{bakepath}{scenario[0]} - Group {group_index}.exr"
+            if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
+                print(f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}'")
+                state, restore_func = setup_light_scenario(context, scenario)
+                n_render_performed = n_render_performed + 1
+                if overlays:
+                    overlay = bpy.data.images.load(f"{bakepath}{scenario[0]} - Overlays.exr", check_existing=False)
+                    bpy.data.scenes["Scene"].node_tree.nodes["OverlayImage"].image = overlay
+                bpy.ops.render.render(write_still=True)
+                if overlays:
+                    bpy.data.images.remove(overlay)
+                restore_func(state)
         vlm_collections.restore_all_col_links(initial_collections)
 
+    context.scene.use_nodes = False
     context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
     context.scene.render.film_transparent = True
     vlm_utils.pop_color_grading(cg)
@@ -266,6 +345,7 @@ def create_bake_meshes(context):
     start_time = time.time()
     camera = bpy.data.objects['Camera']
     vlmProps = context.scene.vlmSettings
+    n_render_groups = get_n_render_groups(context)
 
     # Purge unlinked datas to avoid wrong names
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -311,30 +391,11 @@ def create_bake_meshes(context):
         vlm_collections.find_layer_collection(rlc, bake_col).exclude = False
         vlm_collections.find_layer_collection(rlc, bake_col).indirect_only = True
 
-    # Light bakes to be merged together
+    # Prepare the list of lighting situation with a packmap material per render group, and a merge group per light situation
     light_merge_groups = {}
-    for light_col in lights_col.children:
-        if light_col.vlmSettings.light_mode:
-            light_merge_groups[vlm_utils.strip_vlm(light_col.name)] = []
-        else:
-            for light in light_col.objects:
-                light_merge_groups[f"{vlm_utils.strip_vlm(light_col.name)} - {light.name}"] = []
-
-    n_render_groups = get_n_render_groups(context)
-
-    # Prepare the list of lighting situation with a packmap material per render group
-    light_scenarios = {"Environment": ["Environment", None, None, None]}
-    for light_col in lights_col.children:
-        lights = light_col.objects
-        if light_col.hide_render == False and len(lights) > 0:
-            if light_col.vlmSettings.light_mode:
-                name = vlm_utils.strip_vlm(light_col.name)
-                light_scenarios[name] = [name, light_col, None, None]
-            else:
-                for light in lights:
-                    name = f"{vlm_utils.strip_vlm(light_col.name)} - {light.name}"
-                    light_scenarios[name] = [name, light_col, light, None]
+    light_scenarios = get_lightings(context)
     for name, light_scenario in light_scenarios.items():
+        light_merge_groups[name] = []
         mats = []
         packmat = bpy.data.materials["VPX.Core.Mat.PackMap"]
         is_light = light_scenario[1] is not None
