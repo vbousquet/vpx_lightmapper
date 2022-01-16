@@ -31,6 +31,7 @@ import sys
 import importlib
 import math
 import mathutils
+import subprocess
 from bpy_extras.io_utils import (ImportHelper, axis_conversion)
 from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty, FloatVectorProperty, EnumProperty, PointerProperty)
 from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, Collection)
@@ -63,10 +64,17 @@ else:
 dependencies = (
     # OLE lib: https://olefile.readthedocs.io/en/latest/Howto.html
     vlm_dependencies.Dependency(module="olefile", package=None, name=None),
+    # Crypto lib: https://github.com/crappycrypto/wincrypto
+    vlm_dependencies.Dependency(module="wincrypto", package=None, name=None),
+    # Pillow image processing lib: https://pillow.readthedocs.io/en/stable/
     vlm_dependencies.Dependency(module="PIL", package=None, name="Pillow"),
 )
 dependencies_installed = vlm_dependencies.import_dependencies(dependencies)
 if dependencies_installed:
+    if "biff_io" in locals():
+        importlib.reload(biff_io)
+    else:
+        from . import biff_io
     if "vlm_import" in locals():
         importlib.reload(vlm_import)
     else:

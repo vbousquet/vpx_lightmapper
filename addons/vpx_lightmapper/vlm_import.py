@@ -24,6 +24,7 @@ import mathutils
 import zlib
 from math import radians
 from bpy_extras.io_utils import axis_conversion
+from . import biff_io
 from . import vlm_utils
 from . import vlm_collections
 
@@ -38,110 +39,6 @@ global_scale = vlm_utils.global_scale
 # - Implement surface positionning relative to a ramp
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 # - Add automatic plastic beveling, allowing to have beveled for bake and unbeveled for export
-
-
-class BIFF_reader:
-    def __init__(self, stream):
-        self.data = stream
-        self.pos = 0
-        self.bytes_in_record_remaining = 0
-        self.tag = b''
-    
-    def is_eof(self):
-        return self.pos >= len(self.data) or self.tag == 'ENDB'
-    
-    def get(self, count):
-        p = self.pos
-        self.pos = self.pos + count
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - count
-        return self.data[p:p+count]
-
-    def get_bool(self):
-        self.pos = self.pos + 1
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 1
-        return self.data[self.pos - 1] != 0
-
-    def get_bool_padded(self):
-        self.pos = self.pos + 4
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 4
-        return self.data[self.pos - 4] != 0
-
-    def get_u8(self):
-        i = struct.unpack("<B", self.data[self.pos:self.pos+1])[0]
-        self.pos = self.pos + 1
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 1
-        return i
-
-    def get_u16(self):
-        i = struct.unpack("<H", self.data[self.pos:self.pos+2])[0]
-        self.pos = self.pos + 2
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 2
-        return i
-
-    def get_u32(self):
-        i = struct.unpack("<I", self.data[self.pos:self.pos+4])[0]
-        self.pos = self.pos + 4
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 4
-        return i
-
-    def get_32(self):
-        i = struct.unpack("<i", self.data[self.pos:self.pos+4])[0]
-        self.pos = self.pos + 4
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 4
-        return i
-
-    def get_float(self):
-        i = struct.unpack("<f", self.data[self.pos:self.pos+4])[0]
-        self.pos = self.pos + 4
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 4
-        return i
-
-    def get_str(self, count):
-        pos_0 = count
-        for p in range(count):
-            if self.data[self.pos+p] == 0:
-                pos_0 = p
-                break
-        i = str(struct.unpack("%ds" % pos_0, self.data[self.pos:self.pos+pos_0])[0], 'latin_1')
-        self.pos = self.pos + count
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - count
-        return i
-    
-    def get_string(self):
-        return self.get_str(self.get_32())
-    
-    def get_wide_string(self):
-        count = self.get_32()
-        i = str(self.data[self.pos:self.pos+count], 'utf-16')
-        self.pos = self.pos + count
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - count
-        return i
-    
-    def get_color(self, has_alpha=False):
-        if has_alpha:
-            i = (self.get_u8() / 255.0, self.get_u8() / 255.0, self.get_u8() / 255.0, self.get_u8() / 255.0)
-        else:
-            i = (self.get_u8() / 255.0, self.get_u8() / 255.0, self.get_u8() / 255.0, 1)
-            self.get_u8()
-        return i
-    
-    def skip(self, count):
-        self.pos = self.pos + count
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - count
-
-    def skip_tag(self):
-        self.pos = self.pos + self.bytes_in_record_remaining
-        self.bytes_in_record_remaining = 0
-
-    def next(self):
-        if self.bytes_in_record_remaining > 0:
-            print(f"{self.tag} : {self.bytes_in_record_remaining} unread octets")
-            self.skip(self.bytes_in_record_remaining)
-        self.bytes_in_record_remaining = self.get_u32()
-        self.tag = self.get_str(4)
-        
-    def child_reader(self):
-        return BIFF_reader(self.data[self.pos:])
 
 
 class VPX_Material(object):
@@ -415,13 +312,13 @@ def read_vpx(context, filepath):
         data_to.node_groups = data_from.node_groups
                 
     with olefile.OleFileIO(filepath) as ole:
-        version = BIFF_reader(ole.openstream('GameStg/Version').read()).get_32()
+        version = biff_io.BIFF_reader(ole.openstream('GameStg/Version').read()).get_32()
         if version <= 30:
             return {"FAILED"}
         print(f"VPX file version: {version/100}")
 
         # Read the table informations
-        game_data = BIFF_reader(ole.openstream('GameStg/GameData').read())
+        game_data = biff_io.BIFF_reader(ole.openstream('GameStg/GameData').read())
         n_materials = 0
         env_image = ""
         n_items = 0
@@ -495,7 +392,7 @@ def read_vpx(context, filepath):
         
         # Read the textures
         for index in range(n_images):
-            image_data = BIFF_reader(ole.openstream(f"GameStg/Image{index}").read())
+            image_data = biff_io.BIFF_reader(ole.openstream(f"GameStg/Image{index}").read())
             name = ""
             path = ""
             width = 0
@@ -601,7 +498,7 @@ def read_vpx(context, filepath):
         shifted_objects = []
         for index in range(n_items):
             name = ""
-            item_data = BIFF_reader(ole.openstream(f"GameStg/GameItem{index}").read())
+            item_data = biff_io.BIFF_reader(ole.openstream(f"GameStg/GameItem{index}").read())
             item_type = item_data.get_32()
 
             if item_type == 0: # Surface (wall)
