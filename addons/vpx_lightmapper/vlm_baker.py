@@ -533,7 +533,7 @@ def create_bake_meshes(context):
                 bake_instance_mesh.materials[index] = light_scenario[3][index]
             if is_light: # Remove unlit faces of lightmaps (lighting < threshold)
                 prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size)
-                prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups)
+                prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, 256)
 
             # Compute target texture size (depends on the amount of remaining faces)
             # FIXME the texture size should be computed only when exporting or merging light maps
@@ -617,7 +617,7 @@ def orient2d(ax, ay, bx, by, x, y):
     return (bx-ax)*(y-ay) - (by-ay)*(x-ax)
 
 
-def prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups):
+def prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, opt_max_height=8192):
     """ Pruning by performing basic face rasterization in the corresponding render group
     This gives very good results, but is very slow and does not scale well.
     Rasterizer derived from: https://fgiesen.wordpress.com/2013/02/08/triangle-rasterization-in-practice/
@@ -630,7 +630,13 @@ def prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render
     n_delete = 0
     images = []
     for i in range(n_render_groups):
-        images.append(bpy.data.images.load(f"{bakepath}Render groups/{name} - Group {i}.exr", check_existing=False))
+        image = bpy.data.images.load(f"{bakepath}Render groups/{name} - Group {i}.exr", check_existing=False)
+        im_width, im_height = image.size
+        h = min(opt_max_height, im_height)
+        w = int(im_width * h / im_height)
+        if h < im_height:
+            image.scale(w, h)
+        images.append(image)
     for face in bm.faces:
         image = images[face.material_index]
         im_width, im_height = image.size
