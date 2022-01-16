@@ -16,7 +16,7 @@
 import bpy
 
 
-collection_ids = ['ROOT', 'TRASH', 'HIDDEN', 'INDIRECT', 'LIGHTS', 'GI LIGHTS', 'BAKE', 'BAKE DEFAULT', 'BAKE PLAYFIELD', 'BAKE RESULT']
+collection_ids = ['ROOT', 'TRASH', 'HIDDEN', 'INDIRECT', 'OVERLAY', 'LIGHTS', 'GI LIGHTS', 'BAKE', 'BAKE DEFAULT', 'BAKE PLAYFIELD', 'BAKE RESULT']
 
 
 def find_layer_collection(root_layer_collection, col):
@@ -62,6 +62,8 @@ def get_collection(name, create=True):
         return create_collection(context, "VLM.Hidden", get_collection('ROOT', create), True, create)
     if name == 'INDIRECT':
         return create_collection(context, "VLM.Indirect", get_collection('ROOT', create), False, create, True)
+    if name == 'OVERLAY':
+        return create_collection(context, "VLM.Overlays", get_collection('ROOT', create), False, create)
     if name == 'LIGHTS':
         return create_collection(context, "VLM.Light Groups", get_collection('ROOT', create), False, create)
     if name == 'GI LIGHTS':

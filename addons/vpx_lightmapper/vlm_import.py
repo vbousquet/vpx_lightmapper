@@ -380,6 +380,7 @@ def read_vpx(context, filepath):
     opt_plastic_translucency = 1.0
     opt_bevel_plastics = context.scene.vlmSettings.bevel_plastics
     opt_bevel_thin_walls = False # This causes artifact on complex walls
+    opt_detect_insert_overlay = True # Place any flasher containing 'insert' in its name to the overlay collection
     if opt_process_inserts:
         opt_playfield_translucency = 0.5
     else:
@@ -394,6 +395,7 @@ def read_vpx(context, filepath):
     trash_col = vlm_collections.get_collection('TRASH')
     hidden_col = vlm_collections.get_collection('HIDDEN')
     indirect_col = vlm_collections.get_collection('INDIRECT')
+    overlay_col = vlm_collections.get_collection('OVERLAY')
     gi_col = vlm_collections.get_collection('GI LIGHTS')
     lights_col = vlm_collections.get_collection('PLAYFIELD LIGHTS')
     bake_col = vlm_collections.get_collection('BAKE DEFAULT')
@@ -1584,7 +1586,9 @@ def read_vpx(context, filepath):
                             uv_layer[loop_index].uv = ((pt.co.x + half_x - playfield_left) / playfield_width, (playfield_bottom + pt.co.y + half_y) / playfield_height)
                         else: # Wrap
                             uv_layer[loop_index].uv = (0.5 + pt.co.x / (maxx - minx), 0.5 + pt.co.y / (maxy - miny))
-                obj = update_object(context, obj_name, mesh, False, None, hidden_col)
+                existing = obj_name in context.scene.objects
+                is_insert_overlay = opt_detect_insert_overlay and 'insert' in name.casefold()
+                obj = update_object(context, obj_name, mesh, is_insert_overlay, overlay_col, hidden_col)
                 if obj.vlmSettings.import_transform:
                     obj.rotation_euler = mathutils.Euler((-radians(rot_x), -radians(rot_y), -radians(rot_z)), 'ZYX')
                     #obj.location = (global_scale * x, -global_scale * y, global_scale * height)
@@ -1659,6 +1663,8 @@ def read_vpx(context, filepath):
                     group.inputs[9].default_value = additive_blend
                     group.inputs[10].default_value = alpha
                     group.inputs[11].default_value = modulate_vs_add
+                    if not existing and is_insert_overlay:
+                        group.inputs[12].default_value = 1.0 # Insert overlays are diffuse shaded (not emissive)
 
             elif item_type == 21: # Rubber
                 material = ""
