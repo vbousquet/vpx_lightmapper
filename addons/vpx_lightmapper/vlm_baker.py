@@ -278,6 +278,7 @@ def create_bake_meshes(context):
     opt_backface_limit_angle = vlmProps.remove_backface
     opt_optimize_mesh = True
     shell_size = global_scale * 0.1 # amount of extrustion for light map shell
+    opt_lightmap_prune_res = 256 # resolution used in the algorithm for unlit face pruning
 
     # Append core material (used to bake the packamp as well as preview it)
     if "VPX.Core.Mat.PackMap" not in bpy.data.materials:
@@ -516,6 +517,16 @@ def create_bake_meshes(context):
         bm.to_mesh(light_mesh)
         bm.free()
 
+        # Build the visibility maps for the light shell
+        vmap_instance = bpy.data.objects.new(f"VPX.Bake.Tmp.{bake_group_name}.{name}", light_mesh)
+        tmp_col.objects.link(vmap_instance)
+        bpy.ops.object.select_all(action='DESELECT')
+        vmap_instance.select_set(True)
+        context.view_layer.objects.active = vmap_instance
+        vmaps = build_visibility_map(vmap_instance.data, n_render_groups, opt_lightmap_prune_res)
+        tmp_col.objects.unlink(vmap_instance)
+        bpy.data.objects.remove(vmap_instance)
+
         # Build bake object for each lighting situation
         for name, light_scenario in light_scenarios.items():
             print(f"\n[{bake_col.name}] Creating bake model for {name}")
@@ -532,8 +543,9 @@ def create_bake_meshes(context):
             for index in range(n_render_groups):
                 bake_instance_mesh.materials[index] = light_scenario[3][index]
             if is_light: # Remove unlit faces of lightmaps (lighting < threshold)
-                prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size)
-                prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, 256)
+                #prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size)
+                #prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, opt_lightmap_prune_res)
+                prune_lightmap_by_visibility_map(bake_instance_mesh, bakepath, name, n_render_groups, vmaps, opt_lightmap_prune_res)
 
             # Compute target texture size (depends on the amount of remaining faces)
             # FIXME the texture size should be computed only when exporting or merging light maps
@@ -615,6 +627,126 @@ def orient2d(ax, ay, bx, by, x, y):
     """Evaluate on which side of a line a-b, a given point lies
     """
     return (bx-ax)*(y-ay) - (by-ay)*(x-ax)
+
+
+def build_visibility_map(bake_instance_mesh, n_render_groups, height):
+    """Build a set of rasterized maps where each pixels contains the list of 
+    visible faces for the given render group.
+    """
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(bake_instance_mesh)
+    uv_layer = bm.loops.layers.uv["UVMap"]
+    width = max(1, int(height/2))
+    vmaps = [[[] for xy in range(width * height)] for g in range(n_render_groups)]
+    bm.faces.ensure_lookup_table()
+    for face in bm.faces:
+        group = face.material_index
+        if len(face.loops) != 3: # This should not happen
+            continue
+        a = face.loops[0][uv_layer].uv
+        b = face.loops[1][uv_layer].uv
+        c = face.loops[2][uv_layer].uv
+        ax = int(a.x * width)
+        ay = int(a.y * height)
+        bx = int(b.x * width)
+        by = int(b.y * height)
+        cx = int(c.x * width)
+        cy = int(c.y * height)
+        min_x = min(ax, bx, cx)
+        min_y = min(ay, by, cy)
+        max_x = max(ax, bx, cx)
+        max_y = max(ay, by, cy)
+        A01 = ay - by
+        B01 = bx - ax
+        A12 = by - cy
+        B12 = cx - bx
+        A20 = cy - ay
+        B20 = ax - cx
+        w0_row = orient2d(bx, by, cx, cy, min_x, min_y)
+        w1_row = orient2d(cx, cy, ax, ay, min_x, min_y)
+        w2_row = orient2d(ax, ay, bx, by, min_x, min_y)
+        for y in range(min_y, max_y + 1):
+            w0 = w0_row
+            w1 = w1_row
+            w2 = w2_row
+            for x in range(min_x, max_x + 1):
+                if w0 >= 0 and w1 >= 0 and w2 >= 0:
+                    vmaps[face.material_index][x + y * width].append(face.index)
+                w0 += A12
+                w1 += A20
+                w2 += A01
+            w0_row += B12
+            w1_row += B20
+            w2_row += B01
+    bpy.ops.object.mode_set(mode='OBJECT')
+    return vmaps
+
+
+def prune_lightmap_by_visibility_map(bake_instance_mesh, bakepath, name, n_render_groups, vmaps, map_height):
+    """Prune faces based on there visibility in the precomputed visibility maps
+    """
+    bpy.ops.object.mode_set(mode='EDIT')
+    n_faces = len(bake_instance_mesh.polygons)
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bm = bmesh.from_edit_mesh(bake_instance_mesh)
+    uv_layer = bm.loops.layers.uv["UVMap"]
+    for face in bm.faces:
+        face.tag = False
+    bm.faces.ensure_lookup_table()
+    vertex_shader = '''
+        in vec2 position;
+        in vec2 uv;
+        out vec2 uvInterp;
+        void main() {
+            uvInterp = uv;
+            gl_Position = vec4(position, 0.0, 1.0);
+        }
+    '''
+    bw_fragment_shader = '''
+        uniform sampler2D image;
+        in vec2 uvInterp;
+        out vec4 FragColor;
+        void main() {
+            float v = dot(texture(image, uvInterp).rgb, vec3(0.2989, 0.5870, 0.1140));
+            FragColor = vec4(v, v, v, 1.0);
+        }
+    '''
+    bw_shader = gpu.types.GPUShader(vertex_shader, bw_fragment_shader)
+    for i in range(n_render_groups):
+        image = bpy.data.images.load(f"{bakepath}Render groups/{name} - Group {i}.exr", check_existing=False)
+        im_width, im_height = image.size
+        h = min(map_height, im_height)
+        w = int(im_width * h / im_height)
+        # Rescale and convert to intensity map on GPU
+        offscreen = gpu.types.GPUOffScreen(w, h)
+        with offscreen.bind():
+            bw_shader.bind()
+            bw_shader.uniform_sampler("image", gpu.texture.from_image(image))
+            batch_for_shader(
+                bw_shader, 'TRI_FAN',
+                {
+                    "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
+                    "uv": ((0, 0), (1, 0), (1, 1), (0, 1)),
+                },
+            ).draw(bw_shader)
+            bw = gpu.state.active_framebuffer_get().read_color(0, 0, w, h, 4, 0, 'UBYTE')
+            bw.dimensions = w * h * 4
+        offscreen.free()
+        bpy.data.images.remove(image)
+        for xy in range(w * h):
+            if bw[4 * xy] > 2:
+                for face_index in vmaps[i][xy]:
+                    bm.faces[face_index].tag = True
+    n_delete = 0
+    for face in bm.faces:
+        if not face.tag:
+            face.select_set(True)
+            n_delete += 1
+    bmesh.update_edit_mesh(bake_instance_mesh)
+    if n_delete > 0:
+        bpy.ops.mesh.delete(type='FACE')
+        print(f". Mesh optimized for {name} to {n_faces - n_delete} faces out of {n_faces} faces")
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 
 def prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, opt_max_height=8192):
