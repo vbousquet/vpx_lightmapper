@@ -277,7 +277,6 @@ def create_bake_meshes(context):
     # Bake mesh generation settings
     opt_backface_limit_angle = vlmProps.remove_backface
     opt_optimize_mesh = True
-    opt_save_heatmap = False # Save the heatmap (for debug purpose only)
     shell_size = global_scale * 0.1 # amount of extrustion for light map shell
 
     # Append core material (used to bake the packamp as well as preview it)
@@ -496,7 +495,7 @@ def create_bake_meshes(context):
         base_density = compute_uvmap_density(bake_mesh, bake_mesh.uv_layers["UVMap"])
         print(f". {big_poly_index} big sized poly separated for better UV island packing.")
         
-        # Triangulate (in the end, VPX only deals with triangles)
+        # Triangulate (in the end, VPX only deals with triangles, and this simplify the lightmap pruning process)
         bpy.ops.object.mode_set(mode='EDIT')
         bm = bmesh.from_edit_mesh(bake_mesh)
         bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
@@ -517,47 +516,6 @@ def create_bake_meshes(context):
         bm.to_mesh(light_mesh)
         bm.free()
 
-        # Code to generate 'heatmap' on the GPU to identify which faces are influenced by a given light
-        vertex_shader = '''
-            in vec2 position;
-            in vec2 uv;
-            out vec2 uvInterp;
-            void main() {
-                uvInterp = uv;
-                gl_Position = vec4(position, 0.0, 1.0);
-            }
-        '''
-        bw_fragment_shader = '''
-            uniform sampler2D image;
-            uniform float threshold;
-            in vec2 uvInterp;
-            out vec4 FragColor;
-            void main() {
-                float v = dot(texture(image, uvInterp).rgb, vec3(0.2989, 0.5870, 0.1140));
-                v = step(threshold, v);
-                FragColor = vec4(v, v, v, 1.0);
-            }
-        '''
-        downscale_fragment_shader = '''
-            uniform sampler2D image;
-            uniform float deltaU;
-            uniform float deltaV;
-            uniform float threshold;
-            in vec2 uvInterp;
-            out vec4 FragColor;
-            void main() {
-                float p0 = texture(image, uvInterp + vec2(   0.0,    0.0)).r;
-                float p1 = texture(image, uvInterp + vec2(deltaU,    0.0)).r;
-                float p2 = texture(image, uvInterp + vec2(   0.0, deltaV)).r;
-                float p3 = texture(image, uvInterp + vec2(deltaU, deltaV)).r;
-                float v = max(max(p0, p1), max(p2, p3));
-                v = step(threshold, v);
-                FragColor = vec4(v, v, v, 1.0);
-            }
-        '''
-        downscale_shader = gpu.types.GPUShader(vertex_shader, downscale_fragment_shader)
-        bw_shader = gpu.types.GPUShader(vertex_shader, bw_fragment_shader)
-
         # Build bake object for each lighting situation
         for name, light_scenario in light_scenarios.items():
             print(f"\n[{bake_col.name}] Creating bake model for {name}")
@@ -571,230 +529,11 @@ def create_bake_meshes(context):
             bpy.ops.object.select_all(action='DESELECT')
             bake_instance.select_set(True)
             context.view_layer.objects.active = bake_instance
-            bpy.ops.object.mode_set(mode='EDIT')
-            bpy.ops.mesh.select_all(action='SELECT')
-            n_faces = len(bake_instance_mesh.polygons)
             for index in range(n_render_groups):
                 bake_instance_mesh.materials[index] = light_scenario[3][index]
-
-            # Remove uninfluenced faces (lighting < threshold)
-            if is_light:
-                bpy.ops.mesh.select_all(action='DESELECT')
-                bm = bmesh.from_edit_mesh(bake_instance_mesh)
-                uv_layer = bm.loops.layers.uv["UVMap"]
-                n_delete = 0
-                
-                if True: 
-                    # Pruning by performing basic face rasterization in the corresponding render group, results are good but this is very slow
-                    # Derived from: https://fgiesen.wordpress.com/2013/02/08/triangle-rasterization-in-practice/
-                    images = []
-                    for i in range(n_render_groups):
-                        images.append(bpy.data.images.load(f"{bakepath}Render groups/{name} - Group {i}.exr", check_existing=False))
-                    def orient2d(ax, ay, bx, by, x, y):
-                        return (bx-ax)*(y-ay) - (by-ay)*(x-ax)
-                    if False:
-                        for face in bm.faces:
-                            image = images[face.material_index]
-                            im_width, im_height = image.size
-                            if len(face.loops) == 3:
-                                a = face.loops[0][uv_layer].uv
-                                b = face.loops[1][uv_layer].uv
-                                c = face.loops[2][uv_layer].uv
-                                ax = int(a.x * im_width)
-                                ay = int(a.y * im_height)
-                                bx = int(b.x * im_width)
-                                by = int(b.y * im_height)
-                                cx = int(c.x * im_width)
-                                cy = int(c.y * im_height)
-                                min_x = min(ax, bx, cx)
-                                min_y = min(ay, by, cy)
-                                max_x = max(ax, bx, cx)
-                                max_y = max(ay, by, cy)
-                                influenced = False
-                                for y in range(min_y, max_y + 1):
-                                    for x in range(min_x, max_x + 1):
-                                        w0 = orient2d(bx, by, cx, cy, x, y)
-                                        w1 = orient2d(cx, cy, ax, ay, x, y)
-                                        w2 = orient2d(ax, ay, bx, by, x, y)
-                                        if w0 >= 0 and w1 >= 0 and w2 >= 0:
-                                            pos = 4 * (x + y * im_width)
-                                            intensity = 299 * image.pixels[pos] + 587 * image.pixels[pos+1] + 114 * image.pixels[pos+2]
-                                            if intensity > 15: # 0.015 * 1000
-                                                influenced = True
-                                                break
-                                    if influenced:
-                                        break
-                            if not influenced:
-                                face.select_set(False)
-                                n_delete += 1
-                    for face in bm.faces:
-                        image = images[face.material_index]
-                        im_width, im_height = image.size
-                        if len(face.loops) == 3:
-                            a = face.loops[0][uv_layer].uv
-                            b = face.loops[1][uv_layer].uv
-                            c = face.loops[2][uv_layer].uv
-                            ax = int(a.x * im_width)
-                            ay = int(a.y * im_height)
-                            bx = int(b.x * im_width)
-                            by = int(b.y * im_height)
-                            cx = int(c.x * im_width)
-                            cy = int(c.y * im_height)
-                            min_x = min(ax, bx, cx)
-                            min_y = min(ay, by, cy)
-                            max_x = max(ax, bx, cx)
-                            max_y = max(ay, by, cy)
-                            A01 = ay - by
-                            B01 = bx - ax
-                            A12 = by - cy
-                            B12 = cx - bx
-                            A20 = cy - ay
-                            B20 = ax - cx
-                            w0_row = orient2d(bx, by, cx, cy, min_x, min_y)
-                            w1_row = orient2d(cx, cy, ax, ay, min_x, min_y)
-                            w2_row = orient2d(ax, ay, bx, by, min_x, min_y)
-                            influenced = False
-                            for y in range(min_y, max_y + 1):
-                                w0 = w0_row
-                                w1 = w1_row
-                                w2 = w2_row
-                                for x in range(min_x, max_x + 1):
-                                    if w0 >= 0 and w1 >= 0 and w2 >= 0:
-                                        pos = 4 * (x + y * im_width)
-                                        intensity = 299 * image.pixels[pos] + 587 * image.pixels[pos+1] + 114 * image.pixels[pos+2]
-                                        if intensity > 15: # 0.015 * 1000
-                                            influenced = True
-                                            break
-                                    w0 += A12
-                                    w1 += A20
-                                    w2 += A01
-                                if influenced:
-                                    break
-                                w0_row += B12
-                                w1_row += B20
-                                w2_row += B01
-                        if not influenced:
-                            face.select_set(False)
-                            n_delete += 1
-                    bmesh.update_edit_mesh(bake_instance_mesh)
-                    if n_delete > 0:
-                        bpy.ops.mesh.delete(type='FACE')
-                        print(f". Mesh optimized for {name} to {n_faces - n_delete} faces out of {n_faces} faces")
-                    for i in range(n_render_groups):
-                        bpy.data.images.remove(images[i])
-                    
-                else: # Pruning unlit faces using a GPU generated 'heatmap' (max filtered mipmap), results are not good enough for the moment
-                    heatmaps = {}
-                    n_levels = opt_tex_size.bit_length()
-                    heatmaps = [[None for i in range(n_levels)] for j in range(n_render_groups)]
-                    for face in bm.faces:
-                        # Compute needed heatmap size that allows to test with a single lookup
-                        xmin = ymin = 1000000
-                        xmax = ymax = -1000000
-                        for loop in face.loops:
-                            uv = loop[uv_layer].uv
-                            xmin = min(xmin, uv.x)
-                            ymin = min(ymin, uv.y)
-                            xmax = max(xmax, uv.x)
-                            ymax = max(ymax, uv.y)
-                        heatmap_max_height = 2.0 / max((xmax - xmin) * 0.5, ymax - ymin)
-                        heatmap_level = min(max(1, int(heatmap_max_height).bit_length() - 1), n_levels-1)
-                        heatmap_height = 1 << heatmap_level
-                        heatmap_width = 1 << max(0, heatmap_level - 1)
-                        heatmap = heatmaps[face.material_index][heatmap_level]
-                        if heatmap is None:
-                            select_threshold = 0.02
-                            image = bpy.data.images.load(f"{bakepath}Render groups/{name} - Group {face.material_index}.exr", check_existing=False)
-                            height = image.size[1]
-                            while height >= 2:
-                                im_width, im_height = image.size
-                                width = max(1, int(height / 2))
-                                if height == im_height: # Initial pass is a simple BW conversion
-                                    offscreen = gpu.types.GPUOffScreen(width, height)
-                                    with offscreen.bind():
-                                        bw_shader.bind()
-                                        bw_shader.uniform_sampler("image", gpu.texture.from_image(image))
-                                        bw_shader.uniform_float("threshold", select_threshold)
-                                        x0 = 0
-                                        x1 = 1.0
-                                        y0 = 0
-                                        y1 = 1.0
-                                        batch_for_shader(
-                                            bw_shader, 'TRI_FAN',
-                                            {
-                                                "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
-                                                "uv": ((x0, y0), (x1, y0), (x1, y1), (x0, y1)),
-                                            },
-                                        ).draw(bw_shader)
-                                        heatmap = gpu.state.active_framebuffer_get().read_color(0, 0, width, height, 4, 0, 'UBYTE')
-                                        heatmap.dimensions = width * height * 4
-                                    offscreen.free()
-                                else: # Following passes are a 2x downscale with a 'max' filter
-                                    if True: #GPU path
-                                        offscreen = gpu.types.GPUOffScreen(width, height)
-                                        with offscreen.bind():
-                                            downscale_shader.bind()
-                                            downscale_shader.uniform_sampler("image", gpu.texture.from_image(image))
-                                            downscale_shader.uniform_float("deltaU", 1.0 / im_width)
-                                            downscale_shader.uniform_float("deltaV", 1.0 / im_height)
-                                            downscale_shader.uniform_float("threshold", select_threshold)
-                                            x0 =       0.5 / im_width
-                                            x1 = 1.0 - 1.5 / im_width
-                                            y0 =       0.5 / im_height
-                                            y1 = 1.0 - 1.5 / im_height
-                                            batch_for_shader(
-                                                downscale_shader, 'TRI_FAN',
-                                                {
-                                                    "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
-                                                    "uv": ((x0, y0), (x1, y0), (x1, y1), (x0, y1)),
-                                                },
-                                            ).draw(downscale_shader)
-                                            heatmap = gpu.state.active_framebuffer_get().read_color(0, 0, width, height, 4, 0, 'UBYTE')
-                                            heatmap.dimensions = width * height * 4
-                                        offscreen.free()
-                                    else: # CPU path (this is kept as the reference path, and for the time being, GPU path is not strictly identical... color conversion bug ?)
-                                        new_heatmap = [255 for i in range(width*height*4)]
-                                        for x in range(width):
-                                            for y in range(height):
-                                                p = 4 * (x + y * width)
-                                                p2 = 4 * (2*x   + 2*y * im_width)
-                                                p3 = 4 * (2*x+1 + 2*y * im_width)
-                                                p4 = 4 * (2*x   + (2*y+1) * im_width)
-                                                p5 = 4 * (2*x+1 + (2*y+1) * im_width)
-                                                v = max(heatmap[p2], heatmap[p3])
-                                                v2 = max(heatmap[p4], heatmap[p5])
-                                                new_heatmap[p+0] = new_heatmap[p+1] = new_heatmap[p+2] = max(v,v2)
-                                        heatmap = new_heatmap
-                                bpy.data.images.remove(image)
-                                image = bpy.data.images.new("HeatMap", width, height)
-                                image.colorspace_settings.is_data = True
-                                image.colorspace_settings.name = 'Raw'
-                                image.pixels = [v / 255 for v in heatmap]
-                                heatmaps[face.material_index][height.bit_length() - 1] = [heatmap[4 * i] for i in range(width*height)]
-                                if name=='Inserts - VPX.Light.l2': # or opt_save_heatmap:
-                                    image.filepath_raw = bpy.path.abspath(f"{bakepath}{name} - Group {face.material_index} - Heatmap {height}.png")
-                                    image.file_format = 'PNG'
-                                    image.save()
-                                height = height >> 1
-                            bpy.data.images.remove(image)
-                            heatmaps[face.material_index][0] = [255] # last level is 1x1, always passing
-                            heatmap = heatmaps[face.material_index][heatmap_level]
-                        influenced = False
-                        for loop in face.loops:
-                            uv = loop[uv_layer].uv
-                            px = int(uv.x * heatmap_width)
-                            py = int(uv.y * heatmap_height)
-                            if 0 <= px < heatmap_width and 0 <= py < heatmap_height and heatmap[px + py * heatmap_width] != 0:
-                                influenced = True
-                                break
-                        if not influenced:
-                            face.select_set(True)
-                            n_delete += 1
-                    bmesh.update_edit_mesh(bake_instance_mesh)
-                    if n_delete > 0:
-                        bpy.ops.mesh.delete(type='FACE')
-                        print(f". Mesh optimized for {name} to {n_faces-n_delete} faces out of {n_faces} faces")
-            bpy.ops.object.mode_set(mode='OBJECT')
+            if is_light: # Remove unlit faces of lightmaps (lighting < threshold)
+                prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size)
+                prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups)
 
             # Compute target texture size (depends on the amount of remaining faces)
             # FIXME the texture size should be computed only when exporting or merging light maps
@@ -870,3 +609,250 @@ def create_bake_meshes(context):
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
     print(f"\nbake meshes created in {int(time.time() - start_time)}s.")
+
+
+def orient2d(ax, ay, bx, by, x, y):
+    """Evaluate on which side of a line a-b, a given point lies
+    """
+    return (bx-ax)*(y-ay) - (by-ay)*(x-ax)
+
+
+def prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups):
+    """ Pruning by performing basic face rasterization in the corresponding render group
+    This gives very good results, but is very slow and does not scale well.
+    Rasterizer derived from: https://fgiesen.wordpress.com/2013/02/08/triangle-rasterization-in-practice/
+    """
+    bpy.ops.object.mode_set(mode='EDIT')
+    n_faces = len(bake_instance_mesh.polygons)
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bm = bmesh.from_edit_mesh(bake_instance_mesh)
+    uv_layer = bm.loops.layers.uv["UVMap"]
+    n_delete = 0
+    images = []
+    for i in range(n_render_groups):
+        images.append(bpy.data.images.load(f"{bakepath}Render groups/{name} - Group {i}.exr", check_existing=False))
+    for face in bm.faces:
+        image = images[face.material_index]
+        im_width, im_height = image.size
+        if len(face.loops) != 3: # This should not happen
+            continue
+        a = face.loops[0][uv_layer].uv
+        b = face.loops[1][uv_layer].uv
+        c = face.loops[2][uv_layer].uv
+        ax = int(a.x * im_width)
+        ay = int(a.y * im_height)
+        bx = int(b.x * im_width)
+        by = int(b.y * im_height)
+        cx = int(c.x * im_width)
+        cy = int(c.y * im_height)
+        min_x = min(ax, bx, cx)
+        min_y = min(ay, by, cy)
+        max_x = max(ax, bx, cx)
+        max_y = max(ay, by, cy)
+        A01 = ay - by
+        B01 = bx - ax
+        A12 = by - cy
+        B12 = cx - bx
+        A20 = cy - ay
+        B20 = ax - cx
+        w0_row = orient2d(bx, by, cx, cy, min_x, min_y)
+        w1_row = orient2d(cx, cy, ax, ay, min_x, min_y)
+        w2_row = orient2d(ax, ay, bx, by, min_x, min_y)
+        influenced = False
+        for y in range(min_y, max_y + 1):
+            w0 = w0_row
+            w1 = w1_row
+            w2 = w2_row
+            for x in range(min_x, max_x + 1):
+                if w0 >= 0 and w1 >= 0 and w2 >= 0:
+                    pos = 4 * (x + y * im_width)
+                    intensity = 299 * image.pixels[pos] + 587 * image.pixels[pos+1] + 114 * image.pixels[pos+2]
+                    if intensity > 15: # 0.015 * 1000
+                        influenced = True
+                        break
+                w0 += A12
+                w1 += A20
+                w2 += A01
+            if influenced:
+                break
+            w0_row += B12
+            w1_row += B20
+            w2_row += B01
+        if not influenced:
+            face.select_set(True)
+            n_delete += 1
+    bmesh.update_edit_mesh(bake_instance_mesh)
+    if n_delete > 0:
+        bpy.ops.mesh.delete(type='FACE')
+        print(f". Mesh optimized for {name} to {n_faces - n_delete} faces out of {n_faces} faces")
+    for i in range(n_render_groups):
+        bpy.data.images.remove(images[i])
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size):
+    """Pruning unlit faces using a GPU generated 'heatmap' (max filtered mipmap)
+    This is fast and works well but is not optimal enough, lots of faces are not pruned when
+    they should."""
+
+    opt_save_heatmap = False # Save the heatmap (for debug purpose only)
+    
+    # Shader code to generate 'heatmap' on the GPU to identify which faces are influenced by a given light
+    vertex_shader = '''
+        in vec2 position;
+        in vec2 uv;
+        out vec2 uvInterp;
+        void main() {
+            uvInterp = uv;
+            gl_Position = vec4(position, 0.0, 1.0);
+        }
+    '''
+    bw_fragment_shader = '''
+        uniform sampler2D image;
+        uniform float threshold;
+        in vec2 uvInterp;
+        out vec4 FragColor;
+        void main() {
+            float v = dot(texture(image, uvInterp).rgb, vec3(0.2989, 0.5870, 0.1140));
+            v = step(threshold, v);
+            FragColor = vec4(v, v, v, 1.0);
+        }
+    '''
+    downscale_fragment_shader = '''
+        uniform sampler2D image;
+        uniform float deltaU;
+        uniform float deltaV;
+        uniform float threshold;
+        in vec2 uvInterp;
+        out vec4 FragColor;
+        void main() {
+            float p0 = texture(image, uvInterp + vec2(   0.0,    0.0)).r;
+            float p1 = texture(image, uvInterp + vec2(deltaU,    0.0)).r;
+            float p2 = texture(image, uvInterp + vec2(   0.0, deltaV)).r;
+            float p3 = texture(image, uvInterp + vec2(deltaU, deltaV)).r;
+            float v = max(max(p0, p1), max(p2, p3));
+            v = step(threshold, v);
+            FragColor = vec4(v, v, v, 1.0);
+        }
+    '''
+    downscale_shader = gpu.types.GPUShader(vertex_shader, downscale_fragment_shader)
+    bw_shader = gpu.types.GPUShader(vertex_shader, bw_fragment_shader)
+
+    bpy.ops.object.mode_set(mode='EDIT')
+    n_faces = len(bake_instance_mesh.polygons)
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bm = bmesh.from_edit_mesh(bake_instance_mesh)
+    uv_layer = bm.loops.layers.uv["UVMap"]
+    n_delete = 0
+    heatmaps = {}
+    n_levels = opt_tex_size.bit_length()
+    heatmaps = [[None for i in range(n_levels)] for j in range(n_render_groups)]
+    for face in bm.faces:
+        # Compute needed heatmap size that allows to test with a single lookup
+        xmin = ymin = 1000000
+        xmax = ymax = -1000000
+        for loop in face.loops:
+            uv = loop[uv_layer].uv
+            xmin = min(xmin, uv.x)
+            ymin = min(ymin, uv.y)
+            xmax = max(xmax, uv.x)
+            ymax = max(ymax, uv.y)
+        heatmap_max_height = 2.0 / max((xmax - xmin) * 0.5, ymax - ymin)
+        heatmap_level = min(max(1, int(heatmap_max_height).bit_length() - 1), n_levels-1)
+        heatmap_height = 1 << heatmap_level
+        heatmap_width = 1 << max(0, heatmap_level - 1)
+        heatmap = heatmaps[face.material_index][heatmap_level]
+        if heatmap is None:
+            select_threshold = 0.02
+            image = bpy.data.images.load(f"{bakepath}Render groups/{name} - Group {face.material_index}.exr", check_existing=False)
+            height = image.size[1]
+            while height >= 2:
+                im_width, im_height = image.size
+                width = max(1, int(height / 2))
+                if height == im_height: # Initial pass is a simple BW conversion
+                    offscreen = gpu.types.GPUOffScreen(width, height)
+                    with offscreen.bind():
+                        bw_shader.bind()
+                        bw_shader.uniform_sampler("image", gpu.texture.from_image(image))
+                        bw_shader.uniform_float("threshold", select_threshold)
+                        x0 = 0
+                        x1 = 1.0
+                        y0 = 0
+                        y1 = 1.0
+                        batch_for_shader(
+                            bw_shader, 'TRI_FAN',
+                            {
+                                "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
+                                "uv": ((x0, y0), (x1, y0), (x1, y1), (x0, y1)),
+                            },
+                        ).draw(bw_shader)
+                        heatmap = gpu.state.active_framebuffer_get().read_color(0, 0, width, height, 4, 0, 'UBYTE')
+                        heatmap.dimensions = width * height * 4
+                    offscreen.free()
+                else: # Following passes are a 2x downscale with a 'max' filter
+                    if True: #GPU path
+                        offscreen = gpu.types.GPUOffScreen(width, height)
+                        with offscreen.bind():
+                            downscale_shader.bind()
+                            downscale_shader.uniform_sampler("image", gpu.texture.from_image(image))
+                            downscale_shader.uniform_float("deltaU", 1.0 / im_width)
+                            downscale_shader.uniform_float("deltaV", 1.0 / im_height)
+                            downscale_shader.uniform_float("threshold", select_threshold)
+                            x0 =       0.5 / im_width
+                            x1 = 1.0 - 1.5 / im_width
+                            y0 =       0.5 / im_height
+                            y1 = 1.0 - 1.5 / im_height
+                            batch_for_shader(
+                                downscale_shader, 'TRI_FAN',
+                                {
+                                    "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
+                                    "uv": ((x0, y0), (x1, y0), (x1, y1), (x0, y1)),
+                                },
+                            ).draw(downscale_shader)
+                            heatmap = gpu.state.active_framebuffer_get().read_color(0, 0, width, height, 4, 0, 'UBYTE')
+                            heatmap.dimensions = width * height * 4
+                        offscreen.free()
+                    else: # CPU path (this is kept as the reference path, and for the time being, GPU path is not strictly identical... color conversion bug ?)
+                        new_heatmap = [255 for i in range(width*height*4)]
+                        for x in range(width):
+                            for y in range(height):
+                                p = 4 * (x + y * width)
+                                p2 = 4 * (2*x   + 2*y * im_width)
+                                p3 = 4 * (2*x+1 + 2*y * im_width)
+                                p4 = 4 * (2*x   + (2*y+1) * im_width)
+                                p5 = 4 * (2*x+1 + (2*y+1) * im_width)
+                                v = max(heatmap[p2], heatmap[p3])
+                                v2 = max(heatmap[p4], heatmap[p5])
+                                new_heatmap[p+0] = new_heatmap[p+1] = new_heatmap[p+2] = max(v,v2)
+                        heatmap = new_heatmap
+                bpy.data.images.remove(image)
+                image = bpy.data.images.new("HeatMap", width, height)
+                image.colorspace_settings.is_data = True
+                image.colorspace_settings.name = 'Raw'
+                image.pixels = [v / 255 for v in heatmap]
+                heatmaps[face.material_index][height.bit_length() - 1] = [heatmap[4 * i] for i in range(width*height)]
+                if opt_save_heatmap:
+                    image.filepath_raw = bpy.path.abspath(f"{bakepath}{name} - Group {face.material_index} - Heatmap {height}.png")
+                    image.file_format = 'PNG'
+                    image.save()
+                height = height >> 1
+            bpy.data.images.remove(image)
+            heatmaps[face.material_index][0] = [255] # last level is 1x1, always passing
+            heatmap = heatmaps[face.material_index][heatmap_level]
+        influenced = False
+        for loop in face.loops:
+            uv = loop[uv_layer].uv
+            px = int(uv.x * heatmap_width)
+            py = int(uv.y * heatmap_height)
+            if 0 <= px < heatmap_width and 0 <= py < heatmap_height and heatmap[px + py * heatmap_width] != 0:
+                influenced = True
+                break
+        if not influenced:
+            face.select_set(True)
+            n_delete += 1
+    bmesh.update_edit_mesh(bake_instance_mesh)
+    if n_delete > 0:
+        bpy.ops.mesh.delete(type='FACE')
+        print(f". Mesh optimized for {name} to {n_faces-n_delete} faces out of {n_faces} faces")
+    bpy.ops.object.mode_set(mode='OBJECT')
+
