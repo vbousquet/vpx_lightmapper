@@ -64,10 +64,12 @@ else:
 dependencies = (
     # OLE lib: https://olefile.readthedocs.io/en/latest/Howto.html
     vlm_dependencies.Dependency(module="olefile", package=None, name=None),
-    # Crypto lib: https://github.com/crappycrypto/wincrypto
-    vlm_dependencies.Dependency(module="wincrypto", package=None, name=None),
     # Pillow image processing lib: https://pillow.readthedocs.io/en/stable/
-    vlm_dependencies.Dependency(module="PIL", package=None, name="Pillow"),
+    vlm_dependencies.Dependency(module="PIL", package="Pillow", name="Pillow"),
+    # Crypto lib: https://github.com/crappycrypto/wincrypto
+    #vlm_dependencies.Dependency(module="wincrypto", package=None, name=None), # Unused since we use pywin32 binding to native wincrypt
+    # Win32 native lib: https://github.com/mhammond/pywin32
+    vlm_dependencies.Dependency(module="win32crypt", package="pywin32", name=None),
 )
 dependencies_installed = vlm_dependencies.import_dependencies(dependencies)
 if dependencies_installed:
@@ -129,6 +131,9 @@ class VLM_Object_props(PropertyGroup):
     bake_name: StringProperty(name="Bake Name", description="Lighting situation identifier", default="")
     bake_is_light: BoolProperty(name="Light Bake", description="True for light map bakes", default = False)
     bake_tex_factor: FloatProperty(name="Bake Tex Ratio", description="Texture size factor", default=1)
+    bake_packmap: IntProperty(name="Packmap", description="ID of output packmap (multiple bakes may share a packmap)", default = -1)
+    bake_packmap_width: IntProperty(name="Packmap width", description="Packmap Texture width", default=1)
+    bake_packmap_height: IntProperty(name="Packmap height", description="Packmap Texture height", default=1)
 
 
 class VLM_OT_new(Operator):
@@ -222,6 +227,17 @@ class VLM_OT_create_bake_meshes(Operator):
     
     def execute(self, context):
         vlm_baker.create_bake_meshes(context)
+        return {"FINISHED"}
+
+
+class VLM_OT_render_packmaps(Operator):
+    bl_idname = "vlm.render_packmaps_operator"
+    bl_label = "Packmaps"
+    bl_description = "Render all packmaps"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        vlm_baker.render_packmaps(context)
         return {"FINISHED"}
 
 
@@ -395,6 +411,27 @@ class VLM_OT_select_render_group(Operator):
         return {"FINISHED"}
 
 
+class VLM_OT_select_packmap_group(Operator):
+    bl_idname = "vlm.select_packmap_group"
+    bl_label = "Select"
+    bl_description = "Select all object from this packmap"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    @classmethod
+    def poll(cls, context):
+        bake_col = vlm_collections.get_collection('BAKE RESULT', create=False)
+        return bake_col is not None and next((obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.bake_packmap >= 0), None) is not None
+
+    def execute(self, context):
+        bake_col = vlm_collections.get_collection('BAKE RESULT', create=False)
+        if bake_col is not None:
+            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.bake_packmap >= 0]:
+                for other in bake_col.all_objects:
+                    if other.vlmSettings.bake_packmap == obj.vlmSettings.bake_packmap:
+                        other.select_set(True)
+        return {"FINISHED"}
+
+
 class VLM_OT_export_packmap(Operator):
     bl_idname = "vlm.export_packmap_operator"
     bl_label = "Bake PackMap"
@@ -514,10 +551,11 @@ class VLM_PT_Properties(bpy.types.Panel):
         row.operator(VLM_OT_compute_render_groups.bl_idname)
         row.operator(VLM_OT_render_all_groups.bl_idname)
         row.operator(VLM_OT_create_bake_meshes.bl_idname)
+        row.operator(VLM_OT_render_packmaps.bl_idname)
 
-        row = layout.row()
-        row.scale_y = 1.5
-        row.operator(VLM_OT_bake_all.bl_idname)
+        #row = layout.row()
+        #row.scale_y = 1.5
+        #row.operator(VLM_OT_bake_all.bl_idname)
         
         layout.separator()
 
@@ -619,6 +657,12 @@ class VLM_PT_3D(bpy.types.Panel):
                 layout.prop(result_objects[0].vlmSettings, 'bake_name', text='Name', expand=True)
                 layout.prop(result_objects[0].vlmSettings, 'bake_is_light', expand=True)
                 layout.prop(result_objects[0].vlmSettings, 'bake_tex_factor', expand=True)
+                row = layout.row(align=True)
+                row.prop(result_objects[0].vlmSettings, 'bake_packmap', expand=True, text="Pack:")
+                row.operator(VLM_OT_select_packmap_group.bl_idname)
+                row = layout.row(align=True)
+                row.prop(result_objects[0].vlmSettings, 'bake_packmap_width', expand=True, text="W:")
+                row.prop(result_objects[0].vlmSettings, 'bake_packmap_height', expand=True, text="H:")
             layout.separator()
             layout.operator(VLM_OT_export_packmap.bl_idname)
             layout.separator()
@@ -725,6 +769,7 @@ classes = (
     VLM_OT_compute_render_groups,
     VLM_OT_render_all_groups,
     VLM_OT_create_bake_meshes,
+    VLM_OT_render_packmaps,
     VLM_OT_bake_all,
     VLM_OT_state_hide,
     VLM_OT_state_indirect,
@@ -733,6 +778,7 @@ classes = (
     VLM_OT_state_import_transform,
     VLM_OT_clear_render_group_cache,
     VLM_OT_select_render_group,
+    VLM_OT_select_packmap_group,
     VLM_OT_export_packmap,
     VLM_OT_load_render_images,
     VLM_OT_export_all,

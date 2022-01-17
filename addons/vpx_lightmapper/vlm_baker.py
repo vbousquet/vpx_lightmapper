@@ -30,15 +30,8 @@ global_scale = vlm_utils.global_scale
 
 # TODO
 # - Allow to use either internal UV packing or UVPacker addon
-# - Support pack mapping to a non square texture
-# - Combine multiple light pack maps into a single pack map
 # - Allow to have an object (or a group) to be baked to a target object (like bake seclected to active) for inserts, for playfield with text overlay,...
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
-# - Split the baking process for a more interactive use
-#  x  Stage 1: compute render groups => ability to invalidate cache, store group ownership for each object, show it in UI
-#  x  Stage 2: rendering => ability to invalidate cache / recompute individually or globally the renders
-#     Stage 3: create bake mesh, create packmap groups (merge of multiple lightmaps), pack UVs
-#     Stage 4: review meshes, edit packmaps groups, adapt UV packing (ability to load/unload the renders to avoid crashing by OOM)
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -360,6 +353,9 @@ def create_bake_meshes(context):
     shell_size = global_scale * 0.1 # amount of extrustion for light map shell
     opt_lightmap_prune_res = 256 # resolution used in the algorithm for unlit face pruning
 
+    # Packmap grouping
+    opt_pack_margin = 0.05 # ratio that we admit to loose in resolution to optimize grouped texture size
+
     # Append core material (used to bake the packamp as well as preview it)
     if "VPX.Core.Mat.PackMap" not in bpy.data.materials:
         librarypath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VPXMeshes.blend")
@@ -533,7 +529,8 @@ def create_bake_meshes(context):
             surface = []
             for loop_index in poly.loop_indices:
                 u, v = uv_layer_packed.data[loop_index].uv
-                uv_layer_packed.data[loop_index].uv = (0.5 + 0.5 * (u - 0.5), v) # Account for aspect ratio changed
+                u = 0.5 + 0.5 * (u - 0.5) # Account for aspect ratio change
+                uv_layer_packed.data[loop_index].uv = (u, v)
                 surface.append(mathutils.Vector((u, v, 0)))
             if len(surface) == 3:
                 area = mathutils.geometry.area_tri(surface[0], surface[1], surface[2])
@@ -554,7 +551,6 @@ def create_bake_meshes(context):
                     big_poly_index = big_poly_index + 1
                     for loop_index in poly.loop_indices:
                         uv_layer_packed.data[loop_index].uv = (uv_layer_packed.data[loop_index].uv[0] + 1.1 * big_poly_index, uv_layer_packed.data[loop_index].uv[1])
-        base_density = compute_uvmap_density(bake_mesh, bake_mesh.uv_layers["UVMap"])
         print(f". {big_poly_index} big sized poly separated for better UV island packing.")
         
         # Triangulate (in the end, VPX only deals with triangles, and this simplify the lightmap pruning process)
@@ -593,9 +589,9 @@ def create_bake_meshes(context):
             print(f"\n[{bake_col.name}] Creating bake model for {name}")
             is_light = light_scenario[1] is not None
             if is_light:
-                bake_instance = bpy.data.objects.new(f"VPX.Bake.{bake_group_name}.{name}", light_mesh.copy())
+                bake_instance = bpy.data.objects.new(f"VPX.LightMap.{bake_group_name}.{name}", light_mesh.copy())
             else:
-                bake_instance = bpy.data.objects.new(f"VPX.Bake.{bake_group_name}.{name}", bake_mesh.copy())
+                bake_instance = bpy.data.objects.new(f"VPX.BakeMap.{bake_group_name}.{name}", bake_mesh.copy())
             bake_instance_mesh = bake_instance.data
             tmp_col.objects.link(bake_instance)
             bpy.ops.object.select_all(action='DESELECT')
@@ -608,18 +604,12 @@ def create_bake_meshes(context):
                 #prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, opt_lightmap_prune_res)
                 prune_lightmap_by_visibility_map(bake_instance_mesh, bakepath, name, n_render_groups, vmaps, opt_lightmap_prune_res)
 
-            # Compute target texture size (depends on the amount of remaining faces)
-            # FIXME the texture size should be computed only when exporting or merging light maps
+            # Compute texture density (depends on the amount of remaining faces)
             density = compute_uvmap_density(bake_instance_mesh, bake_instance_mesh.uv_layers["UVMap"])
-            tex_size_ratio = math.sqrt(density/base_density)
-            raw_tex_size = max(1, int(tex_size_ratio * opt_tex_size))
-            tex_size = 1<<(int(raw_tex_size)-1).bit_length()
-            if raw_tex_size != tex_size and raw_tex_size * raw_tex_size < 1.1 * 0.25 * tex_size * tex_size:
-                tex_size = tex_size / 2 # if we need less than 10% of the upper size, use the one just below
-            tex_width = tex_height = tex_size
 
             # Pack UV map (only if this bake mesh since it won't be merged afterward)
             if not is_light:
+                bake_results.append(bake_instance)
                 if bake_mode == 'playfield':
                     uv_layer_packed = bake_instance_mesh.uv_layers["UVMap Packed"]
                     uv_layer_packed.active = True
@@ -627,23 +617,12 @@ def create_bake_meshes(context):
                     for loop in bake_instance_mesh.loops:
                         pt = bake_instance_mesh.vertices[loop.vertex_index].co
                         uv_layer_packed.data[loop.index].uv = ((pt[0]-l) / w, (pt[1]-t+h) / h)
-                    tex_height = raw_tex_size
-                    tex_width = raw_tex_size * w / h
-                else:
-                    bpy.ops.object.mode_set(mode='EDIT')
-                    bpy.ops.mesh.select_all(action='SELECT')
-                    bpy.ops.uv.select_all(action='SELECT')
-                    bpy.ops.uv.pack_islands(margin=opt_padding / opt_tex_size)
-                    bpy.ops.object.mode_set(mode='OBJECT')
-                    packed_density = compute_uvmap_density(bake_instance_mesh, bake_instance_mesh.uv_layers["UVMap Packed"])
-                    print(f". UVMap for {name} packed to a density of {packed_density:.1%}.")
-                bake_results.append(bake_instance)
-                print(f". Texture for {name} adjusted to {tex_width}x{tex_height} (ratio of {(tex_width*tex_height/(raw_tex_size * raw_tex_size)):.0%})")
+                    density = -1
 
             # Save in result collection
             bake_instance.vlmSettings.bake_name = name
             bake_instance.vlmSettings.bake_is_light = is_light
-            bake_instance.vlmSettings.bake_tex_factor = tex_size_ratio
+            bake_instance.vlmSettings.bake_tex_factor = density
             if is_light:
                 light_merge_groups[name].append(bake_instance)
             tmp_col.objects.unlink(bake_instance)
@@ -666,18 +645,80 @@ def create_bake_meshes(context):
         if bakes:
             bpy.ops.object.select_all(action='DESELECT')
             context.view_layer.objects.active = bakes[0]
+            density = 0
             for obj in bakes:
+                density += obj.vlmSettings.bake_tex_factor
                 obj.select_set(True)
             bpy.ops.object.join()
+            bake_instance = context.view_layer.objects.active
+            bake_instance.name = f'VPX.LightMap.{name}'
+            bake_instance.vlmSettings.bake_tex_factor = density
+            bake_results.append(bake_instance)
+
+    # Sort from higher texture fill factor to lowest, then fillup packmap buckets
+    print(f"\nMerging and packing UV maps")
+    bake_results.sort(key=lambda obj: obj.vlmSettings.bake_tex_factor, reverse=True)
+    packmaps = []
+    for bake in bake_results:
+        bake_density = bake.vlmSettings.bake_tex_factor
+        if bake_density < 0: # Playfield projection
+            bake.vlmSettings.bake_packmap = len(packmaps)
+            packmaps.append(([bake], 1, int(opt_tex_size/2), opt_tex_size, True))
+            bake.vlmSettings.bake_packmap_width = int(opt_tex_size/2)
+            bake.vlmSettings.bake_packmap_height = opt_tex_size
+        else:
+            for index, (bakes, density, _, _, is_playfield) in enumerate(packmaps):
+                if not is_playfield and density + bake_density <= 1:
+                    bake.vlmSettings.bake_packmap = index
+                    packmaps[index] = (bakes + [bake], density + bake_density, -1, -1, is_playfield)
+                    bake_density = 0
+                    break
+            if bake_density > 0:
+                bake.vlmSettings.bake_packmap = len(packmaps)
+                packmaps.append(([bake], bake_density, -1, -1, False))
+    max_level = max(0, opt_tex_size.bit_length() - 1)
+    for index, (bakes, density, w, h, is_playfield) in enumerate(packmaps):
+        if not is_playfield:
+            opt_n = 0
+            for n in range(max_level, 0, -1):
+                if (1.0 - opt_pack_margin) * density <= 1.0 / (1 << n):
+                    opt_n = n
+                    break
+            h_n = int(opt_n / 2)
+            w_n = opt_n - h_n
+            tex_width = int(opt_tex_size / (1 << w_n))
+            tex_height = int(opt_tex_size / (1 << h_n))
+            packmaps[index] = (bakes, density, tex_width, tex_height, is_playfield)
+            for bake in bakes:
+                bake.vlmSettings.bake_packmap_width = tex_width
+                bake.vlmSettings.bake_packmap_height = tex_height
+                # the algorithm produce either square texture, or rectangle with w = h / 2 
+                # which needs uv to be adapt for to avoid texel density distorsion on the x axis
+                if tex_width < tex_height:
+                    for poly in bake_mesh.polygons:
+                        for loop_index in poly.loop_indices:
+                            u, v = uv_layer_packed.data[loop_index].uv
+                            u = 0.5 + 2.0 * (u - 0.5) # Account for aspect ratio change
+                            uv_layer_packed.data[loop_index].uv = (u, v)
+
+    print(f'. Bake/light maps merged into {len(packmaps)} packmaps:')
+    for index, (bakes, density, w, h, is_playfield) in enumerate(packmaps):
+        if is_playfield:
+            print(f'.   Packmap #{index}: {w:>4}x{h:>4} playfield render')
+        else:
+            bpy.ops.object.select_all(action='DESELECT')
+            context.view_layer.objects.active = bakes[0]
+            for obj in bakes:
+                obj.select_set(True)
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.uv.select_all(action='SELECT')
             bpy.ops.uv.pack_islands(margin=opt_padding / opt_tex_size)
             bpy.ops.object.mode_set(mode='OBJECT')
-            bake_instance = context.view_layer.objects.active
-            packed_density = compute_uvmap_density(bake_instance.data, bake_instance.data.uv_layers["UVMap Packed"])
-            print(f". UVMap for {name} packed to a density of {packed_density:.1%}.")
-            bake_results.append(bake_instance)
+            packed_density = 0
+            for obj in bakes:
+                packed_density += compute_uvmap_density(obj.data, obj.data.uv_layers["UVMap Packed"])
+            print(f'.   Packmap #{index}: {density:>6.2%} density for {len(bakes)} objects => {w:>4}x{h:>4} texture size with {packed_density:>6.2%} packed density')
 
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -685,7 +726,7 @@ def create_bake_meshes(context):
 
 
 def orient2d(ax, ay, bx, by, x, y):
-    """Evaluate on which side of a line a-b, a given point lies
+    """Evaluate on which side of a line a-b, a given point stand
     """
     return (bx-ax)*(y-ay) - (by-ay)*(x-ax)
 
@@ -1055,3 +1096,88 @@ def prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_group
         print(f". Mesh optimized for {name} to {n_faces-n_delete} faces out of {n_faces} faces")
     bpy.ops.object.mode_set(mode='OBJECT')
 
+
+def render_packmaps(context):
+    """Render all packmaps corresponding for the available current bake results
+    """
+    start_time = time.time()
+    print(f"\nRendering packmaps")
+    vlmProps = context.scene.vlmSettings
+
+    opt_force_render = False # Force rendering even if cache is available
+    opt_padding = vlmProps.padding
+    opt_save_webp = context.scene.vlmSettings.export_webp # Additionally convert the exported pack map to webp (keeping the default png as well)
+    
+    # Purge unlinked datas to avoid out of memory error
+    bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
+    
+    cg = vlm_utils.push_color_grading(True)
+    col_state = vlm_collections.push_state()
+    rlc = context.view_layer.layer_collection
+    result_col = vlm_collections.get_collection('BAKE RESULT')
+    vlm_collections.find_layer_collection(rlc, result_col).exclude = False
+    bakepath = vlm_utils.get_bakepath(context)
+    vlm_utils.mkpath(f"{bakepath}Export/")
+    packmap_index = 0
+    while True:
+        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
+        if not objects:
+            break
+
+        basepath = f"{bakepath}Export/Packmap {packmap_index}"
+        path_exr = bpy.path.abspath(basepath + '.exr')
+        path_png = bpy.path.abspath(basepath + '.png')
+        path_webp = bpy.path.abspath(basepath + ".webp")
+        print(f". Rendering packmap #{packmap_index} containing {len(objects)} bake/light map")
+        
+        if opt_force_render or not os.path.exists(path_exr):
+            tex_width = objects[0].vlmSettings.bake_packmap_width
+            tex_height = objects[0].vlmSettings.bake_packmap_height
+            pack_image = bpy.data.images.new(f"PackMap{packmap_index}", tex_width, tex_height, alpha=True)
+            context.scene.render.bake.margin = opt_padding
+            context.scene.render.bake.use_clear = True
+            for obj in objects:
+                is_light = obj.vlmSettings.bake_is_light
+                paths = [f"{bakepath}Render groups/{obj.vlmSettings.bake_name} - Group {i}.exr" for i,_ in enumerate(obj.data.materials)]
+                all_loaded = all((vlm_utils.image_by_path(path) is not None for path in paths))
+                unloads = []
+                for path, mat in zip(paths, obj.data.materials):
+                    if vlm_utils.image_by_path(path) is None:
+                        unloads.append(path)
+                    mat.node_tree.nodes["BakeTex"].image = bpy.data.images.load(path, check_existing=True)
+                for mat in obj.data.materials:
+                    mat.node_tree.nodes["PackMap"].inputs[3].default_value = 0.0 # Bake mode
+                    if is_light:
+                        mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
+                    else:
+                        mat.node_tree.nodes["PackMap"].inputs[2].default_value = 0.0
+                    mat.blend_method = 'OPAQUE'
+                    mat.node_tree.nodes["PackTex"].image = pack_image
+                    mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
+                bpy.ops.object.select_all(action='DESELECT')
+                context.view_layer.objects.active = obj
+                obj.select_set(True)
+                bpy.ops.object.bake(type='EMIT', margin=opt_padding)
+                for mat in obj.data.materials:
+                    mat.node_tree.nodes["PackMap"].inputs[3].default_value = 1.0 # Preview mode
+                    if is_light:
+                        mat.blend_method = 'BLEND'
+                for path in unloads:
+                    bpy.data.images.remove(vlm_utils.image_by_path(path))
+                context.scene.render.bake.use_clear = False
+            pack_image.filepath_raw = path_exr
+            pack_image.file_format = 'OPEN_EXR'
+            pack_image.save()
+            pack_image.filepath_raw = path_png
+            pack_image.file_format = 'PNG'
+            pack_image.save()
+            bpy.data.images.remove(pack_image)
+
+        if opt_save_webp and (opt_force_render or not os.path.exists(path_webp) or os.path.getmtime(path_webp) < os.path.getmtime(path_png)):
+            Image.open(path_png).save(path_webp, 'WEBP')
+
+        packmap_index += 1
+
+    vlm_collections.pop_state(col_state)
+    vlm_utils.pop_color_grading(cg)
+    print(f"\n{packmap_index} packmaps rendered in {int(time.time() - start_time)}s.")
