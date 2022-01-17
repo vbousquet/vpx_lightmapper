@@ -101,6 +101,15 @@ class BIFF_reader:
             self.get_u8()
         return i
     
+    def get_record_data(self, with_tag=False):
+        if with_tag:
+            d = self.data[self.pos-4:self.pos + self.bytes_in_record_remaining]
+        else:
+            d = self.data[self.pos:self.pos + self.bytes_in_record_remaining]
+        self.pos = self.pos + self.bytes_in_record_remaining
+        self.bytes_in_record_remaining = 0
+        return d
+    
     def skip(self, count):
         self.pos = self.pos + count
         self.bytes_in_record_remaining = self.bytes_in_record_remaining - count
