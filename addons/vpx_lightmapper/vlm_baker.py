@@ -463,7 +463,7 @@ def create_bake_meshes(context):
         bpy.ops.object.join()
         bake_target = context.view_layer.objects.active
         bake_mesh = bake_target.data
-        bake_mesh.name = "VPX.Bake Target"
+        bake_mesh.name = "VLM.Bake Target"
         print(f". Objects merged ({len(bake_mesh.vertices)} vertices, {len(bake_mesh.polygons)} faces)")
         
         # Remove backfacing faces
@@ -488,10 +488,7 @@ def create_bake_meshes(context):
         bake_mesh.uv_layers.new(name="UVMap")
         area = next((a for a in context.screen.areas if a.type == 'VIEW_3D'), None)
         area.regions[-1].data.view_perspective = 'CAMERA'
-        override = {}
-        override["area"] = area
-        override["space_data"] = area.spaces.active
-        override["region"] = area.regions[-1]
+        override = {"area": area, "space_data": area.spaces.active, "region": area.regions[-1]}
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.uv.project_from_view(override)
         bpy.ops.object.mode_set(mode='OBJECT')
@@ -575,7 +572,7 @@ def create_bake_meshes(context):
         bm.free()
 
         # Build the visibility maps for the light shell
-        vmap_instance = bpy.data.objects.new(f"VPX.Bake.Tmp.{bake_group_name}.{name}", light_mesh)
+        vmap_instance = bpy.data.objects.new(f"VLM.Bake.Tmp.{bake_group_name}.{name}", light_mesh)
         tmp_col.objects.link(vmap_instance)
         bpy.ops.object.select_all(action='DESELECT')
         vmap_instance.select_set(True)
@@ -589,9 +586,9 @@ def create_bake_meshes(context):
             print(f"\n[{bake_col.name}] Creating bake model for {name}")
             is_light = light_scenario[1] is not None
             if is_light:
-                bake_instance = bpy.data.objects.new(f"VPX.LightMap.{bake_group_name}.{name}", light_mesh.copy())
+                bake_instance = bpy.data.objects.new(f"VLM.LightMap.{bake_group_name}.{name}", light_mesh.copy())
             else:
-                bake_instance = bpy.data.objects.new(f"VPX.BakeMap.{bake_group_name}.{name}", bake_mesh.copy())
+                bake_instance = bpy.data.objects.new(f"VLM.BakeMap.{bake_group_name}.{name}", bake_mesh.copy())
             bake_instance_mesh = bake_instance.data
             tmp_col.objects.link(bake_instance)
             bpy.ops.object.select_all(action='DESELECT')
@@ -621,10 +618,14 @@ def create_bake_meshes(context):
 
             # Save in result collection
             bake_instance.vlmSettings.bake_name = name
-            bake_instance.vlmSettings.bake_is_light = is_light
             bake_instance.vlmSettings.bake_tex_factor = density
             if is_light:
+                bake_instance.vlmSettings.bake_type = 'lightmap'
                 light_merge_groups[name].append(bake_instance)
+            elif bake_mode == 'playfield':
+                bake_instance.vlmSettings.bake_type = 'playfield'
+            else:
+                bake_instance.vlmSettings.bake_type = 'bake'
             tmp_col.objects.unlink(bake_instance)
             result_col.objects.link(bake_instance)
 
@@ -661,7 +662,7 @@ def create_bake_meshes(context):
     packmaps = []
     for bake in bake_results:
         bake_density = bake.vlmSettings.bake_tex_factor
-        if bake_density < 0: # Playfield projection
+        if bake.vlmSettings.bake_type == 'playfield': # Playfield projection, no packing
             bake.vlmSettings.bake_packmap = len(packmaps)
             packmaps.append(([bake], 1, int(opt_tex_size/2), opt_tex_size, True))
             bake.vlmSettings.bake_packmap_width = int(opt_tex_size/2)
@@ -695,6 +696,8 @@ def create_bake_meshes(context):
                 # the algorithm produce either square texture, or rectangle with w = h / 2 
                 # which needs uv to be adapt for to avoid texel density distorsion on the x axis
                 if tex_width < tex_height:
+                    uv_layer_packed = bake_mesh.uv_layers["UVMap Packed"]
+                    uv_layer_packed.active = True
                     for poly in bake_mesh.polygons:
                         for loop_index in poly.loop_indices:
                             u, v = uv_layer_packed.data[loop_index].uv
@@ -1137,7 +1140,7 @@ def render_packmaps(context):
             context.scene.render.bake.margin = opt_padding
             context.scene.render.bake.use_clear = True
             for obj in objects:
-                is_light = obj.vlmSettings.bake_is_light
+                is_light = obj.vlmSettings.bake_type == 'lightmap'
                 paths = [f"{bakepath}Render groups/{obj.vlmSettings.bake_name} - Group {i}.exr" for i,_ in enumerate(obj.data.materials)]
                 all_loaded = all((vlm_utils.image_by_path(path) is not None for path in paths))
                 unloads = []

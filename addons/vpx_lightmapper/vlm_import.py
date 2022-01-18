@@ -39,6 +39,7 @@ global_scale = vlm_utils.global_scale
 # - Implement surface positionning relative to a ramp
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 # - Add automatic plastic beveling, allowing to have beveled for bake and unbeveled for export
+# - Generate a playfield translucency map for inserts (fast bake of the inserts cup projected on the playfield using eevee)
 
 
 class VPX_Material(object):
@@ -385,7 +386,7 @@ def read_vpx(context, filepath):
             elif game_data.tag == 'CODE':
                 code_size = game_data.get_u32()
                 game_data.skip(code_size)
-            elif game_data.tag in skipped:
+            else:
                 game_data.skip_tag()
         playfield_width = playfield_right - playfield_left
         playfield_height = playfield_bottom - playfield_top
@@ -1337,11 +1338,11 @@ def read_vpx(context, filepath):
                                 p = p + 3 * 2
                     elif item_data.tag == 'M3DI':
                         if n_vertices > 65535:
-                            for i in range(n_indices / 3):
-                                faces.append( (item_data.get_u32(), item_data.get_u32(), item_data.get_u32()))
+                            for i in range(int(n_indices / 3)):
+                                faces.append((item_data.get_u32(), item_data.get_u32(), item_data.get_u32()))
                         else:
-                            for i in range(n_indices / 3):
-                                faces.append( (item_data.get_u16(), item_data.get_u16(), item_data.get_u16()))
+                            for i in range(int(n_indices / 3)):
+                                faces.append((item_data.get_u16(), item_data.get_u16(), item_data.get_u16()))
                     elif item_data.tag == 'M3FN':
                         n_indices = item_data.get_u32()
                     elif item_data.tag == 'M3CY':
@@ -1361,6 +1362,13 @@ def read_vpx(context, filepath):
                             uv = struct.unpack("<2f", uncompressed[p:p + 2*4])
                             uvs.append((uv[0], 1.0 - uv[1]))
                             p = p + 4 * 2
+                    elif item_data.tag == "M3DX":
+                        d = struct.unpack(f'<{n_vertices * 8}f', item_data.get(n_vertices * 8 * 4))
+                        for i in range(n_vertices):
+                            p = i * 8
+                            vertices.append( (-d[p+0], -d[p+1], -d[p+2]) )
+                            normals.append( (-d[p+3], -d[p+4], -d[p+5]) )
+                            uvs.append( (d[p+6], 1.0 - d[p+7]) )
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
                 obj_name = f"VPX.Prim.{name}"

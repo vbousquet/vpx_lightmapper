@@ -15,6 +15,8 @@
 
 import bpy
 import os
+import zlib
+import struct
 from . import biff_io
 from . import vlm_utils
 from . import vlm_collections
@@ -26,54 +28,19 @@ import win32crypt
 import win32cryptcon
 from win32com import storagecon
 
-# FIXME remove wincrypto dependency, pywin32 should do the job despite missing DeriveKey
-#import wincrypto
-#from wincrypto import CryptCreateHash, CryptHashData, CryptDeriveKey
-#from wincrypto.constants import CALG_MD5
-
 
 # TODO
-# - The aim is to export by updating the VPX table (for the time being, we just support basic OBJ export)
+# - Toggle visibility of baked elements
+# - Update VBS script of the table for light synchronization
+# - Name playfield bake as VLM.Playfield
+# - Set table playfield image to the solid playfield bake (and material) ?
+#
 # - Try exporting bakes as HDR (or provide an evaluation of the benefit it would give)
-# - Try generating a default VBS script for eady integration
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
 
 
-def export_packmap(bake_instance, name, is_light, tex_width, tex_height, opt_save_webp, opt_padding, opt_force_render, target_path):
-    if opt_force_render or not os.path.exists(target_path):
-        pack_image = bpy.data.images.new(f"PackMap.{name}", tex_width, tex_height, alpha=True)
-        for mat in bake_instance.data.materials:
-            mat.node_tree.nodes["PackMap"].inputs[3].default_value = 0.0 # Bake mode
-            if is_light:
-                mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
-            else:
-                mat.node_tree.nodes["PackMap"].inputs[2].default_value = 0.0
-            mat.blend_method = 'OPAQUE'
-            mat.node_tree.nodes["PackTex"].image = pack_image
-            mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
-        bpy.context.scene.render.bake.margin = opt_padding
-        bpy.context.scene.render.bake.use_clear = True
-    
-        cg = vlm_utils.push_color_grading(True)
-        bpy.ops.object.bake(type='EMIT', margin=opt_padding)
-        pack_image.save_render(target_path)
-        vlm_utils.pop_color_grading(cg)
-        
-        bpy.data.images.remove(pack_image)
-        for mat in bake_instance.data.materials:
-            mat.node_tree.nodes["PackMap"].inputs[3].default_value = 1.0 # Preview mode
-            if is_light:
-                mat.blend_method = 'BLEND'
-    if opt_save_webp:
-        webp_path = bpy.path.abspath(context.scene.render.filepath).removesuffix('.png') + '.webp'
-        if opt_force_render or not os.path.exists(webp_path):
-            im = Image.open(target_path)
-            im.save(webp_path, 'WEBP')
-
-
-def export_all(context):
-    return export_vpx(context)
-    
+# FIXME rewrite an export to obj operator
+def export_obj(context):
     vlmProps = context.scene.vlmSettings
     result_col = vlm_collections.get_collection('BAKE RESULT')
     exportpath = f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/Export/"
@@ -87,7 +54,7 @@ def export_all(context):
         context.view_layer.objects.active = obj
 
         print(f". {i}/{len(result_col.all_objects)} Exporting packed bake maps for '{obj.name}'")
-        export_packmap(obj, obj["vlm.name"], obj["vlm.is_light"] != 0, obj["vlm.tex_width"], obj["vlm.tex_height"], vlmProps.export_webp, vlmProps.padding, False, bpy.path.abspath(f"{exportpath}{obj.name}.png"))
+        #export_packmap(obj, obj["vlm.name"], obj["vlm.is_light"] != 0, obj["vlm.tex_width"], obj["vlm.tex_height"], vlmProps.export_webp, vlmProps.padding, False, bpy.path.abspath(f"{exportpath}{obj.name}.png"))
 
         # see https://docs.blender.org/api/current/bpy.ops.export_scene.html
         print(f". {i}/{len(result_col.all_objects)} Exporting bake mesh for '{obj.name}'")
@@ -99,13 +66,7 @@ def export_all(context):
     print(f"\nExport finished.")
     return {"FINISHED"}
 
-#FIXME export directly to an updated VPX file (it is not really manageable manually with hundreds of lightmap and grouped packmaps)
-# olefile doesn't support create ole file. We will need anoter lib or create our own...
-# For crypto, use: https://github.com/crappycrypto/wincrypto
-# this needs to add the hash algo for MD2 (from pycryptodome or simply https://gist.github.com/CameronLonsdale/23772092aa4e0c75f2426eb418b156e6)
-#
-# Another way to go would be to go native with pywin32: https://github.com/mhammond/pywin32
-# It includes wincrypt (missing DeriveKey...), and ole storage (in pythoncom, seems ok)
+
 def export_vpx(context):
     """Export bakes by updating the reference VPX file
     . Remove all 'VLM.' prefixed objects from the source file
@@ -116,13 +77,16 @@ def export_vpx(context):
     . Update the table script with the needed light/lightmap sync code
     """
     vlmProps = context.scene.vlmSettings
-    
+    result_col = vlm_collections.get_collection('BAKE RESULT')
+    bakepath = vlm_utils.get_bakepath(context)
+    vlm_utils.mkpath(f"{bakepath}Export/")
     input_path = bpy.path.abspath(vlmProps.table_file)
     if not os.path.isfile(input_path):
         self.report({'WARNING'},f"{input_path} does not exist")
         return {'CANCELLED'}
     
     output_path = bpy.path.abspath(f"//{os.path.splitext(bpy.path.basename(input_path))[0]} - VLM.vpx")
+    print(f'\nExporting bake results to {bpy.path.basename(output_path)}')
 
     src_storage = olefile.OleFileIO(input_path)
     dst_storage = pythoncom.StgCreateStorageEx(output_path, storagecon.STGM_TRANSACTED | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, storagecon.STGFMT_DOCFILE, 0, pythoncom.IID_IStorage, None, None)
@@ -137,8 +101,8 @@ def export_vpx(context):
         while src_storage.exists(f'{src_path}{index}'):
             file_structure.append((f'{src_path}{index}', mode, hashed))
             index = index + 1
-    # path, 0=unstructured bytes/1=BIFF, hashed ?
-    file_structure = [
+  
+    file_structure = [ # path, 0=unstructured bytes/1=BIFF, hashed ?
         ('GameStg/Version', 0, True),
         ('TableInfo/TableName', 0, True),
         ('TableInfo/AuthorName', 0, True),
@@ -154,14 +118,175 @@ def export_vpx(context):
         ('TableInfo/Screenshot', 1, True),
         ('GameStg/CustomInfoTags', 1, True), # custom info tags must be hashed just after this stream
         ('GameStg/GameData', 1, True),]
-    append_structure('GameStg/GameItem', 1, False),
+    #append_structure('GameStg/GameItem', 1, False),
     append_structure('GameStg/Sound', 1, False),
-    append_structure('GameStg/Image', 1, False),
+    #append_structure('GameStg/Image', 1, False),
     append_structure('GameStg/Font', 1, False),
     append_structure('GameStg/Collection', 1, True),
 
-    game_item_index = 0
-    image_index = 0
+    # Remove previous packmaps and append the new ones
+    n_images = 0
+    while src_storage.exists(f'GameStg/Image{n_images}'):
+        data = src_storage.openstream(f'GameStg/Image{n_images}').read()
+        br = biff_io.BIFF_reader(data)
+        name = 'unknown'
+        while not br.is_eof():
+            br.next()
+            if br.tag == "NAME":
+                name = br.get_string()
+                break;
+            br.skip_tag()
+        if not name.startswith('VLM.'):
+            dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+            dst_stream.Write(data)
+            n_images += 1
+    packmap_index = 0
+    while True:
+        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
+        if not objects:
+            break
+        packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.png")
+        img_writer = biff_io.BIFF_writer()
+        img_writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
+        img_writer.write_tagged_string(b'PATH', packmap_path)
+        with open(packmap_path, 'rb') as f:
+            img_data = f.read()
+            img_writer.write_tagged_u32(b'SIZE', len(img_data))
+            img_writer.write_tagged_data(b'DATA', img_data)
+        img_writer.close()
+        writer = biff_io.BIFF_writer()
+        writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
+        writer.write_tagged_string(b'PATH', packmap_path)
+        writer.write_tagged_u32(b'WDTH', objects[0].vlmSettings.bake_packmap_width)
+        writer.write_tagged_u32(b'HGHT', objects[0].vlmSettings.bake_packmap_height)
+        writer.write_tagged_empty(b'JPEG') # Strangely, raw data are pushed outside of the JPEG tag (breaking the BIFF structure of the file)
+        writer.write_data(img_writer.get_data())
+        writer.write_tagged_float(b'ALTV', 1.0)
+        writer.close()
+        dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+        dst_stream.Write(writer.get_data())
+        print(f'. Exporting Packmap #{packmap_index} as a {objects[0].vlmSettings.bake_packmap_width:>4} x {objects[0].vlmSettings.bake_packmap_height:>4} image')
+        packmap_index += 1
+        n_images += 1
+
+    # Remove previous bake models and append the new ones
+    n_game_items = 0
+    while src_storage.exists(f'GameStg/GameItem{n_game_items}'):
+        data = src_storage.openstream(f'GameStg/GameItem{n_game_items}').read()
+        br = biff_io.BIFF_reader(data)
+        name = 'unknown'
+        while not br.is_eof():
+            br.next()
+            # FIXME toggle visibility of baked meshes (remove them in export release mode ?)
+            if br.tag == "NAME":
+                name = br.get_string()
+                break;
+            br.skip_tag()
+        if not name.startswith('VLM.'):
+            dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+            dst_stream.Write(data)
+            n_game_items += 1
+    for obj in [obj for obj in result_col.all_objects]:
+        is_light = obj.vlmSettings.bake_type == 'lightmap'
+        writer = biff_io.BIFF_writer()
+        writer.write_u32(19)
+        writer.write_tagged_padded_vector(b'VPOS', 0, 0, 0)
+        writer.write_tagged_padded_vector(b'VSIZ', 100, 100, 100)
+        writer.write_tagged_float(b'RTV0', 0)
+        writer.write_tagged_float(b'RTV1', 0)
+        writer.write_tagged_float(b'RTV2', 0)
+        writer.write_tagged_float(b'RTV3', 0)
+        writer.write_tagged_float(b'RTV4', 0)
+        writer.write_tagged_float(b'RTV5', 0)
+        writer.write_tagged_float(b'RTV6', 0)
+        writer.write_tagged_float(b'RTV7', 0)
+        writer.write_tagged_float(b'RTV8', 0)
+        writer.write_tagged_string(b'IMAG', f'VLM.Packmap{obj.vlmSettings.bake_packmap}')
+        writer.write_tagged_string(b'NRMA', '')
+        writer.write_tagged_u32(b'SIDS', 4)
+        writer.write_tagged_wide_string(b'NAME', obj.name) # FIXME naming should be better
+        if is_light:
+            writer.write_tagged_string(b'MATR', 'VLM.Lightmap')
+        else:
+            writer.write_tagged_string(b'MATR', 'VLM.Bake.Solid') # FIXME we should have 2 variants (active/not active)
+        writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
+        writer.write_tagged_bool(b'TVIS', True)
+        writer.write_tagged_bool(b'DTXI', False)
+        writer.write_tagged_bool(b'HTEV', False)
+        writer.write_tagged_float(b'THRS', 2.0)
+        writer.write_tagged_float(b'ELAS', 0.3)
+        writer.write_tagged_float(b'ELFO', 0.0)
+        writer.write_tagged_float(b'RFCT', 0.0)
+        writer.write_tagged_float(b'RSCT', 0.0)
+        writer.write_tagged_float(b'EFUI', 0.0)
+        writer.write_tagged_float(b'CORF', 0.0)
+        writer.write_tagged_bool(b'CLDR', False)
+        writer.write_tagged_bool(b'ISTO', True)
+        writer.write_tagged_bool(b'U3DM', True)
+        writer.write_tagged_bool(b'STRE', False) # FIXME static rendering should be true for solid map without transparency
+        writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
+        writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
+        writer.write_tagged_bool(b'REEN', False)
+        writer.write_tagged_bool(b'EBFC', False)
+        writer.write_tagged_string(b'MAPH', '')
+        writer.write_tagged_bool(b'OVPH', False)
+        writer.write_tagged_bool(b'DIPT', False)
+        writer.write_tagged_bool(b'OSNM', False)
+        writer.write_tagged_string(b'M3DN', f'VLM.{obj.name}')
+        indices = []
+        vertices = []
+        vert_dict = {}
+        n_vertices = 0
+        uv_layer_packed = obj.data.uv_layers["UVMap Packed"]
+        for poly in obj.data.polygons:
+            if len(poly.loop_indices) != 3:
+                continue
+            for loop_index in reversed(poly.loop_indices):
+                loop = obj.data.loops[loop_index]
+                x, y, z = obj.data.vertices[loop.vertex_index].co
+                nx, ny, nz = loop.normal
+                u, v = uv_layer_packed.data[loop_index].uv
+                vertex = (x, -y, z, nx, -ny, nz, u, 1.0 - v)
+                existing_index = vert_dict.get(vertex, None)
+                if existing_index is None:
+                    vert_dict[vertex] = n_vertices
+                    vertices.extend(vertex)
+                    indices.append(n_vertices)
+                    n_vertices += 1
+                else:
+                    indices.append(existing_index)
+        n_indices = len(indices)
+        print(f'. Exporting model with {n_vertices:>6} vertices for {int(n_indices/3):>5} faces for {obj.name}')
+        
+        writer.write_tagged_u32(b'M3VN', n_vertices)
+        #writer.write_tagged_data(b'M3DX', struct.pack(f'<{len(vertices)}f', *vertices))
+        compressed_vertices = zlib.compress(struct.pack(f'<{len(vertices)}f', *vertices))
+        writer.write_tagged_u32(b'M3CY', len(compressed_vertices))
+        writer.write_tagged_data(b'M3CX', compressed_vertices)
+        
+        writer.write_tagged_u32(b'M3FN', n_indices)
+        if n_vertices > 65535:
+            #writer.write_tagged_data(b'M3DI', struct.pack(f'<{n_indices}I', *indices))
+            compressed_indices = zlib.compress(struct.pack(f'<{n_indices}I', *indices))
+        else:
+            #writer.write_tagged_data(b'M3DI', struct.pack(f'<{n_indices}H', *indices))
+            compressed_indices = zlib.compress(struct.pack(f'<{n_indices}H', *indices))
+        writer.write_tagged_u32(b'M3CJ', len(compressed_indices))
+        writer.write_tagged_data(b'M3CI', compressed_indices)
+        
+        writer.write_tagged_float(b'PIDB', 0.0)
+        writer.write_tagged_bool(b'ADDB', is_light) # Additive blending VPX mod
+        writer.write_tagged_u32(b'FALP', 100) # Additive blending VPX mod
+        writer.write_tagged_bool(b'LOCK', True)
+        writer.write_tagged_bool(b'LVIS', True)
+        writer.write_tagged_u32(b'LAYR', 0)
+        writer.write_tagged_string(b'LANR', 'VLM.Visuals')
+        writer.close()
+        dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+        dst_stream.Write(writer.get_data())
+        n_game_items += 1
+
+    # Copy reference file
     for src_path, mode, hashed in file_structure:
         if not src_storage.exists(src_path):
             continue
@@ -170,7 +295,113 @@ def export_vpx(context):
         else:
             dst_st = dst_tableinfo
         data = src_storage.openstream(src_path).read()
-        # FIXME modify GameData to include VLM materials if not present
+        if src_path == 'GameStg/GameData':
+            data = bytearray(data)
+            br = biff_io.BIFF_reader(data)
+            has_solid_bake_mat = has_active_bake_mat = has_light_mat = False
+            while not br.is_eof():
+                br.next()
+                if br.tag == "SIMG":
+                    br.put_u32(n_images)
+                elif br.tag == "SEDT":
+                    br.put_u32(n_game_items)
+                elif br.tag == "MASI":
+                    masi_pos = br.pos
+                    n_materials = br.get_u32()
+                elif br.tag == "MATE":
+                    mate_pos = br.pos
+                    for i in range(n_materials):
+                        name = br.get_str(32).rstrip('\x00')
+                        if name == 'VLM.Bake.Solid':
+                            has_solid_bake_mat = True
+                        elif name == 'VLM.Bake.Active':
+                            has_active_bake_mat = True
+                        elif name == 'VLM.Light':
+                            has_light_mat = True
+                        br.skip(11 * 4)
+                elif br.tag == "PHMA":
+                    phma_pos = br.pos
+                if br.tag == "CODE":
+                    code_length = br.get_u32() 
+                    # FIXME update script with lightmap synchronization
+                    br.get(code_length)
+                else:
+                    br.skip_tag()
+            # modify existing data to add missing VLM materials
+            n_material_to_add = 0
+            wr = biff_io.BIFF_writer()
+            pr = biff_io.BIFF_writer()
+            if not has_solid_bake_mat:
+                n_material_to_add += 1
+                wr.write_data(b'VLM.Bake.Solid\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+                pr.write_data(b'VLM.Bake.Solid\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+                wr.write_u32(0xFFFFFF) # Base color
+                wr.write_u32(0x000000) # Glossy color
+                wr.write_u32(0x000000) # Clearcoat color
+                wr.write_float(0.0) # Wrap lighting
+                wr.write_bool(False) # Metal
+                wr.write_float(0.0) # Shininess
+                wr.write_u32(0) # Glossy image lerp
+                wr.write_float(0.0) # Edge
+                wr.write_u32(0x0c) # Thickness
+                wr.write_float(1.0) # Opacity
+                wr.write_u32(0x000000FE) # Active & edge alpha
+                pr.write_float(0.0)
+                pr.write_float(0.0)
+                pr.write_float(0.0)
+                pr.write_float(0.0)
+            if not has_active_bake_mat:
+                n_material_to_add += 1
+                wr.write_data(b'VLM.Bake.Active\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+                pr.write_data(b'VLM.Bake.Active\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+                wr.write_u32(0xFFFFFF) # Base color
+                wr.write_u32(0x000000) # Glossy color
+                wr.write_u32(0x000000) # Clearcoat color
+                wr.write_float(0.0) # Wrap lighting
+                wr.write_bool(False) # Metal
+                wr.write_float(0.0) # Shininess
+                wr.write_u32(0) # Glossy image lerp
+                wr.write_float(0.0) # Edge
+                wr.write_u32(0x0c) # Thickness
+                wr.write_float(1.0) # Opacity
+                wr.write_u32(0x000000FF) # Active & edge alpha
+                pr.write_float(0.0)
+                pr.write_float(0.0)
+                pr.write_float(0.0)
+                pr.write_float(0.0)
+            if not has_light_mat:
+                n_material_to_add += 1
+                wr.write_data(b'VLM.Lightmap\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+                pr.write_data(b'VLM.Lightmap\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+                wr.write_u32(0xFFFFFF) # Base color
+                wr.write_u32(0x000000) # Glossy color
+                wr.write_u32(0x000000) # Clearcoat color
+                wr.write_float(0.0) # Wrap lighting
+                wr.write_bool(False) # Metal
+                wr.write_float(0.0) # Shininess
+                wr.write_u32(0) # Glossy image lerp
+                wr.write_float(0.0) # Edge
+                wr.write_u32(0x0c) # Thickness
+                wr.write_float(1.0) # Opacity
+                wr.write_u32(0x000000FF) # Active & edge alpha
+                pr.write_float(0.0)
+                pr.write_float(0.0)
+                pr.write_float(0.0)
+                pr.write_float(0.0)
+            print(f'. Adding {n_material_to_add} materials ({len(wr.get_data())} bytes for graphics and {len(pr.get_data())} bytes for physics)')
+            br.pos = masi_pos
+            br.put_u32(n_materials + n_material_to_add)
+            br.pos = mate_pos - 8
+            br.put_u32((n_materials + n_material_to_add) * 76 + 4)
+            for i, d in enumerate(wr.get_data()):
+                br.data.insert(mate_pos + i, d)
+            if phma_pos > mate_pos:
+                phma_pos += len(wr.get_data())
+            br.pos = phma_pos - 8
+            br.put_u32((n_materials + n_material_to_add) * 48 + 4)
+            for i, d in enumerate(pr.get_data()):
+                br.data.insert(phma_pos + i, d)
+            data = bytes(data)
         if hashed:
             if mode == 0:
                 data_hash.CryptHashData(data)
@@ -181,32 +412,11 @@ def export_vpx(context):
                     if br.tag == "CODE": # For some reason, the code length info is not hashed, just the tag and code string
                         data_hash.CryptHashData(b'CODE')
                         code_length = br.get_u32() 
-                        # FIXME update script with lightmap synchronization
                         data_hash.CryptHashData(br.get(code_length))
                     else: # Biff tags and data are hashed but not their size
                         data_hash.CryptHashData(br.get_record_data(True))
-        remove_item = False
-        if src_path.startswith('GameStg/GameItem') or src_path.startswith('GameStg/Image'):
-            br = biff_io.BIFF_reader(data)
-            name = 'unknown'
-            # FIXME change visibility of backed elements
-            while not br.is_eof():
-                br.next()
-                if br.tag == "NAME":
-                    name = br.get_string()
-                    break;
-                br.skip_tag()
-            if name.startswith('VLM.'):
-                remove_item = True
-            elif src_path.startswith('GameStg/GameItem'):
-                src_path = f'GameStg/GameItem{game_item_index}'
-                game_item_index += 1
-            elif src_path.startswith('GameStg/Image'):
-                src_path = f'GameStg/Image{image_index}'
-                image_index += 1
-        if not remove_item:
-            dst_stream = dst_st.CreateStream(src_path.split('/')[-1], storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-            dst_stream.Write(data)
+        dst_stream = dst_st.CreateStream(src_path.split('/')[-1], storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+        dst_stream.Write(data)
         if src_path == 'GameStg/CustomInfoTags': # process the custom info tags since they need to be hashed
             br = biff_io.BIFF_reader(data)
             while not br.is_eof():
@@ -221,6 +431,7 @@ def export_vpx(context):
                         dst_stream.Write(data)
                 else:
                     br.skip_tag()
+
     # FIXME append models and packmaps
     hash_size = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHSIZE)
     file_hash = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHVAL)

@@ -38,8 +38,7 @@ from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, C
 from rna_prop_ui import PropertyPanel
 
 # TODO
-# - Export packmap needs to use object properties
-
+#
 
 
 # Use import.reload for all submodule to allow iterative development using bpy.ops.script.reload()
@@ -66,8 +65,6 @@ dependencies = (
     vlm_dependencies.Dependency(module="olefile", package=None, name=None),
     # Pillow image processing lib: https://pillow.readthedocs.io/en/stable/
     vlm_dependencies.Dependency(module="PIL", package="Pillow", name="Pillow"),
-    # Crypto lib: https://github.com/crappycrypto/wincrypto
-    #vlm_dependencies.Dependency(module="wincrypto", package=None, name=None), # Unused since we use pywin32 binding to native wincrypt
     # Win32 native lib: https://github.com/mhammond/pywin32
     vlm_dependencies.Dependency(module="win32crypt", package="pywin32", name=None),
 )
@@ -129,7 +126,14 @@ class VLM_Object_props(PropertyGroup):
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     # Bake result properties
     bake_name: StringProperty(name="Bake Name", description="Lighting situation identifier", default="")
-    bake_is_light: BoolProperty(name="Light Bake", description="True for light map bakes", default = False)
+    bake_type: EnumProperty(
+        items=[
+            ('bake', 'Bake', 'Default bake process', '', 0),
+            ('lightmap', 'Lightmap', 'Additive lightmap bake', '', 1),
+            ('playfield', 'Playfield', 'Bake to a orthographic playfield sized image', '', 2)
+        ],
+        default='bake'
+    )
     bake_tex_factor: FloatProperty(name="Bake Tex Ratio", description="Texture size factor", default=1)
     bake_packmap: IntProperty(name="Packmap", description="ID of output packmap (multiple bakes may share a packmap)", default = -1)
     bake_packmap_width: IntProperty(name="Packmap width", description="Packmap Texture width", default=1)
@@ -241,6 +245,7 @@ class VLM_OT_render_packmaps(Operator):
         return {"FINISHED"}
 
 
+# FIXME rewrite the batch operator
 class VLM_OT_bake_all(Operator):
     bl_idname = "vlm.bake_all_operator"
     bl_label = "Bake All"
@@ -254,15 +259,6 @@ class VLM_OT_bake_all(Operator):
 
         vlm_baker.create_bake_meshes(context)
     
-        # Eventually export the result, baking the final packmap
-        vlmProps = context.scene.vlmSettings
-        opt_export_on_bake = vlmProps.export_on_bake # True if we want the packmap to be rendered
-        opt_save_webp = vlmProps.export_webp # Additionally convert the exported pack map to webp (keeping the default png as well)
-        if opt_export_on_bake:
-            bakepath = f"//{bpy.path.basename(context.blend_data.filepath)} - Bakes/"
-            for obj in bake_results:
-                export_packmap(obj, obj["vlm.name"], obj["vlm.is_light"] != 0, obj["vlm.tex_width"], obj["vlm.tex_height"], opt_save_webp, vlmProps.padding, False, f"{bakepath}{obj['vlm.name']}.png")
-
         return {"FINISHED"}
 
 
@@ -489,15 +485,15 @@ class VLM_OT_load_render_images(Operator):
         return {"FINISHED"}
 
 
-class VLM_OT_export_all(Operator):
-    bl_idname = "vlm.export_all_operator"
-    bl_label = "Export All"
-    bl_description = "Compute packmaps and export all baked models"
+class VLM_OT_export_vpx(Operator):
+    bl_idname = "vlm.export_vpx_operator"
+    bl_label = "Export VPX"
+    bl_description = "Export to an updated VPX table file"
     bl_options = {"REGISTER"}
     
     def execute(self, context):
         vlmProps = context.scene.vlmSettings
-        return vlm_export.export_all(context)
+        return vlm_export.export_vpx(context)
 
 
 class VLM_PT_Properties(bpy.types.Panel):
@@ -564,7 +560,7 @@ class VLM_PT_Properties(bpy.types.Panel):
         row.prop(vlmProps, "export_webp")
         row = layout.row()
         row.scale_y = 1.5
-        row.operator(VLM_OT_export_all.bl_idname)
+        row.operator(VLM_OT_export_vpx.bl_idname)
         
         layout.separator()
 
@@ -655,7 +651,7 @@ class VLM_PT_3D(bpy.types.Panel):
             show_info = False
             if len(result_objects) == 1:
                 layout.prop(result_objects[0].vlmSettings, 'bake_name', text='Name', expand=True)
-                layout.prop(result_objects[0].vlmSettings, 'bake_is_light', expand=True)
+                layout.prop(result_objects[0].vlmSettings, 'bake_type', expand=True)
                 layout.prop(result_objects[0].vlmSettings, 'bake_tex_factor', expand=True)
                 row = layout.row(align=True)
                 row.prop(result_objects[0].vlmSettings, 'bake_packmap', expand=True, text="Pack:")
@@ -781,7 +777,7 @@ classes = (
     VLM_OT_select_packmap_group,
     VLM_OT_export_packmap,
     VLM_OT_load_render_images,
-    VLM_OT_export_all,
+    VLM_OT_export_vpx,
     )
 preference_classes = (VLM_PT_3D_warning_panel, VLM_PT_Props_warning_panel, VLM_OT_install_dependencies, VLM_preferences)
 registered_classes = []
