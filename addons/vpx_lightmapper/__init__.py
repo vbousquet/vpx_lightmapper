@@ -99,7 +99,6 @@ class VLM_Scene_props(PropertyGroup):
     tex_size: IntProperty(name="Tex Size:", description="Texture size", default = 256, min = 8)
     padding: IntProperty(name="Padding:", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
-    export_on_bake: BoolProperty(name="Export after bake", description="Export all meshes and packmaps after baking", default = False)
     # Exporter options
     export_webp: BoolProperty(name="Export WebP", description="Additionally to the PNG, export WebP", default = False)
     # Active table informations
@@ -245,20 +244,28 @@ class VLM_OT_render_packmaps(Operator):
         return {"FINISHED"}
 
 
-# FIXME rewrite the batch operator
-class VLM_OT_bake_all(Operator):
-    bl_idname = "vlm.bake_all_operator"
-    bl_label = "Bake All"
-    bl_description = "Bake each object for each light groups (lengthy operation)"
+class VLM_OT_export_vpx(Operator):
+    bl_idname = "vlm.export_vpx_operator"
+    bl_label = "Export VPX"
+    bl_description = "Export to an updated VPX table file"
+    bl_options = {"REGISTER"}
+    
+    def execute(self, context):
+        return vlm_export.export_vpx(context)
+
+
+class VLM_OT_batch_bake(Operator):
+    bl_idname = "vlm.batch_bake_operator"
+    bl_label = "Batch Bake & Export"
+    bl_description = "Performs all the bake steps in a batch, then export an updated VPX table (lengthy operation)"
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
         vlm_baker.compute_render_groups(context)
-
         vlm_baker.render_all_groups(context)
-
         vlm_baker.create_bake_meshes(context)
-    
+        vlm_baker.render_packmaps(context)
+        vlm_export.export_vpx(context)
         return {"FINISHED"}
 
 
@@ -485,17 +492,6 @@ class VLM_OT_load_render_images(Operator):
         return {"FINISHED"}
 
 
-class VLM_OT_export_vpx(Operator):
-    bl_idname = "vlm.export_vpx_operator"
-    bl_label = "Export VPX"
-    bl_description = "Export to an updated VPX table file"
-    bl_options = {"REGISTER"}
-    
-    def execute(self, context):
-        vlmProps = context.scene.vlmSettings
-        return vlm_export.export_vpx(context)
-
-
 class VLM_PT_Properties(bpy.types.Panel):
     bl_label = "Visual Pinball X Light Mapper"
     bl_category = "VLM"
@@ -540,7 +536,6 @@ class VLM_PT_Properties(bpy.types.Panel):
         row.prop(vlmProps, "padding")
         row = layout.row()
         row.prop(vlmProps, "remove_backface")
-        row.prop(vlmProps, "export_on_bake")
 
         row = layout.row()
         row.scale_y = 1.5
@@ -549,15 +544,13 @@ class VLM_PT_Properties(bpy.types.Panel):
         row.operator(VLM_OT_create_bake_meshes.bl_idname)
         row.operator(VLM_OT_render_packmaps.bl_idname)
 
-        #row = layout.row()
-        #row.scale_y = 1.5
-        #row.operator(VLM_OT_bake_all.bl_idname)
+        row = layout.row()
+        row.scale_y = 1.5
+        row.operator(VLM_OT_batch_bake.bl_idname)
         
         layout.separator()
 
         layout.label(text="Baked Model Exporter", icon='EXPORT') 
-        row = layout.row()
-        row.prop(vlmProps, "export_webp")
         row = layout.row()
         row.scale_y = 1.5
         row.operator(VLM_OT_export_vpx.bl_idname)
@@ -766,7 +759,7 @@ classes = (
     VLM_OT_render_all_groups,
     VLM_OT_create_bake_meshes,
     VLM_OT_render_packmaps,
-    VLM_OT_bake_all,
+    VLM_OT_batch_bake,
     VLM_OT_state_hide,
     VLM_OT_state_indirect,
     VLM_OT_state_bake,

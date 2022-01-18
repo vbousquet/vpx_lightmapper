@@ -53,9 +53,6 @@ def export_obj(context):
         obj.select_set(True)
         context.view_layer.objects.active = obj
 
-        print(f". {i}/{len(result_col.all_objects)} Exporting packed bake maps for '{obj.name}'")
-        #export_packmap(obj, obj["vlm.name"], obj["vlm.is_light"] != 0, obj["vlm.tex_width"], obj["vlm.tex_height"], vlmProps.export_webp, vlmProps.padding, False, bpy.path.abspath(f"{exportpath}{obj.name}.png"))
-
         # see https://docs.blender.org/api/current/bpy.ops.export_scene.html
         print(f". {i}/{len(result_col.all_objects)} Exporting bake mesh for '{obj.name}'")
         bpy.ops.export_scene.obj(
