@@ -43,7 +43,7 @@ from win32com import storagecon
 def export_obj(context):
     vlmProps = context.scene.vlmSettings
     result_col = vlm_collections.get_collection('BAKE RESULT')
-    exportpath = f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/Export/"
+    exportpath = vlm_utils.get_bakepath(context, type='EXPORT')
     vlm_utils.mkpath(exportpath)
     vlm_collections.find_layer_collection(context.view_layer.layer_collection, result_col).exclude = False
     print(f"\nStarting export process for {len(result_col.all_objects)} bakes")

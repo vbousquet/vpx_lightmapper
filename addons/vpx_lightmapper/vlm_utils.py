@@ -47,7 +47,13 @@ def apply_split_normals(me):
 	me.use_auto_smooth = True
 
 
-def get_bakepath(context):
+def get_bakepath(context, type='ROOT'):
+    if type == 'RENDERS':
+        return f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/Renders/"
+    elif type == 'MASKS':
+        return f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/Object Masks/"
+    elif type == 'EXPORT':
+        return f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/Export/"
     return f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/"
 
 
