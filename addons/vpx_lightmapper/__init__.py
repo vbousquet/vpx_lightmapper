@@ -28,9 +28,11 @@ bl_info = {
 import bpy
 import os
 import sys
-import importlib
+import glob
+import time
 import math
 import mathutils
+import importlib
 import subprocess
 from bpy_extras.io_utils import (ImportHelper, axis_conversion)
 from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty, FloatVectorProperty, EnumProperty, PointerProperty)
@@ -261,11 +263,14 @@ class VLM_OT_batch_bake(Operator):
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
+        start_time = time.time()
+        print(f"\nStarting complete bake batch...")
         vlm_baker.compute_render_groups(context)
         vlm_baker.render_all_groups(context)
         vlm_baker.create_bake_meshes(context)
         vlm_baker.render_packmaps(context)
         vlm_export.export_vpx(context)
+        print(f"\nBatch baking performed in a total time of {int(time.time() - start_time)}s.")
         return {"FINISHED"}
 
 
@@ -387,9 +392,24 @@ class VLM_OT_clear_render_group_cache(Operator):
     
     @classmethod
     def poll(cls, context):
-        return True
+        bake_col = vlm_collections.get_collection('BAKE', create=False)
+        if bake_col is not None:
+            files = glob.glob(bpy.path.abspath(f"{vlm_utils.get_bakepath(context, type='RENDERS')}") + "* - Group *.exr")
+            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.render_group >= 0]:
+                if next((f for f in files if f.endswith(f' {obj.vlmSettings.render_group}.exr')),None) != None:
+                    return True
+        return False
 
     def execute(self, context):
+        bake_col = vlm_collections.get_collection('BAKE', create=False)
+        delete_set = {}
+        if bake_col is not None:
+            files = glob.glob(bpy.path.abspath(f"{vlm_utils.get_bakepath(context, type='RENDERS')}") + "* - Group *.exr")
+            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.render_group >= 0]:
+                for f in (f for f in files if f.endswith(f' {obj.vlmSettings.render_group}.exr')):
+                    delete_set[f] = True
+            for f in delete_set:
+                os.remove(f)
         return {"FINISHED"}
 
 
@@ -478,7 +498,7 @@ class VLM_OT_load_render_images(Operator):
     def execute(self, context):
         vlmProps = context.scene.vlmSettings
         result_col = vlm_collections.get_collection('BAKE RESULT')
-        bakepath = f"{vlm_utils.get_bakepath(context)}Render groups/"
+        bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
         for obj in context.selected_objects:
             if obj.name in result_col.all_objects:
                 paths = [f"{bakepath}{obj.vlmSettings.bake_name} - Group {i}.exr" for i,_ in enumerate(obj.data.materials)]
