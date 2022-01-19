@@ -30,8 +30,9 @@ global_scale = vlm_utils.global_scale
 
 # TODO
 # - Allow to use either internal UV packing or UVPacker addon
-# - Allow to have an object (or a group) to be baked to a target object (like bake seclected to active) for inserts, for playfield with text overlay,...
+# - Allow to have an object (or a group) to be baked to a target object (like bake selected to active in Blender) for inserts,...
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
+# - Perform tests with transparent elements (especially ramps)
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -149,13 +150,13 @@ def compute_render_groups(context):
     context.scene.use_nodes = False
 
     object_groups = []
-    bakepath = vlm_utils.get_bakepath(context)
-    vlm_utils.mkpath(f"{bakepath}Object masks/")
+    bakepath = vlm_utils.get_bakepath(context, type='MASKS')
+    vlm_utils.mkpath(bakepath)
     all_objects = [obj for obj in root_bake_col.all_objects]
     for i, obj in enumerate(all_objects, start=1):
         print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}'")
         # Render object visibility mask (basic low res render)
-        context.scene.render.filepath = f"{bakepath}Object masks/{obj.name}.png"
+        context.scene.render.filepath = f"{bakepath}{obj.name}.png"
         if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
             initial_collection = vlm_collections.move_to_col(obj, tmp_col)
             bpy.ops.render.render(write_still=True)
@@ -185,7 +186,7 @@ def render_all_groups(context):
     """Render all render groups for all lighting situations
     """
     start_time = time.time()
-    bakepath = f"{vlm_utils.get_bakepath(context)}Render groups/"
+    bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
     vlmProps = context.scene.vlmSettings
     opt_tex_size = vlmProps.tex_size
@@ -196,6 +197,7 @@ def render_all_groups(context):
     context.scene.render.image_settings.color_mode = 'RGBA'
     context.scene.render.image_settings.color_depth = '16'
     context.scene.view_layers["ViewLayer"].use_pass_z = True
+    context.scene.render.film_transparent = True
     context.scene.use_nodes = False
     cg = vlm_utils.push_color_grading(True)
     n_render_performed = 0
@@ -216,6 +218,7 @@ def render_all_groups(context):
     vlm_collections.find_layer_collection(rlc, indirect_col).indirect_only = True
     vlm_collections.find_layer_collection(rlc, lights_col).exclude = True
     vlm_collections.find_layer_collection(rlc, root_bake_col).exclude = False
+    vlm_collections.find_layer_collection(rlc, overlay_col).indirect_only = True
     for bake_col in root_bake_col.children:
         vlm_collections.find_layer_collection(rlc, bake_col).exclude = False
         vlm_collections.find_layer_collection(rlc, bake_col).indirect_only = True
@@ -225,42 +228,42 @@ def render_all_groups(context):
     light_scenarios = get_lightings(context)
     n_lighting_situations = len(light_scenarios)
 
+    # Apply a ligth scenario for rendering, returning the previous state and a lambda to apply it
     def setup_light_scenario(context, scenario):
-        tmp_col = vlm_collections.get_collection('BAKETMP')
         if scenario[1] is None: # Base render
             context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
-            context.scene.render.film_transparent = True
             return 0, lambda a : a
         else:
             context.scene.world = bpy.data.worlds["VPX.Env.Black"]
-            context.scene.render.film_transparent = False
             if scenario[2] is None: # Light group render
-                previous_light_collections = vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col)
-                return previous_light_collections, lambda initial_state : vlm_collections.restore_all_col_links(initial_state)
+                return vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col), lambda initial_state : vlm_collections.restore_all_col_links(initial_state)
             else: # single light render
-                previous_light_collections = vlm_collections.move_to_col(scenario[2], tmp_col)
-                return previous_light_collections, lambda initial_state : vlm_collections.restore_col_links(initial_state)
+                return vlm_collections.move_to_col(scenario[2], tmp_col), lambda initial_state : vlm_collections.restore_col_links(initial_state)
 
+    # Render overlay collection and save it, activate composer accordingly to overlay it on object group renders (z masked)
     overlays = [obj for obj in overlay_col.all_objects]
     if overlays:
         print(f"\nPreparing overlays for {n_lighting_situations} lighting situations")
-        # FIXME render overlay collection and save it, activate composer accordingly to overlay it on object group renders (z masked)
         initial_collections = vlm_collections.move_all_to_col(overlays, tmp_col)
         context.scene.render.image_settings.use_zbuffer = True
-        for name, scenario in light_scenarios.items():
+        vlm_collections.find_layer_collection(rlc, overlay_col).indirect_only = False
+        for i, (name, scenario) in enumerate(light_scenarios.items(), start=1):
             context.scene.render.filepath = f"{bakepath}{scenario[0]} - Overlays.exr"
             if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
-                print(f". Rendering overlay ({len(overlays)} objects) for '{scenario[0]}'")
+                print(f". Rendering overlay ({len(overlays)} objects) for '{scenario[0]}' ({i}/{n_lighting_situations})")
                 state, restore_func = setup_light_scenario(context, scenario)
                 n_render_performed = n_render_performed + 1
                 bpy.ops.render.render(write_still=True)
                 restore_func(state)
         vlm_collections.restore_all_col_links(initial_collections)
-        context.scene.use_nodes = True
-        if 'OverlayImage' not in bpy.data.scenes["Scene"].node_tree:
+        vlm_collections.find_layer_collection(rlc, overlay_col).indirect_only = True
+        context.scene.render.image_settings.use_zbuffer = False
+        
+        # Prepare compositor to apply overlay for the upcoming renders
+        nodes = bpy.data.scenes["Scene"].node_tree.nodes
+        links = bpy.data.scenes["Scene"].node_tree.links
+        if 'OverlayImage' not in nodes:
             # Create default overlay composer
-            nodes = bpy.data.scenes["Scene"].node_tree.nodes
-            links = bpy.data.scenes["Scene"].node_tree.links
             rl = nodes.new("CompositorNodeRLayers")
             rl.location.x = -400
             rl.location.y = 100
@@ -306,25 +309,24 @@ def render_all_groups(context):
         n_objects = len(objects)
         print(f"\nRendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for {n_lighting_situations} lighting situations")
         initial_collections = vlm_collections.move_all_to_col(objects, tmp_col)
-        context.scene.render.image_settings.use_zbuffer = False
-        for name, scenario in light_scenarios.items():
+        for i, (name, scenario) in enumerate(light_scenarios.items(), start=1):
             context.scene.render.filepath = f"{bakepath}{scenario[0]} - Group {group_index}.exr"
             if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
-                print(f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}'")
+                print(f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]} ({i}/{n_lighting_situations})'")
                 state, restore_func = setup_light_scenario(context, scenario)
                 n_render_performed = n_render_performed + 1
                 if overlays:
+                    context.scene.use_nodes = True
                     overlay = bpy.data.images.load(f"{bakepath}{scenario[0]} - Overlays.exr", check_existing=False)
                     bpy.data.scenes["Scene"].node_tree.nodes["OverlayImage"].image = overlay
                 bpy.ops.render.render(write_still=True)
                 if overlays:
                     bpy.data.images.remove(overlay)
+                    context.scene.use_nodes = False
                 restore_func(state)
         vlm_collections.restore_all_col_links(initial_collections)
 
-    context.scene.use_nodes = False
     context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
-    context.scene.render.film_transparent = True
     vlm_utils.pop_color_grading(cg)
     vlm_collections.delete_collection(tmp_col)
     vlm_collections.pop_state(col_state)
@@ -599,7 +601,7 @@ def create_bake_meshes(context):
             if is_light: # Remove unlit faces of lightmaps (lighting < threshold)
                 #prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size)
                 #prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, opt_lightmap_prune_res)
-                prune_lightmap_by_visibility_map(bake_instance_mesh, bakepath, name, n_render_groups, vmaps, opt_lightmap_prune_res)
+                prune_lightmap_by_visibility_map(bake_instance_mesh, vlm_utils.get_bakepath(context, type='RENDERS'), name, n_render_groups, vmaps, opt_lightmap_prune_res)
 
             # Compute texture density (depends on the amount of remaining faces)
             density = compute_uvmap_density(bake_instance_mesh, bake_instance_mesh.uv_layers["UVMap"])
@@ -787,7 +789,7 @@ def build_visibility_map(bake_instance_mesh, n_render_groups, height):
     return vmaps
 
 
-def prune_lightmap_by_visibility_map(bake_instance_mesh, bakepath, name, n_render_groups, vmaps, map_height):
+def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_render_groups, vmaps, map_height):
     """Prune faces based on there visibility in the precomputed visibility maps
     """
     bpy.ops.object.mode_set(mode='EDIT')
@@ -812,17 +814,18 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, bakepath, name, n_rende
         in vec2 uvInterp;
         out vec4 FragColor;
         void main() {
-            float v = dot(texture(image, uvInterp).rgb, vec3(0.2989, 0.5870, 0.1140));
+            vec4 t = texture(image, uvInterp).rgba;
+            float v = t.a * dot(t.rgb, vec3(0.2989, 0.5870, 0.1140));
             FragColor = vec4(v, v, v, 1.0);
         }
     '''
     bw_shader = gpu.types.GPUShader(vertex_shader, bw_fragment_shader)
     for i in range(n_render_groups):
-        image = bpy.data.images.load(f"{bakepath}Render groups/{name} - Group {i}.exr", check_existing=False)
+        image = bpy.data.images.load(f"{render_path}{name} - Group {i}.exr", check_existing=False)
         im_width, im_height = image.size
         h = min(map_height, im_height)
         w = int(im_width * h / im_height)
-        # Rescale and convert to intensity map on GPU
+        # Rescale, convert to black and white, apply alpha, in a single pass on the GPU
         offscreen = gpu.types.GPUOffScreen(w, h)
         with offscreen.bind():
             bw_shader.bind()
@@ -867,7 +870,7 @@ def prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render
     n_delete = 0
     images = []
     for i in range(n_render_groups):
-        image = bpy.data.images.load(f"{bakepath}Render groups/{name} - Group {i}.exr", check_existing=False)
+        image = bpy.data.images.load(f"{vlm_utils.get_bakepath(context, type='RENDERS')}{name} - Group {i}.exr", check_existing=False)
         im_width, im_height = image.size
         h = min(opt_max_height, im_height)
         w = int(im_width * h / im_height)
@@ -1007,7 +1010,7 @@ def prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_group
         heatmap = heatmaps[face.material_index][heatmap_level]
         if heatmap is None:
             select_threshold = 0.02
-            image = bpy.data.images.load(f"{bakepath}Render groups/{name} - Group {face.material_index}.exr", check_existing=False)
+            image = bpy.data.images.load(f"{vlm_utils.get_bakepath(context, type='RENDERS')}{name} - Group {face.material_index}.exr", check_existing=False)
             height = image.size[1]
             while height >= 2:
                 im_width, im_height = image.size
@@ -1119,15 +1122,15 @@ def render_packmaps(context):
     rlc = context.view_layer.layer_collection
     result_col = vlm_collections.get_collection('BAKE RESULT')
     vlm_collections.find_layer_collection(rlc, result_col).exclude = False
-    bakepath = vlm_utils.get_bakepath(context)
-    vlm_utils.mkpath(f"{bakepath}Export/")
+    bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
+    vlm_utils.mkpath(bakepath)
     packmap_index = 0
     while True:
         objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
         if not objects:
             break
 
-        basepath = f"{bakepath}Export/Packmap {packmap_index}"
+        basepath = f"{bakepath}Packmap {packmap_index}"
         path_exr = bpy.path.abspath(basepath + '.exr')
         path_png = bpy.path.abspath(basepath + '.png')
         path_webp = bpy.path.abspath(basepath + ".webp")
@@ -1141,7 +1144,7 @@ def render_packmaps(context):
             context.scene.render.bake.use_clear = True
             for obj in objects:
                 is_light = obj.vlmSettings.bake_type == 'lightmap'
-                paths = [f"{bakepath}Render groups/{obj.vlmSettings.bake_name} - Group {i}.exr" for i,_ in enumerate(obj.data.materials)]
+                paths = [f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr" for i,_ in enumerate(obj.data.materials)]
                 all_loaded = all((vlm_utils.image_by_path(path) is not None for path in paths))
                 unloads = []
                 for path, mat in zip(paths, obj.data.materials):
