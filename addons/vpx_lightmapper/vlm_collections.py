@@ -119,7 +119,7 @@ def restore_col_links(saved_state):
 
 def move_all_to_col(objects, target_col):
     initial_collections = []
-    for obj in objects:
+    for obj in [o for o in objects]:
         initial_collections.append(move_to_col(obj, target_col))
     return initial_collections
 
