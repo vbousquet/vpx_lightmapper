@@ -39,7 +39,7 @@ global_scale = vlm_utils.global_scale
 # - Implement surface positionning relative to a ramp
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 # - Add automatic plastic beveling, allowing to have beveled for bake and unbeveled for export
-# - Generate a playfield translucency map for inserts (fast bake of the inserts cup projected on the playfield using eevee)
+# - Place drop target in movable or indirect bake group
 
 
 class VPX_Material(object):
@@ -279,10 +279,7 @@ def read_vpx(context, filepath):
     opt_bevel_plastics = context.scene.vlmSettings.bevel_plastics
     opt_bevel_thin_walls = False # This causes artifact on complex walls
     opt_detect_insert_overlay = True # Place any flasher containing 'insert' in its name to the overlay collection
-    if opt_process_inserts:
-        opt_playfield_translucency = 0.5
-    else:
-        opt_playfield_translucency = 0.0
+    opt_tex_size = context.scene.vlmSettings.tex_size
     
     # Purge unlinked datas to avoid reusing them
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -497,6 +494,7 @@ def read_vpx(context, filepath):
         created_objects = []
         surface_offsets = {}
         shifted_objects = []
+        insert_cups = []
         for index in range(n_items):
             name = ""
             item_data = biff_io.BIFF_reader(ole.openstream(f"GameStg/GameItem{index}").read())
@@ -852,16 +850,18 @@ def read_vpx(context, filepath):
                 context.view_layer.objects.active = obj
                 
                 # Some tables expect the bulb halo to be cut by the light mesh (like a mask for insrets for example) but others use the mesh to create fake shadows...
-                is_insert = not is_gi and (bulb or image == playfield_image) and halo_height == 0 and surface == ''
+                is_insert = not is_gi and (bulb or image == playfield_image or image == '') and (not bulb or halo_height == 0) and surface == ''
                 if opt_process_inserts and is_insert:
+                    if not bulb:
+                        halo_height = 0
                     obj.data.fill_mode = 'BACK'
-                    obj.data.extrude = 5 * global_scale
+                    obj.data.extrude = max(opt_light_size + 1, 5) * global_scale
                     obj.data.transform(mathutils.Matrix.Translation((-x * global_scale, y * global_scale, 0.0)))
                     obj.data.materials.append(bpy.data.materials["VPX.Core.Mat.Inserts.Back"])
                     update_location(obj, x * global_scale, -y * global_scale, halo_height * global_scale - obj.data.extrude)
                     created_objects.append(obj)
                     indirect_col.objects.link(obj)
-                    z = -1 # Move below playfield to light through translucent material
+                    insert_cups.append(obj)
                     bake_col.objects.unlink(obj)
                     obj.name = f"VPX.Light.Shape.{name}"
                     mesh = bpy.data.lights.new(name=name, type='POINT')
@@ -869,7 +869,8 @@ def read_vpx(context, filepath):
                     mesh.energy = opt_light_intensity * intensity * global_scale
                     mesh.shadow_soft_size = opt_light_size * global_scale
                     obj = update_object(context, obj_name, mesh, True, default_light, hidden_col)
-                    update_location(obj, x * global_scale, -y * global_scale, z * global_scale)
+                    # Move below playfield to light through the translucency of the playfield material
+                    update_location(obj, x * global_scale, -y * global_scale, -(opt_light_size + 1) * global_scale)
                     created_objects.append(obj)
                 elif bulb:
                     z = halo_height
@@ -1680,21 +1681,38 @@ def read_vpx(context, filepath):
             obj.location.z += surface_offsets[surface] * global_scale
             
     # Create the playfield
-    if "VPX.Prim.playfield_mesh" not in bpy.data.objects:
+    if "VPX.Prim.playfield_mesh" in bpy.data.objects:
+        playfield_obj = bpy.data.objects["VPX.Prim.playfield_mesh"]
+    else:
         vert = [(playfield_left, -playfield_bottom, 0.0), (playfield_right, -playfield_bottom, 0.0), (playfield_left, -playfield_top, 0.0), (playfield_right, -playfield_top, 0.0)]
         mesh = bpy.data.meshes.new("VPX.Mesh.Playfield")
         mesh.from_pydata(vert, [], [(0, 1, 3, 2)])
         mesh.use_auto_smooth = True
         mesh.normals_split_custom_set([(0,0,1) for i in mesh.loops])
         uv_layer = mesh.uv_layers.new()
-        update_material(mesh, 0, materials, playfield_material, playfield_image, opt_playfield_translucency)
+        update_material(mesh, 0, materials, playfield_material, playfield_image, 0)
         if "VPX.Playfield" in context.scene.objects:
-            obj = context.scene.objects["VPX.Playfield"]
-            obj.data = mesh
+            playfield_obj = context.scene.objects["VPX.Playfield"]
+            playfield_obj.data = mesh
         else:
-            obj = bpy.data.objects.new("VPX.Playfield", mesh)
-            vlm_collections.get_collection('BAKE PLAYFIELD').objects.link(obj)
-        created_objects.append(obj)
+            playfield_obj = bpy.data.objects.new("VPX.Playfield", mesh)
+            vlm_collections.get_collection('BAKE PLAYFIELD').objects.link(playfield_obj)
+        created_objects.append(playfield_obj)
+    pfmesh = playfield_obj.data
+    if pfmesh.materials[0].name.startswith('VPX.Mat.'):
+        print('Creating playfield material')
+        mat = pfmesh.materials[0].copy()
+        mat.name = 'VPX.Playfield'
+        pfmesh.materials[0] = mat
+        node_tex = mat.node_tree.nodes.new(type='ShaderNodeTexImage')
+        node_tex.name = 'TranslucencyMap'
+        node_tex.location.x = -400
+        node_tex.location.y = -400
+        group_name = f"{playfield_material.casefold()}.Mat"
+        if group_name in mat.node_tree.nodes:
+            mat.node_tree.links.new(node_tex.outputs[1], mat.node_tree.nodes[group_name].inputs[14])
+        else:
+            print(f"Missing group '{group_name}' in playfield material")
 
     # Move to trash all managed objects that were not processed
     created_object_names = [obj.name for obj in created_objects]
@@ -1719,6 +1737,38 @@ def read_vpx(context, filepath):
         camera_object.location.z =  2.6735
     camera_object.location.x = 0.5 * (playfield_left + playfield_right)
     camera_object.lock_location[0] = True
+
+    # Create a translucency map for the playfield (translucent for inserts, diffuse otherwise)
+    if len(pfmesh.materials) > 0 and pfmesh.materials[0] is not None and pfmesh.materials[0].name == 'VPX.Playfield' and 'TranslucencyMap' in pfmesh.materials[0].node_tree.nodes:
+        translucency_image = bpy.data.images.new('PFTranslucency', int(opt_tex_size/2), opt_tex_size, alpha=True)
+        mat = pfmesh.materials[0]
+        mat.node_tree.nodes["TranslucencyMap"].image = translucency_image
+        if insert_cups:
+            print(f"Computing translucency map for the playfield inserts.")
+            mat.node_tree.nodes.active = mat.node_tree.nodes["TranslucencyMap"]
+            tmp_col = vlm_collections.get_collection('BAKETMP')
+            pf_initial_collection = vlm_collections.move_to_col(playfield_obj, tmp_col)
+            cups_initial_collection = vlm_collections.move_all_to_col(insert_cups, tmp_col)
+            rlc = context.view_layer.layer_collection
+            for col in root_col.children:
+                vlm_collections.find_layer_collection(rlc, col).exclude = True
+            vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
+            context.scene.render.film_transparent = True
+            context.scene.render.resolution_y = opt_tex_size
+            context.scene.render.resolution_x = int(opt_tex_size / 2)
+            context.scene.world = bpy.data.worlds["VPX.Env.Black"]
+            context.scene.use_nodes = False
+            context.scene.render.bake.use_clear = True
+            bpy.ops.object.select_all(action='DESELECT')
+            for obj in insert_cups:
+                obj.select_set(True)
+            playfield_obj.select_set(True)
+            context.view_layer.objects.active = playfield_obj
+            bpy.ops.object.bake(type='EMIT', use_selected_to_active=True, margin=0)
+            context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
+            vlm_collections.restore_all_col_links(cups_initial_collection)
+            vlm_collections.restore_col_links(pf_initial_collection)
+            vlm_collections.delete_collection(tmp_col)
 
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
