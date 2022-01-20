@@ -189,7 +189,7 @@ def render_all_groups(context):
     bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
     vlmProps = context.scene.vlmSettings
-    opt_tex_size = vlmProps.tex_size
+    opt_tex_size = int(vlmProps.tex_size)
     opt_force_render = False # Force rendering even if cache is available
     context.scene.render.resolution_y = opt_tex_size
     context.scene.render.resolution_x = opt_tex_size / 2
@@ -347,7 +347,7 @@ def create_bake_meshes(context):
     
     # Texture packing
     opt_padding = vlmProps.padding
-    opt_tex_size = vlmProps.tex_size
+    opt_tex_size = int(vlmProps.tex_size)
 
     # Bake mesh generation settings
     opt_backface_limit_angle = vlmProps.remove_backface

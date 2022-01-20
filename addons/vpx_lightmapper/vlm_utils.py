@@ -17,6 +17,10 @@ import bpy
 import array
 import os
 import pathlib
+import gpu
+import mathutils
+from gpu_extras.presets import draw_texture_2d
+from gpu_extras.batch import batch_for_shader
 
 
 global_scale = 0.01
@@ -72,3 +76,89 @@ def image_by_path(path):
 
 def mkpath(path):
     pathlib.Path(bpy.path.abspath(path)).mkdir(parents=True, exist_ok=True)
+
+
+def render_mask(context, width, height, target_image, view_matrix, projection_matrix):
+    """Uses Blender's internal renderer to render the active scene as an opacity mask
+    to the given image (not saved)
+    """
+    offscreen = gpu.types.GPUOffScreen(width, height)
+    area = next((a for a in context.screen.areas if a.type == 'VIEW_3D'), None)
+    space = area.spaces.active
+    state = [
+        space.overlay.show_floor,
+        space.overlay.show_overlays,
+        space.shading.background_type,
+        space.shading.background_color,
+        space.shading.light,
+        space.shading.color_type,
+        space.shading.single_color,
+        space.shading.type,
+        space.shading.render_pass
+    ]
+    space.overlay.show_floor = False
+    space.overlay.show_overlays = False
+    space.shading.background_type = 'VIEWPORT'
+    space.shading.background_color = (0,0,0)
+    space.shading.light = 'FLAT'
+    space.shading.color_type = 'SINGLE'
+    space.shading.single_color = (1,0, 0)
+    space.shading.type = 'SOLID'
+    with offscreen.bind():
+        fb = gpu.state.active_framebuffer_get()
+        fb.clear(color=(0.0, 0.0, 0.0, 0.0))
+        offscreen.draw_view3d(
+            context.scene,
+            context.view_layer,
+            space,
+            area.regions[-1],
+            view_matrix,
+            projection_matrix,
+            do_color_management=False)
+        vertex_shader = '''
+            in vec2 position;
+            in vec2 uv;
+            out vec2 uvInterp;
+            void main() {
+                uvInterp = uv;
+                gl_Position = vec4(position, 0.0, 1.0);
+            }
+        '''
+        bw_fragment_shader = '''
+            uniform sampler2D image;
+            in vec2 uvInterp;
+            out vec4 FragColor;
+            void main() {
+                vec4 t = texture(image, uvInterp).rgba;
+                FragColor = vec4(0.0, 0.0, 0.0, 2.1 * t.r);
+            }
+        '''
+        bw_shader = gpu.types.GPUShader(vertex_shader, bw_fragment_shader)
+        bw_shader.bind()
+        bw_shader.uniform_sampler("image", offscreen.texture_color)
+        batch_for_shader(
+            bw_shader, 'TRI_FAN',
+            {
+                "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
+                "uv": ((0, 0), (1, 0), (1, 1), (0, 1)),
+            },
+        ).draw(bw_shader)
+        buffer = gpu.state.active_framebuffer_get().read_color(0, 0, width, height, 4, 0, 'UBYTE')
+    offscreen.free()
+    space.overlay.show_floor = state[0]
+    space.overlay.show_overlays = state[1]
+    space.shading.background_type = state[2]
+    space.shading.background_color = state[3]
+    space.shading.light = state[4]
+    space.shading.color_type = state[5]
+    space.shading.single_color = state[6]
+    space.shading.type = state[7]
+    
+    if not target_image in bpy.data.images:
+        bpy.data.images.new(target_image, width, height)
+    image = bpy.data.images[target_image]
+    image.scale(width, height)
+    buffer.dimensions = width * height * 4
+    image.pixels = [v / 255 for v in buffer]
+    
+    return image

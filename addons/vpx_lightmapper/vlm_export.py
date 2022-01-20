@@ -30,7 +30,7 @@ from win32com import storagecon
 
 
 # TODO
-# - Toggle visibility of baked elements
+# - Toggle visibility of baked elements or delete them (option)
 # - Update VBS script of the table for light synchronization
 # - Name playfield bake as VLM.Playfield
 # - Set table playfield image to the solid playfield bake (and material) ?
@@ -429,7 +429,6 @@ def export_vpx(context):
                 else:
                     br.skip_tag()
 
-    # FIXME append models and packmaps
     hash_size = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHSIZE)
     file_hash = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHVAL)
     data_hash.CryptDestroyHash()

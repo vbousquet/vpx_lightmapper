@@ -40,6 +40,8 @@ global_scale = vlm_utils.global_scale
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 # - Add automatic plastic beveling, allowing to have beveled for bake and unbeveled for export
 # - Place drop target in movable or indirect bake group
+# - Rewrite (simple GPU render) translucency map generation and add an option for it
+# - Evaluate elements that can need an active material (z<0, transparent material / alpha texture)
 
 
 class VPX_Material(object):
@@ -279,7 +281,7 @@ def read_vpx(context, filepath):
     opt_bevel_plastics = context.scene.vlmSettings.bevel_plastics
     opt_bevel_thin_walls = False # This causes artifact on complex walls
     opt_detect_insert_overlay = True # Place any flasher containing 'insert' in its name to the overlay collection
-    opt_tex_size = context.scene.vlmSettings.tex_size
+    opt_tex_size = int(context.scene.vlmSettings.tex_size)
     
     # Purge unlinked datas to avoid reusing them
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -1708,9 +1710,14 @@ def read_vpx(context, filepath):
         node_tex.name = 'TranslucencyMap'
         node_tex.location.x = -400
         node_tex.location.y = -400
+        node_math = mat.node_tree.nodes.new(type='ShaderNodeMath')
+        node_math.operation = 'MULTIPLY'
+        node_math.location.x = 100
+        node_math.location.y = -400
         group_name = f"{playfield_material.casefold()}.Mat"
         if group_name in mat.node_tree.nodes:
-            mat.node_tree.links.new(node_tex.outputs[1], mat.node_tree.nodes[group_name].inputs[14])
+            mat.node_tree.links.new(node_tex.outputs[1], node_math.inputs[0])
+            mat.node_tree.links.new(node_math.outputs[0], mat.node_tree.nodes[group_name].inputs[14])
         else:
             print(f"Missing group '{group_name}' in playfield material")
 
@@ -1747,27 +1754,15 @@ def read_vpx(context, filepath):
             print(f"Computing translucency map for the playfield inserts.")
             mat.node_tree.nodes.active = mat.node_tree.nodes["TranslucencyMap"]
             tmp_col = vlm_collections.get_collection('BAKETMP')
-            pf_initial_collection = vlm_collections.move_to_col(playfield_obj, tmp_col)
             cups_initial_collection = vlm_collections.move_all_to_col(insert_cups, tmp_col)
-            rlc = context.view_layer.layer_collection
-            for col in root_col.children:
-                vlm_collections.find_layer_collection(rlc, col).exclude = True
-            vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
-            context.scene.render.film_transparent = True
-            context.scene.render.resolution_y = opt_tex_size
-            context.scene.render.resolution_x = int(opt_tex_size / 2)
-            context.scene.world = bpy.data.worlds["VPX.Env.Black"]
-            context.scene.use_nodes = False
-            context.scene.render.bake.use_clear = True
-            bpy.ops.object.select_all(action='DESELECT')
-            for obj in insert_cups:
-                obj.select_set(True)
-            playfield_obj.select_set(True)
-            context.view_layer.objects.active = playfield_obj
-            bpy.ops.object.bake(type='EMIT', use_selected_to_active=True, margin=0)
-            context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
+            vlm_collections.exclude_all(context, root_col)
+            vlm_collections.exclude_all(context, tmp_col, False)
+            # Force a wiexport update (I did not find any better way....)
+            bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
+            view_matrix = mathutils.Matrix.LocRotScale(mathutils.Vector((-1.0, 1.0, 0)), None, mathutils.Vector((2.0 / playfield_width, 2.0 / playfield_height, 0.1)))
+            projection_matrix = mathutils.Matrix.OrthoProjection('XY', 4)
+            vlm_utils.render_mask(context, int(opt_tex_size / 2), opt_tex_size, translucency_image.name, view_matrix, projection_matrix)
             vlm_collections.restore_all_col_links(cups_initial_collection)
-            vlm_collections.restore_col_links(pf_initial_collection)
             vlm_collections.delete_collection(tmp_col)
 
     # Purge unlinked datas

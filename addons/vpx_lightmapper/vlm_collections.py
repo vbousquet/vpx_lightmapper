@@ -128,3 +128,17 @@ def restore_all_col_links(saved_state):
     for state in saved_state:
         restore_col_links(state)
 
+
+def exclude_all(context, root_col, exclude=True):
+    rlc = context.view_layer.layer_collection
+    find_layer_collection(rlc, root_col).exclude = exclude
+    for col in root_col.children:
+        exclude_all(context, col, exclude)
+
+
+def hide_all(context, root_col, exclude=True):
+    rlc = context.view_layer.layer_collection
+    find_layer_collection(rlc, root_col).hide_viewport = exclude
+    for col in root_col.children:
+        hide_all(context, col, exclude)
+    

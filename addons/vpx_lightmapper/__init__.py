@@ -40,7 +40,6 @@ from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, C
 from rna_prop_ui import PropertyPanel
 
 # TODO
-#
 
 
 # Use import.reload for all submodule to allow iterative development using bpy.ops.script.reload()
@@ -98,7 +97,18 @@ class VLM_Scene_props(PropertyGroup):
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 0.0)
     # Baker options
-    tex_size: IntProperty(name="Tex Size:", description="Texture size", default = 256, min = 8)
+    tex_size: EnumProperty(
+        items=[
+            ('256', '256', '256x256', '', 256),
+            ('512', '512', '512x512', '', 512),
+            ('1024', '1024', '1024x1024', '', 1024),
+            ('2048', '2048', '2048x2048', '', 2048),
+            ('4096', '4096', '4096x4096', '', 4096),
+            ('8192', '8192', '8192x8192', '', 8192),
+        ],
+        default='256'
+    )
+    tex_size_old: IntProperty(name="Tex Size:", description="Texture size", default = 256, min = 8)
     padding: IntProperty(name="Padding:", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
     # Exporter options
@@ -189,17 +199,6 @@ class VLM_OT_update(Operator):
     def execute(self, context):
         vlmProps = context.scene.vlmSettings
         return vlm_import.read_vpx(context, bpy.path.abspath(context.scene.vlmSettings.table_file))
-
-
-class VLM_OT_texsize(Operator):
-    bl_idname = "vlm.tex_size_operator"
-    bl_label = "Size"
-    bl_description = "Texture size"
-    size: bpy.props.IntProperty()
-
-    def execute(self, context):
-        context.scene.vlmSettings.tex_size = self.size
-        return {"FINISHED"}
 
 
 class VLM_OT_compute_render_groups(Operator):
@@ -545,17 +544,10 @@ class VLM_PT_Properties(bpy.types.Panel):
         layout.label(text="LightMap Baker", icon='RENDERLAYERS') 
         row = layout.row(align=True)
         row.scale_y = 1.5
-        row.operator(VLM_OT_texsize.bl_idname, text="256").size = 256
-        row.operator(VLM_OT_texsize.bl_idname, text="512").size = 512
-        row.operator(VLM_OT_texsize.bl_idname, text="1k").size = 1024
-        row.operator(VLM_OT_texsize.bl_idname, text="2k").size = 2048
-        row.operator(VLM_OT_texsize.bl_idname, text="4k").size = 4096
-        row.operator(VLM_OT_texsize.bl_idname, text="8k").size = 8192
+        row.prop(vlmProps, "tex_size", expand=True)
         row = layout.row()
-        row.prop(vlmProps, "tex_size")
         row.prop(vlmProps, "padding")
-        row = layout.row()
-        row.prop(vlmProps, "remove_backface")
+        row.prop(vlmProps, "remove_backface", text='Backface')
 
         row = layout.row()
         row.scale_y = 1.5
@@ -774,7 +766,6 @@ classes = (
     VLM_OT_new,
     VLM_OT_new_from_vpx,
     VLM_OT_update,
-    VLM_OT_texsize,
     VLM_OT_compute_render_groups,
     VLM_OT_render_all_groups,
     VLM_OT_create_bake_meshes,
