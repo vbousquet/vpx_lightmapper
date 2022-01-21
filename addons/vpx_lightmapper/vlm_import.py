@@ -274,6 +274,7 @@ def read_vpx(context, filepath):
 
     opt_light_size = context.scene.vlmSettings.light_size
     opt_light_intensity = context.scene.vlmSettings.light_intensity
+    opt_insert_intensity = context.scene.vlmSettings.insert_intensity
     opt_process_inserts = context.scene.vlmSettings.process_inserts
     opt_process_plastics = context.scene.vlmSettings.process_plastics
     opt_use_pf_translucency_map = context.scene.vlmSettings.use_pf_translucency_map
@@ -868,7 +869,7 @@ def read_vpx(context, filepath):
                     obj.name = f"VPX.Light.Shape.{name}"
                     mesh = bpy.data.lights.new(name=name, type='POINT')
                     mesh.color = (color[0], color[1], color[2])
-                    mesh.energy = opt_light_intensity * intensity * global_scale
+                    mesh.energy = opt_insert_intensity * intensity * global_scale
                     mesh.shadow_soft_size = opt_light_size * global_scale
                     obj = update_object(context, obj_name, mesh, True, default_light, hidden_col)
                     # Move below playfield to light through the translucency of the playfield material
@@ -1201,6 +1202,17 @@ def read_vpx(context, filepath):
                                 faces.append((dec+i*4 + 1, dec+i*4 + 3, dec+i*4-4 + 3, dec+i*4-4 + 1)) # Normal pointing outside
                     mesh = bpy.data.meshes.new(f"VPX.RMesh.{name}")
                     mesh.from_pydata(verts, [], faces)
+                    uv_layer = mesh.uv_layers.new().data
+                    for poly in mesh.polygons:
+                        for loop_index in poly.loop_indices:
+                            idx = mesh.loops[loop_index].vertex_index
+                            if idx >= dec:
+                                idx -= dec
+                            if image_alignment == 0:
+                                pt = mesh.vertices[idx]
+                                uv_layer[loop_index].uv = ((pt.co.x - playfield_left) / playfield_width, (playfield_bottom + pt.co.y) / playfield_height)
+                            else:
+                                uv_layer[loop_index].uv = (idx & 1, ratios[idx >> 2] / length)
                     tmp_obj = obj = bpy.data.objects.new('VLM.Tmp', mesh)
                     bake_col.objects.link(tmp_obj)
                     bpy.ops.object.select_all(action='DESELECT')
@@ -1211,18 +1223,6 @@ def read_vpx(context, filepath):
                     bpy.ops.object.modifier_apply(modifier="EdgeSplit")
                     bake_col.objects.unlink(tmp_obj)
                     vlm_utils.apply_split_normals(mesh)
-                    #mesh.use_auto_smooth = True
-                    #mesh.calc_normals_split() # FIXME this create flat shaded normals normals
-                    #mesh.normals_split_custom_set([l.normal for l in mesh.loops])
-                    uv_layer = mesh.uv_layers.new().data
-                    for poly in mesh.polygons:
-                        for loop_index in poly.loop_indices:
-                            idx = mesh.loops[loop_index].vertex_index % dec
-                            if image_alignment == 0:
-                                pt = mesh.vertices[idx]
-                                uv_layer[loop_index].uv = ((pt.co.x - playfield_left) / playfield_width, (playfield_bottom + pt.co.y) / playfield_height)
-                            else:
-                                uv_layer[loop_index].uv = (idx & 1, ratios[idx >> 2] / length)
                     object.data = mesh
                     bake_col.objects.unlink(object)
                     obj = update_object(context, obj_name, object.data, visible, bake_col, hidden_col)

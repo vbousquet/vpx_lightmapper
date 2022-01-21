@@ -93,6 +93,7 @@ class VLM_Scene_props(PropertyGroup):
     # Importer options
     light_size: FloatProperty(name="Light Size", description="Light size factor from VPX to Blender", default = 5.0)
     light_intensity: FloatProperty(name="Light Intensity", description="Light intensity factor from VPX to Blender", default = 250.0)
+    insert_intensity: FloatProperty(name="Insert Intensity", description="Insert intensity factor from VPX to Blender", default = 25.0)
     process_inserts: BoolProperty(name="Convert inserts", description="Detect inserts and converts them", default = True)
     use_pf_translucency_map: BoolProperty(name="PF Translucency Map", description="Generate a translucency map for inserts", default = True)
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
@@ -548,6 +549,9 @@ class VLM_PT_Properties(bpy.types.Panel):
         row = layout.row()
         row.prop(vlmProps, "light_size")
         row.prop(vlmProps, "light_intensity")
+        row = layout.row()
+        row.label(text='')
+        row.prop(vlmProps, "insert_intensity")
 
         layout.separator()
 
