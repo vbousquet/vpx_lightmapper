@@ -654,7 +654,7 @@ def create_bake_meshes(context):
                 obj.select_set(True)
             bpy.ops.object.join()
             bake_instance = context.view_layer.objects.active
-            bake_instance.name = f'VPX.LightMap.{name}'
+            bake_instance.name = f'VLM.LightMap.{name}'
             bake_instance.vlmSettings.bake_tex_factor = density
             bake_results.append(bake_instance)
 
@@ -1112,7 +1112,6 @@ def render_packmaps(context):
 
     opt_force_render = False # Force rendering even if cache is available
     opt_padding = vlmProps.padding
-    opt_save_webp = context.scene.vlmSettings.export_webp # Additionally convert the exported pack map to webp (keeping the default png as well)
     
     # Purge unlinked datas to avoid out of memory error
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -1179,7 +1178,7 @@ def render_packmaps(context):
             pack_image.save()
             bpy.data.images.remove(pack_image)
 
-        if opt_save_webp and (opt_force_render or not os.path.exists(path_webp) or os.path.getmtime(path_webp) < os.path.getmtime(path_png)):
+        if opt_force_render or not os.path.exists(path_webp) or os.path.getmtime(path_webp) < os.path.getmtime(path_png):
             Image.open(path_png).save(path_webp, 'WEBP')
 
         packmap_index += 1

@@ -21,6 +21,7 @@ class BIFF_reader:
     def __init__(self, stream):
         self.data = stream
         self.pos = 0
+        self.record_start = 0
         self.bytes_in_record_remaining = 0
         self.tag = b''
     
@@ -34,11 +35,6 @@ class BIFF_reader:
         return self.data[p:p+count]
 
     def get_bool(self):
-        self.pos = self.pos + 1
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 1
-        return self.data[self.pos - 1] != 0
-
-    def get_bool_padded(self):
         self.pos = self.pos + 4
         self.bytes_in_record_remaining = self.bytes_in_record_remaining - 4
         return self.data[self.pos - 4] != 0
@@ -60,11 +56,6 @@ class BIFF_reader:
         self.pos = self.pos + 4
         self.bytes_in_record_remaining = self.bytes_in_record_remaining - 4
         return i
-
-    def put_u32(self, value):
-        self.data[self.pos:self.pos+4] = struct.pack("<I", value)
-        self.pos = self.pos + 4
-        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 4
 
     def get_32(self):
         i = struct.unpack("<i", self.data[self.pos:self.pos+4])[0]
@@ -128,9 +119,42 @@ class BIFF_reader:
         if self.bytes_in_record_remaining > 0:
             print(f"{self.tag} : {self.bytes_in_record_remaining} unread octets")
             self.skip(self.bytes_in_record_remaining)
+        self.record_start = self.pos
         self.bytes_in_record_remaining = self.get_u32()
         self.tag = self.get_str(4)
-        
+    
+    def delete_tag(self):
+        self.data = self.data[:self.record_start] + self.data[self.pos + self.bytes_in_record_remaining:]
+        self.pos = self.record_start
+        self.bytes_in_record_remaining = 0
+        self.tag = b''
+    
+    def delete_bytes(self, count):
+        self.data = self.data[:self.pos] + self.data[self.pos + count:]
+    
+    def insert_data(self, new_data):
+        for d in new_data:
+            self.data.insert(self.pos, d)
+            self.pos += 1
+    
+    def put_bool(self, value):
+        if value:
+            self.data[self.pos] = 0xFF
+        else:
+            self.data[self.pos] = 0
+        self.pos = self.pos + 4
+        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 4
+
+    def put_u32(self, value):
+        self.data[self.pos:self.pos+4] = struct.pack("<I", value)
+        self.pos = self.pos + 4
+        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 4
+
+    def put_float(self, value):
+        self.data[self.pos:self.pos+4] = struct.pack("<f", value)
+        self.pos = self.pos + 4
+        self.bytes_in_record_remaining = self.bytes_in_record_remaining - 4
+
     def child_reader(self):
         return BIFF_reader(self.data[self.pos:])
 

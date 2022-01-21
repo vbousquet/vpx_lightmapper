@@ -30,10 +30,9 @@ from win32com import storagecon
 
 
 # TODO
-# - Toggle visibility of baked elements or delete them (option)
 # - Update VBS script of the table for light synchronization
 # - Name playfield bake as VLM.Playfield
-# - Set table playfield image to the solid playfield bake (and material) ?
+# - Hide brackets of baked gates and spinners
 #
 # - Try exporting bakes as HDR (or provide an evaluation of the benefit it would give)
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
@@ -78,6 +77,9 @@ def export_vpx(context):
     bakepath = vlm_utils.get_bakepath(context)
     vlm_utils.mkpath(f"{bakepath}Export/")
     input_path = bpy.path.abspath(vlmProps.table_file)
+    export_mode = vlmProps.export_mode
+    bake_col = vlm_collections.get_collection('BAKE')
+    light_col = vlm_collections.get_collection('LIGHTS')
     if not os.path.isfile(input_path):
         self.report({'WARNING'},f"{input_path} does not exist")
         return {'CANCELLED'}
@@ -121,70 +123,97 @@ def export_vpx(context):
     append_structure('GameStg/Font', 1, False),
     append_structure('GameStg/Collection', 1, True),
 
-    # Remove previous packmaps and append the new ones
-    n_images = 0
-    while src_storage.exists(f'GameStg/Image{n_images}'):
-        data = src_storage.openstream(f'GameStg/Image{n_images}').read()
-        br = biff_io.BIFF_reader(data)
-        name = 'unknown'
-        while not br.is_eof():
-            br.next()
-            if br.tag == "NAME":
-                name = br.get_string()
-                break;
-            br.skip_tag()
-        if not name.startswith('VLM.'):
-            dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-            dst_stream.Write(data)
-            n_images += 1
-    packmap_index = 0
-    while True:
-        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
-        if not objects:
-            break
-        packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.png")
-        img_writer = biff_io.BIFF_writer()
-        img_writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
-        img_writer.write_tagged_string(b'PATH', packmap_path)
-        with open(packmap_path, 'rb') as f:
-            img_data = f.read()
-            img_writer.write_tagged_u32(b'SIZE', len(img_data))
-            img_writer.write_tagged_data(b'DATA', img_data)
-        img_writer.close()
-        writer = biff_io.BIFF_writer()
-        writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
-        writer.write_tagged_string(b'PATH', packmap_path)
-        writer.write_tagged_u32(b'WDTH', objects[0].vlmSettings.bake_packmap_width)
-        writer.write_tagged_u32(b'HGHT', objects[0].vlmSettings.bake_packmap_height)
-        writer.write_tagged_empty(b'JPEG') # Strangely, raw data are pushed outside of the JPEG tag (breaking the BIFF structure of the file)
-        writer.write_data(img_writer.get_data())
-        writer.write_tagged_float(b'ALTV', 1.0)
-        writer.close()
-        dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-        dst_stream.Write(writer.get_data())
-        print(f'. Exporting Packmap #{packmap_index} as a {objects[0].vlmSettings.bake_packmap_width:>4} x {objects[0].vlmSettings.bake_packmap_height:>4} image')
-        packmap_index += 1
-        n_images += 1
 
-    # Remove previous bake models and append the new ones
+    # Remove previous baked models and append the new ones, also hide/remove baked items
+    n_read_item = 0
     n_game_items = 0
-    while src_storage.exists(f'GameStg/GameItem{n_game_items}'):
-        data = src_storage.openstream(f'GameStg/GameItem{n_game_items}').read()
-        br = biff_io.BIFF_reader(data)
+    used_images = {}
+    removed_images = {}
+    prefix = ['Wall', '', '', '', '', 'Bumper', 'Trigger', 'Light', 'Kicker', '', 'Gate', 'Spinner', 'Ramp', 
+        '', '', '', '', '', '', 'Prim', 'Flasher', 'Rubber']
+    while src_storage.exists(f'GameStg/GameItem{n_read_item}'):
+        data = src_storage.openstream(f'GameStg/GameItem{n_read_item}').read()
+        data = bytearray(data)
+        item_data = biff_io.BIFF_reader(data)
+        item_type = item_data.get_32()
         name = 'unknown'
-        while not br.is_eof():
-            br.next()
-            # FIXME toggle visibility of baked meshes (remove them in export release mode ?)
-            if br.tag == "NAME":
-                name = br.get_string()
-                break;
-            br.skip_tag()
-        if not name.startswith('VLM.'):
+        item_images = []
+        is_baked = False
+        is_baked_light = False
+        is_physics = True
+        while not item_data.is_eof():
+            item_data.next()
+            if item_data.tag == 'NAME':
+                name = item_data.get_wide_string()
+                is_baked = f'VPX.{prefix[item_type]}.{name}' in bake_col.all_objects
+                is_baked_light = f'VPX.{prefix[item_type]}.{name}' in light_col.all_objects
+                break
+            item_data.skip_tag()
+        item_data = biff_io.BIFF_reader(data)
+        item_type = item_data.get_32()
+        while not item_data.is_eof():
+            item_data.next()
+            visibility_field = False
+            if item_data.tag == 'CLDR' or item_data.tag == 'CLDW': # Wall ramps and primitives
+                is_physics = item_data.get_bool()
+            elif item_data.tag == 'IMAG' or item_data.tag == 'SIMG' or item_data.tag == 'IMGF' or item_data.tag == 'IMAB':
+                item_images.append(item_data.get_string())
+            elif (item_type == 0 or item_type == 6) and item_data.tag == 'VSBL': # for wall top (0) and triggers (6)
+                visibility_field = True
+            elif item_type == 0 and item_data.tag == 'SVBL': # for wall sides (0)
+                visibility_field = True
+            elif (item_type == 12 or item_type == 21) and item_data.tag == 'RVIS': # for ramps (12) and rubbers (21)
+                visibility_field = True
+            elif item_type == 8 and item_data.tag == 'TYPE': # for kicker (8), type 0 is invisible
+                pass
+            elif item_type == 10 and item_data.tag == 'GVSB': # for gate (10): overall gate (wire and bracket)
+                pass
+            elif item_type == 10 and item_data.tag == 'GSUP': # for gate (10) bracket, combined with GVSB
+                print("Name: ", name)
+                if f'VPX.Gate.Bracket.{name}' in bake_col.all_objects:
+                    item_data.put_bool(False)
+            elif item_type == 11 and item_data.tag == 'SVIS': # for spinner (11): overall spinner (wire and bracket)
+                pass
+            elif item_type == 11 and item_data.tag == 'SSUP': # for spinner bracket (11) combined with SVIS
+                if f'VPX.Spinner.Bracket.{name}' in bake_col.all_objects:
+                    item_data.put_bool(False)
+            elif (item_type == 19 or item_type == 22) and item_data.tag == 'TVIS': # for primitives (19) and hit targets (22)
+                visibility_field = True
+            elif item_type == 5 and item_data.tag == 'CAVI': # for bumper caps (5)
+                pass
+            elif item_type == 5 and item_data.tag == 'BSVS': # for bumper ring & skirt (5)
+                pass
+            elif item_type == 5 and item_data.tag == 'RIVS': # for bumper ring (5)
+                pass
+            elif item_type == 5 and item_data.tag == 'SKVS': # for bumper skirt (5)
+                pass
+            elif item_type == 7 and is_baked_light:
+                if item_data.tag == 'BULT':
+                    item_data.put_bool(True)
+                elif item_data.tag == 'BHHI':
+                    item_data.put_float(-28)
+            if visibility_field and is_baked:
+                item_data.put_bool(False)
+            item_data.skip_tag()
+        remove = (export_mode == 'remove' or export_mode == 'remove_all') and is_baked and not is_physics
+        remove = remove or name.startswith('VLM.')
+        if remove:
+            print(f'. Item {name:>21s} was removed from export table')
+            for image in item_images:
+                removed_images[image] = True
+        else:
+            for image in item_images:
+                used_images[image] = True
             dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
             dst_stream.Write(data)
             n_game_items += 1
-    for obj in [obj for obj in result_col.all_objects]:
+        n_read_item = n_read_item + 1
+
+    # Add new bake models
+    playfield_index = 0
+    for obj in sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}'):
         is_light = obj.vlmSettings.bake_type == 'lightmap'
+        is_playfield = obj.vlmSettings.bake_type == 'playfield'
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', 0, 0, 0)
@@ -201,13 +230,20 @@ def export_vpx(context):
         writer.write_tagged_string(b'IMAG', f'VLM.Packmap{obj.vlmSettings.bake_packmap}')
         writer.write_tagged_string(b'NRMA', '')
         writer.write_tagged_u32(b'SIDS', 4)
-        writer.write_tagged_wide_string(b'NAME', obj.name) # FIXME naming should be better
+        if is_playfield:
+            playfield_index += 1
+            if playfield_index == 1:
+                writer.write_tagged_wide_string(b'NAME', 'VLM.BM.Playfield')
+            else:
+                writer.write_tagged_wide_string(b'NAME', f'VLM.BM.Playfield{playfield_index}')
+        else:
+            writer.write_tagged_wide_string(b'NAME', obj.name.replace('VLM.BakeMap', 'VLM.BM').replace('VLM.LightMap', 'VLM.LM'))
         if is_light:
             writer.write_tagged_string(b'MATR', 'VLM.Lightmap')
         else:
             writer.write_tagged_string(b'MATR', 'VLM.Bake.Solid') # FIXME we should have 2 variants (active/not active)
         writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
-        writer.write_tagged_bool(b'TVIS', True)
+        writer.write_tagged_bool(b'TVIS', not is_playfield)
         writer.write_tagged_bool(b'DTXI', False)
         writer.write_tagged_bool(b'HTEV', False)
         writer.write_tagged_float(b'THRS', 2.0)
@@ -220,7 +256,7 @@ def export_vpx(context):
         writer.write_tagged_bool(b'CLDR', False)
         writer.write_tagged_bool(b'ISTO', True)
         writer.write_tagged_bool(b'U3DM', True)
-        writer.write_tagged_bool(b'STRE', False) # FIXME static rendering should be true for solid map without transparency
+        writer.write_tagged_bool(b'STRE', not is_light) # FIXME static rendering should be true for solid map without transparency
         writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
         writer.write_tagged_bool(b'REEN', False)
@@ -282,6 +318,73 @@ def export_vpx(context):
         dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
         n_game_items += 1
+            
+            
+    # Mark playfield image has removable
+    if next((obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'playfield'), None) is not None:
+        br = biff_io.BIFF_reader(src_storage.openstream('GameStg/GameData').read())
+        while not br.is_eof():
+            br.next()
+            if br.tag == "IMAG":
+                playfield_image = br.get_string()
+                removed_images[playfield_image]=True
+                break
+            br.skip_tag()
+
+
+    # Remove previous packmaps and append the new ones
+    n_images = 0
+    n_read_images = 0
+    while src_storage.exists(f'GameStg/Image{n_read_images}'):
+        data = src_storage.openstream(f'GameStg/Image{n_read_images}').read()
+        br = biff_io.BIFF_reader(data)
+        name = 'unknown'
+        while not br.is_eof():
+            br.next()
+            if br.tag == "NAME":
+                name = br.get_string()
+                break
+            br.skip_tag()
+        remove = name.startswith('VLM.')
+        remove = remove or (name in removed_images and not name in used_images)
+        if remove:
+            print(f'. Image {name:>20s} was removed from export table')
+        else:
+            dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+            dst_stream.Write(data)
+            n_images += 1
+        n_read_images = n_read_images + 1
+
+
+    # Add new bake/lightmap textures
+    packmap_index = 0
+    while True:
+        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
+        if not objects:
+            break
+        packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.png")
+        img_writer = biff_io.BIFF_writer()
+        img_writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
+        img_writer.write_tagged_string(b'PATH', packmap_path)
+        with open(packmap_path, 'rb') as f:
+            img_data = f.read()
+            img_writer.write_tagged_u32(b'SIZE', len(img_data))
+            img_writer.write_tagged_data(b'DATA', img_data)
+        img_writer.close()
+        writer = biff_io.BIFF_writer()
+        writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
+        writer.write_tagged_string(b'PATH', packmap_path)
+        writer.write_tagged_u32(b'WDTH', objects[0].vlmSettings.bake_packmap_width)
+        writer.write_tagged_u32(b'HGHT', objects[0].vlmSettings.bake_packmap_height)
+        writer.write_tagged_empty(b'JPEG') # Strangely, raw data are pushed outside of the JPEG tag (breaking the BIFF structure of the file)
+        writer.write_data(img_writer.get_data())
+        writer.write_tagged_float(b'ALTV', 1.0)
+        writer.close()
+        dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+        dst_stream.Write(writer.get_data())
+        print(f'. Exporting Packmap #{packmap_index} as a {objects[0].vlmSettings.bake_packmap_width:>4} x {objects[0].vlmSettings.bake_packmap_height:>4} image')
+        packmap_index += 1
+        n_images += 1
 
     # Copy reference file
     for src_path, mode, hashed in file_structure:
@@ -298,14 +401,33 @@ def export_vpx(context):
             has_solid_bake_mat = has_active_bake_mat = has_light_mat = False
             while not br.is_eof():
                 br.next()
-                if br.tag == "SIMG":
+                if br.tag == "SIMG": # Number of textures
                     br.put_u32(n_images)
-                elif br.tag == "SEDT":
+                elif br.tag == "SEDT": # Number of items
                     br.put_u32(n_game_items)
-                elif br.tag == "MASI":
+                elif br.tag == "MASI": # Number of materials
                     masi_pos = br.pos
                     n_materials = br.get_u32()
-                elif br.tag == "MATE":
+                elif br.tag == "IMAG": # Playfield image
+                    playfields = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'playfield']
+                    if playfields:
+                        playfield_image = f'VLM.Packmap{playfields[0].vlmSettings.bake_packmap}'
+                        if len(playfields) > 1:
+                            print(f'. Warning: more than one playfield bake found. Using {playfields[0].name} for the playfield image')
+                        wr = biff_io.BIFF_writer()
+                        wr.new_tag(b'IMAG')
+                        wr.write_string(playfield_image)
+                        wr.close(write_endb=False)
+                        br.delete_tag()
+                        br.insert_data(wr.get_data())
+                elif br.tag == "PLMA": # Playfield material
+                    wr = biff_io.BIFF_writer()
+                    wr.new_tag(b'PLMA')
+                    wr.write_string('VLM.Bake.Solid')
+                    wr.close(write_endb=False)
+                    br.delete_tag()
+                    br.insert_data(wr.get_data())
+                elif br.tag == "MATE": # Materials
                     mate_pos = br.pos
                     for i in range(n_materials):
                         name = br.get_str(32).rstrip('\x00')
@@ -319,9 +441,26 @@ def export_vpx(context):
                 elif br.tag == "PHMA":
                     phma_pos = br.pos
                 if br.tag == "CODE":
-                    code_length = br.get_u32() 
-                    # FIXME update script with lightmap synchronization
-                    br.get(code_length)
+                    code_pos = br.pos
+                    code = br.get_string()
+                    code += "\n\n"
+                    code += "' ZVLM Beginning of Virtual Pinball X Light Mapper generated code\n"
+                    code += "'\n"
+                    code += "Sub UpdateLightMaps\n"
+                    # FIXME implement lightmap synchronization
+                    # code += "	UpdateLightMapOpacity l23, p23on, 100\n"
+                    code += "End Sub\n"
+                    code += "\n"
+                    code += "Sub UpdateLightMapOpacity(light, lightmap, amount)\n"
+                    code += "	Dim percent: percent = light.GetCurrentIntensity() / light.Intensity\n"
+                    code += "	lightmap.Opacity = amount * percent\n"
+                    code += "End Sub\n"
+                    code += "' ZVLM End of Virtual Pinball X Light Mapper generated code\n"
+                    wr = biff_io.BIFF_writer()
+                    wr.write_string(code)
+                    br.pos = code_pos
+                    br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
+                    br.insert_data(wr.get_data())
                 else:
                     br.skip_tag()
             # modify existing data to add missing VLM materials
@@ -385,7 +524,7 @@ def export_vpx(context):
                 pr.write_float(0.0)
                 pr.write_float(0.0)
                 pr.write_float(0.0)
-            print(f'. Adding {n_material_to_add} materials ({len(wr.get_data())} bytes for graphics and {len(pr.get_data())} bytes for physics)')
+            print(f'. Adding {n_material_to_add} materials')
             br.pos = masi_pos
             br.put_u32(n_materials + n_material_to_add)
             br.pos = mate_pos - 8
@@ -398,7 +537,7 @@ def export_vpx(context):
             br.put_u32((n_materials + n_material_to_add) * 48 + 4)
             for i, d in enumerate(pr.get_data()):
                 br.data.insert(phma_pos + i, d)
-            data = bytes(data)
+            data = bytes(br.data)
         if hashed:
             if mode == 0:
                 data_hash.CryptHashData(data)
@@ -428,6 +567,10 @@ def export_vpx(context):
                         dst_stream.Write(data)
                 else:
                     br.skip_tag()
+
+    print(f". {n_images} images exported in table files")
+    print(". Images marked as used:", list(used_images.keys()))
+    print(". Images marked as deletable:", list(removed_images.keys()))
 
     hash_size = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHSIZE)
     file_hash = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHVAL)

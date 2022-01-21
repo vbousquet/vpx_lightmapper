@@ -94,6 +94,7 @@ class VLM_Scene_props(PropertyGroup):
     light_size: FloatProperty(name="Light Size", description="Light size factor from VPX to Blender", default = 5.0)
     light_intensity: FloatProperty(name="Light Intensity", description="Light intensity factor from VPX to Blender", default = 250.0)
     process_inserts: BoolProperty(name="Convert inserts", description="Detect inserts and converts them", default = True)
+    use_pf_translucency_map: BoolProperty(name="PF Translucency Map", description="Generate a translucency map for inserts", default = True)
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 0.0)
     # Baker options
@@ -112,7 +113,15 @@ class VLM_Scene_props(PropertyGroup):
     padding: IntProperty(name="Padding:", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
     # Exporter options
-    export_webp: BoolProperty(name="Export WebP", description="Additionally to the PNG, export WebP", default = False)
+    export_mode: EnumProperty(
+        items=[
+            ('default', 'Default', 'Add bakes and lightmap to the table', '', 0),
+            ('hide', 'Hide', 'Hide items that have been baked', '', 1),
+            ('remove', 'Remove', 'Delete items that have been baked', '', 2),
+            ('remove_all', 'Remove All', 'Delete items and images that have been baked', '', 3),
+        ],
+        default='default'
+    )
     # Active table informations
     table_file: StringProperty(name="Table", description="Table filename", default="")
     playfield_size: FloatVectorProperty(name="Playfield size:", description="Size of the playfield in VP unit", default=(0, 0, 0, 0), size=4)
@@ -535,6 +544,7 @@ class VLM_PT_Properties(bpy.types.Panel):
         row.prop(vlmProps, "bevel_plastics")
         row = layout.row()
         row.prop(vlmProps, "process_inserts")
+        row.prop(vlmProps, "use_pf_translucency_map")
         row = layout.row()
         row.prop(vlmProps, "light_size")
         row.prop(vlmProps, "light_intensity")
@@ -563,6 +573,8 @@ class VLM_PT_Properties(bpy.types.Panel):
         layout.separator()
 
         layout.label(text="Baked Model Exporter", icon='EXPORT') 
+        row = layout.row(align=True)
+        row.prop(vlmProps, "export_mode", expand=True)
         row = layout.row()
         row.scale_y = 1.5
         row.operator(VLM_OT_export_vpx.bl_idname)

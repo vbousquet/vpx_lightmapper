@@ -40,7 +40,6 @@ global_scale = vlm_utils.global_scale
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 # - Add automatic plastic beveling, allowing to have beveled for bake and unbeveled for export
 # - Place drop target in movable or indirect bake group
-# - Rewrite (simple GPU render) translucency map generation and add an option for it
 # - Evaluate elements that can need an active material (z<0, transparent material / alpha texture)
 
 
@@ -201,9 +200,9 @@ def load_point(item_data):
         elif sub_data.tag == 'POSZ':
             z = sub_data.get_float()
         elif sub_data.tag == 'SMTH':
-            smooth = sub_data.get_bool_padded()
+            smooth = sub_data.get_bool()
         elif sub_data.tag == 'ATEX':
-            auto_tex = sub_data.get_bool_padded()
+            auto_tex = sub_data.get_bool()
         elif sub_data.tag == 'TEXC':
             tex_coord = sub_data.get_float()
         elif sub_data.tag in point_skipped:
@@ -277,6 +276,7 @@ def read_vpx(context, filepath):
     opt_light_intensity = context.scene.vlmSettings.light_intensity
     opt_process_inserts = context.scene.vlmSettings.process_inserts
     opt_process_plastics = context.scene.vlmSettings.process_plastics
+    opt_use_pf_translucency_map = context.scene.vlmSettings.use_pf_translucency_map
     opt_plastic_translucency = 1.0
     opt_bevel_plastics = context.scene.vlmSettings.bevel_plastics
     opt_bevel_thin_walls = False # This causes artifact on complex walls
@@ -347,7 +347,7 @@ def read_vpx(context, filepath):
                     mat.glossy_color = game_data.get_color()
                     mat.clearcoat_color = game_data.get_color()
                     mat.wrap_lighting = game_data.get_float()
-                    mat.is_metal = game_data.get_bool_padded()
+                    mat.is_metal = game_data.get_bool()
                     mat.roughness = game_data.get_float()
                     mat.glossy_image_lerp = game_data.get_u8() / 255.0
                     game_data.skip(3)
@@ -526,9 +526,9 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'SIMG':
                         side_image = item_data.get_string()
                     elif item_data.tag == 'VSBL':
-                        top_visible = item_data.get_bool_padded()
+                        top_visible = item_data.get_bool()
                     elif item_data.tag == 'SVBL':
-                        side_visible = item_data.get_bool_padded()
+                        side_visible = item_data.get_bool()
                     elif item_data.tag == 'HTBT':
                         height_bottom = item_data.get_float()
                     elif item_data.tag == 'HTTP':
@@ -720,15 +720,15 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'SURF':
                         surface = item_data.get_string()
                     elif item_data.tag == 'CAVI':
-                        cap_visible = item_data.get_bool_padded()
+                        cap_visible = item_data.get_bool()
                     elif item_data.tag == 'BSVS':
-                        base_visible = item_data.get_bool_padded()
+                        base_visible = item_data.get_bool()
                         ring_visible = base_visible
                         skirt_visible = base_visible
                     elif item_data.tag == 'RIVS':
-                        ring_visible = item_data.get_bool_padded()
+                        ring_visible = item_data.get_bool()
                     elif item_data.tag == 'SKVS':
-                        skirt_visible = item_data.get_bool_padded()
+                        skirt_visible = item_data.get_bool()
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
                 obj = add_core_mesh(created_objects, f"VPX.Bumper.Base.{name}", "VPX.Core.Bumperbase", base_visible, bake_col, hidden_col, materials, base_material, "", x, y, 0.0, radius, radius, height_scale, orientation, global_scale)
@@ -767,7 +767,7 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'SURF':
                         surface = item_data.get_string()
                     elif item_data.tag == 'VSBL':
-                        visible = item_data.get_bool_padded()
+                        visible = item_data.get_bool()
                     elif item_data.tag == 'DPNT':
                         points.append(load_point(item_data))
                     elif item_data.tag in skipped:
@@ -815,15 +815,15 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'BWTH':
                         intensity = item_data.get_float()
                     elif item_data.tag == 'SHBM':
-                        show_bulb = item_data.get_bool_padded()
+                        show_bulb = item_data.get_bool()
                     elif item_data.tag == 'BGLS':
-                        is_backglass = item_data.get_bool_padded()
+                        is_backglass = item_data.get_bool()
                     elif item_data.tag == 'IMMO':
-                        is_passthrough = item_data.get_bool_padded()
+                        is_passthrough = item_data.get_bool()
                     elif item_data.tag == 'BMSC':
                         bulb_mesh_radius = item_data.get_float()
                     elif item_data.tag == 'BULT':
-                        bulb = item_data.get_bool_padded()
+                        bulb = item_data.get_bool()
                     elif item_data.tag == 'BHHI':
                         halo_height = item_data.get_float()
                     elif item_data.tag == 'RADI':
@@ -1025,9 +1025,9 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'SURF':
                         surface = item_data.get_string()
                     elif item_data.tag == 'GSUP':
-                        show_bracket = item_data.get_bool_padded()
+                        show_bracket = item_data.get_bool()
                     elif item_data.tag == 'GVSB':
-                        visible = item_data.get_bool_padded()
+                        visible = item_data.get_bool()
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
                 meshes = ["", "VPX.Core.Gatewire", "VPX.Core.Gatewirerectangle", "VPX.Core.Gateplate", "VPX.Core.Gatelongplate"]
@@ -1059,9 +1059,9 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'SURF':
                         surface = item_data.get_string()
                     elif item_data.tag == 'SSUP':
-                        show_bracket = item_data.get_bool_padded()
+                        show_bracket = item_data.get_bool()
                     elif item_data.tag == 'SVIS':
-                        visible = item_data.get_bool_padded()
+                        visible = item_data.get_bool()
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
                 add_core_mesh(created_objects, f"VPX.Spinner.Bracket.{name}", "VPX.Core.Spinnerbracket", visible and show_bracket, bake_col, hidden_col, materials, material, "", x, y, height, length, length, length, orientation, global_scale)
@@ -1102,13 +1102,13 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'IMAG':
                         image = item_data.get_string()
                     elif item_data.tag == 'IMGW':
-                        image_on_walls = item_data.get_bool_padded()
+                        image_on_walls = item_data.get_bool()
                     elif item_data.tag == 'ALGN':
                         image_alignment = item_data.get_u32()
                     elif item_data.tag == 'TYPE':
                         ramp_type = item_data.get_u32()
                     elif item_data.tag == 'RVIS':
-                        visible = item_data.get_bool_padded()
+                        visible = item_data.get_bool()
                     elif item_data.tag == 'RADI':
                         wire_diameter = item_data.get_float()
                     elif item_data.tag == 'RADX':
@@ -1169,8 +1169,9 @@ def read_vpx(context, filepath):
                         normals.append(n)
                     verts = []
                     faces = []
+                    # Plastic ramps need to have some thickness for transparent material to render correctly, so we create both sides, slightly separated
                     for i in range(n_verts):
-                        w = global_scale * 0.5 * (width_bottom + (width_top - width_bottom) * ratios[i] / length)
+                        w = global_scale * (0.5 * (width_bottom + (width_top - width_bottom) * ratios[i] / length) - 0.5)
                         verts.append((object.data.vertices[i].co.x-w*normals[i].x, object.data.vertices[i].co.y-w*normals[i].y, object.data.vertices[i].co.z-w*normals[i].z))
                         verts.append((object.data.vertices[i].co.x+w*normals[i].x, object.data.vertices[i].co.y+w*normals[i].y, object.data.vertices[i].co.z+w*normals[i].z))
                         verts.append((object.data.vertices[i].co.x-w*normals[i].x, object.data.vertices[i].co.y-w*normals[i].y, object.data.vertices[i].co.z-w*normals[i].z + right_wall_height * global_scale))
@@ -1179,19 +1180,44 @@ def read_vpx(context, filepath):
                             faces.append((i*4-4 + 0, i*4-4 + 1, i*4 + 1, i*4 + 0))
                             if left_wall_height != 0:
                                 faces.append((i*4 + 0, i*4 + 2, i*4-4 + 2, i*4-4 + 0)) # Normal pointing inside
-                                faces.append((i*4-4 + 0, i*4-4 + 2, i*4 + 2, i*4 + 0)) # Normal pointing outside
+                                #faces.append((i*4-4 + 0, i*4-4 + 2, i*4 + 2, i*4 + 0)) # Normal pointing outside
                             if right_wall_height != 0:
                                 faces.append((i*4-4 + 1, i*4-4 + 3, i*4 + 3, i*4 + 1)) # Normal pointing inside
-                                faces.append((i*4 + 1, i*4 + 3, i*4-4 + 3, i*4-4 + 1)) # Normal pointing outside
+                                #faces.append((i*4 + 1, i*4 + 3, i*4-4 + 3, i*4-4 + 1)) # Normal pointing outside
+                    dec = n_verts * 4
+                    for i in range(n_verts):
+                        w = global_scale * (0.5 * (width_bottom + (width_top - width_bottom) * ratios[i] / length) + 0.5)
+                        verts.append((object.data.vertices[i].co.x-w*normals[i].x, object.data.vertices[i].co.y-w*normals[i].y, object.data.vertices[i].co.z-w*normals[i].z))
+                        verts.append((object.data.vertices[i].co.x+w*normals[i].x, object.data.vertices[i].co.y+w*normals[i].y, object.data.vertices[i].co.z+w*normals[i].z))
+                        verts.append((object.data.vertices[i].co.x-w*normals[i].x, object.data.vertices[i].co.y-w*normals[i].y, object.data.vertices[i].co.z-w*normals[i].z + right_wall_height * global_scale))
+                        verts.append((object.data.vertices[i].co.x+w*normals[i].x, object.data.vertices[i].co.y+w*normals[i].y, object.data.vertices[i].co.z+w*normals[i].z + left_wall_height * global_scale))
+                        if i > 0:
+                            #faces.append((i*4-4 + 0, i*4-4 + 1, i*4 + 1, i*4 + 0))
+                            if left_wall_height != 0:
+                                #faces.append((i*4 + 0, i*4 + 2, i*4-4 + 2, i*4-4 + 0)) # Normal pointing inside
+                                faces.append((dec+i*4-4 + 0, dec+i*4-4 + 2, dec+i*4 + 2, dec+i*4 + 0)) # Normal pointing outside
+                            if right_wall_height != 0:
+                                #faces.append((i*4-4 + 1, i*4-4 + 3, i*4 + 3, i*4 + 1)) # Normal pointing inside
+                                faces.append((dec+i*4 + 1, dec+i*4 + 3, dec+i*4-4 + 3, dec+i*4-4 + 1)) # Normal pointing outside
                     mesh = bpy.data.meshes.new(f"VPX.RMesh.{name}")
                     mesh.from_pydata(verts, [], faces)
-                    mesh.use_auto_smooth = True
-                    mesh.calc_normals_split()
-                    mesh.normals_split_custom_set([l.normal for l in mesh.loops])
+                    tmp_obj = obj = bpy.data.objects.new('VLM.Tmp', mesh)
+                    bake_col.objects.link(tmp_obj)
+                    bpy.ops.object.select_all(action='DESELECT')
+                    tmp_obj.select_set(True)
+                    context.view_layer.objects.active = tmp_obj
+                    bpy.ops.object.shade_smooth()
+                    bpy.ops.object.modifier_add(type='EDGE_SPLIT')
+                    bpy.ops.object.modifier_apply(modifier="EdgeSplit")
+                    bake_col.objects.unlink(tmp_obj)
+                    vlm_utils.apply_split_normals(mesh)
+                    #mesh.use_auto_smooth = True
+                    #mesh.calc_normals_split() # FIXME this create flat shaded normals normals
+                    #mesh.normals_split_custom_set([l.normal for l in mesh.loops])
                     uv_layer = mesh.uv_layers.new().data
                     for poly in mesh.polygons:
                         for loop_index in poly.loop_indices:
-                            idx = mesh.loops[loop_index].vertex_index
+                            idx = mesh.loops[loop_index].vertex_index % dec
                             if image_alignment == 0:
                                 pt = mesh.vertices[idx]
                                 uv_layer[loop_index].uv = ((pt.co.x - playfield_left) / playfield_width, (playfield_bottom + pt.co.y) / playfield_height)
@@ -1295,7 +1321,7 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'IMAG':
                         image = item_data.get_string()
                     elif item_data.tag == 'TVIS':
-                        visible = item_data.get_bool_padded()
+                        visible = item_data.get_bool()
                     elif item_data.tag == 'VPOS':
                         position = (item_data.get_float(), item_data.get_float(), item_data.get_float())
                         item_data.skip(4)
@@ -1303,7 +1329,7 @@ def read_vpx(context, filepath):
                         size = (item_data.get_float(), item_data.get_float(), item_data.get_float())
                         item_data.skip(4)
                     elif item_data.tag == 'U3DM':
-                        use_3d_mesh = item_data.get_bool_padded()
+                        use_3d_mesh = item_data.get_bool()
                     elif item_data.tag == 'SIDS':
                         n_sides = item_data.get_u32()
                     elif item_data.tag == 'RTV0':
@@ -1460,9 +1486,9 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'MOVA':
                         modulate_vs_add = item_data.get_float()
                     elif item_data.tag == 'FVIS':
-                        visible = item_data.get_bool_padded()
+                        visible = item_data.get_bool()
                     elif item_data.tag == 'ADDB':
-                        additive_blend = item_data.get_bool_padded()
+                        additive_blend = item_data.get_bool()
                     elif item_data.tag == 'ALGN':
                         image_alignment = item_data.get_u32()
                     elif item_data.tag == 'DPNT':
@@ -1596,7 +1622,7 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'IMAG':
                         image = item_data.get_string()
                     elif item_data.tag == 'RVIS':
-                        visible = item_data.get_bool_padded()
+                        visible = item_data.get_bool()
                     elif item_data.tag == 'WDTP':
                         thickness = item_data.get_u32()
                     elif item_data.tag == 'ROTX':
@@ -1664,7 +1690,7 @@ def read_vpx(context, filepath):
                     elif item_data.tag == 'TRTY':
                         type = item_data.get_u32()
                     elif item_data.tag == 'TVIS':
-                        visible = item_data.get_bool_padded()
+                        visible = item_data.get_bool()
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
                 obj_name = f"VPX.Target.{name}"
@@ -1700,6 +1726,7 @@ def read_vpx(context, filepath):
             playfield_obj = bpy.data.objects.new("VPX.Playfield", mesh)
             vlm_collections.get_collection('BAKE PLAYFIELD').objects.link(playfield_obj)
         created_objects.append(playfield_obj)
+    playfield_obj.name = 'VPX.Playfield'
     pfmesh = playfield_obj.data
     if pfmesh.materials[0].name.startswith('VPX.Mat.'):
         print('Creating playfield material')
@@ -1748,9 +1775,12 @@ def read_vpx(context, filepath):
     # Create a translucency map for the playfield (translucent for inserts, diffuse otherwise)
     if len(pfmesh.materials) > 0 and pfmesh.materials[0] is not None and pfmesh.materials[0].name == 'VPX.Playfield' and 'TranslucencyMap' in pfmesh.materials[0].node_tree.nodes:
         translucency_image = bpy.data.images.new('PFTranslucency', int(opt_tex_size/2), opt_tex_size, alpha=True)
+        translucency_image.source = 'GENERATED' # Defaults to a full translucent playfield
+        translucency_image.generated_type = 'BLANK'
+        translucency_image.generated_color = (0.0, 0.0, 0.0, 1.0)
         mat = pfmesh.materials[0]
         mat.node_tree.nodes["TranslucencyMap"].image = translucency_image
-        if insert_cups:
+        if opt_use_pf_translucency_map: # Render the translucency map (which can be entirely empty if there is no inserts cups)
             print(f"Computing translucency map for the playfield inserts.")
             mat.node_tree.nodes.active = mat.node_tree.nodes["TranslucencyMap"]
             tmp_col = vlm_collections.get_collection('BAKETMP')
