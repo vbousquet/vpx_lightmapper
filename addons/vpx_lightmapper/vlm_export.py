@@ -210,7 +210,6 @@ def export_vpx(context):
         n_read_item = n_read_item + 1
 
     # Add new bake models
-    playfield_index = 0
     for obj in sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}'):
         is_light = obj.vlmSettings.bake_type == 'lightmap'
         is_playfield = obj.vlmSettings.bake_type == 'playfield'
@@ -230,14 +229,7 @@ def export_vpx(context):
         writer.write_tagged_string(b'IMAG', f'VLM.Packmap{obj.vlmSettings.bake_packmap}')
         writer.write_tagged_string(b'NRMA', '')
         writer.write_tagged_u32(b'SIDS', 4)
-        if is_playfield:
-            playfield_index += 1
-            if playfield_index == 1:
-                writer.write_tagged_wide_string(b'NAME', 'VLM.BM.Playfield')
-            else:
-                writer.write_tagged_wide_string(b'NAME', f'VLM.BM.Playfield{playfield_index}')
-        else:
-            writer.write_tagged_wide_string(b'NAME', obj.name.replace('VLM.BakeMap', 'VLM.BM').replace('VLM.LightMap', 'VLM.LM'))
+        writer.write_tagged_wide_string(b'NAME', obj.name)
         if is_light:
             writer.write_tagged_string(b'MATR', 'VLM.Lightmap')
         else:
@@ -289,7 +281,7 @@ def export_vpx(context):
                 else:
                     indices.append(existing_index)
         n_indices = len(indices)
-        print(f'. Exporting model with {n_vertices:>6} vertices for {int(n_indices/3):>5} faces for {obj.name}')
+        print(f'. Adding {obj.name:<15} with {n_vertices:>6} vertices for {int(n_indices/3):>5} faces')
         
         writer.write_tagged_u32(b'M3VN', n_vertices)
         #writer.write_tagged_data(b'M3DX', struct.pack(f'<{len(vertices)}f', *vertices))
@@ -382,7 +374,7 @@ def export_vpx(context):
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
-        print(f'. Exporting Packmap #{packmap_index} as a {objects[0].vlmSettings.bake_packmap_width:>4} x {objects[0].vlmSettings.bake_packmap_height:>4} image')
+        print(f'. Adding Packmap #{packmap_index} as a {objects[0].vlmSettings.bake_packmap_width:>4} x {objects[0].vlmSettings.bake_packmap_height:>4} image')
         packmap_index += 1
         n_images += 1
 
@@ -443,12 +435,18 @@ def export_vpx(context):
                 if br.tag == "CODE":
                     code_pos = br.pos
                     code = br.get_string()
+                    br.pos = code_pos
+                    br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
+                    # FIXME find a previously added ZVLM block, load the intensinty from this block, then remove it
                     code += "\n\n"
-                    code += "' ZVLM Beginning of Virtual Pinball X Light Mapper generated code\n"
-                    code += "'\n"
+                    code += "' ZVLM Begin of Virtual Pinball X Light Mapper generated code\n"
                     code += "Sub UpdateLightMaps\n"
-                    # FIXME implement lightmap synchronization
-                    # code += "	UpdateLightMapOpacity l23, p23on, 100\n"
+                    for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap']:
+                        if obj.vlmSettings.bake_light in light_col.children:
+                            a_light = light_col.children[obj.vlmSettings.bake_light].objects[0]
+                            code += f'	UpdateLightMapOpacity GetElementByName("{a_light.vlmSettings.vpx_object}"), GetElementByName("{obj.name}"), 100\n'
+                        else:
+                            code += f'	UpdateLightMapOpacity GetElementByName("{obj.vlmSettings.bake_light}"), GetElementByName("{obj.name}"), 100\n'
                     code += "End Sub\n"
                     code += "\n"
                     code += "Sub UpdateLightMapOpacity(light, lightmap, amount)\n"
@@ -458,8 +456,6 @@ def export_vpx(context):
                     code += "' ZVLM End of Virtual Pinball X Light Mapper generated code\n"
                     wr = biff_io.BIFF_writer()
                     wr.write_string(code)
-                    br.pos = code_pos
-                    br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
                     br.insert_data(wr.get_data())
                 else:
                     br.skip_tag()

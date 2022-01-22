@@ -142,11 +142,14 @@ class VLM_Collection_props(PropertyGroup):
 
 class VLM_Object_props(PropertyGroup):
     # Bake objects properties
+    vpx_object: StringProperty(name="VPX", description="Name of reference VPX object", default = '')
     import_mesh: BoolProperty(name="Mesh", description="Update mesh on import", default = True)
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     # Bake result properties
     bake_name: StringProperty(name="Bake Name", description="Lighting situation identifier", default="")
+    bake_objects: StringProperty(name="Object Source", description="Ocject or collection of object used to create this bake/lightmap", default="")
+    bake_light: StringProperty(name="Light Source", description="Light or collection of lights used to create this lightmap", default="")
     bake_type: EnumProperty(
         items=[
             ('bake', 'Bake', 'Default bake process', '', 0),
@@ -673,6 +676,8 @@ class VLM_PT_3D(bpy.types.Panel):
             if len(result_objects) == 1:
                 layout.prop(result_objects[0].vlmSettings, 'bake_name', text='Name', expand=True)
                 layout.prop(result_objects[0].vlmSettings, 'bake_type', expand=True)
+                layout.prop(result_objects[0].vlmSettings, 'bake_objects', text='Objects', expand=True)
+                layout.prop(result_objects[0].vlmSettings, 'bake_light', text='Light', expand=True)
                 layout.prop(result_objects[0].vlmSettings, 'bake_tex_factor', expand=True)
                 row = layout.row(align=True)
                 row.prop(result_objects[0].vlmSettings, 'bake_packmap', expand=True, text="Pack:")

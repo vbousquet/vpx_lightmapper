@@ -662,6 +662,7 @@ def read_vpx(context, filepath):
                     obj.modifiers["Bevel"].width = bevel_size
                     obj.modifiers["Bevel"].segments = 2
                 created_objects.append(obj)
+                obj.vlmSettings.vpx_object = name
 
                 while len(mesh.materials) < 3:
                     mesh.materials.append(None)
@@ -733,12 +734,16 @@ def read_vpx(context, filepath):
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
                 obj = add_core_mesh(created_objects, f"VPX.Bumper.Base.{name}", "VPX.Core.Bumperbase", base_visible, bake_col, hidden_col, materials, base_material, "", x, y, 0.0, radius, radius, height_scale, orientation, global_scale)
+                obj.vlmSettings.vpx_object = name
                 shifted_objects.append((obj, surface))
                 obj = add_core_mesh(created_objects, f"VPX.Bumper.Socket.{name}", "VPX.Core.Bumpersocket", skirt_visible, bake_col, hidden_col, materials, skirt_material, "", x, y, 0.0, radius, radius, height_scale, orientation, global_scale)
+                obj.vlmSettings.vpx_object = name
                 shifted_objects.append((obj, surface))
                 obj = add_core_mesh(created_objects, f"VPX.Bumper.Ring.{name}", "VPX.Core.Bumperring", ring_visible, indirect_col, hidden_col, materials, ring_material, "", x, y, 0.0, radius, radius, height_scale, orientation, global_scale)
+                obj.vlmSettings.vpx_object = name
                 shifted_objects.append((obj, surface))
                 obj = add_core_mesh(created_objects, f"VPX.Bumper.Cap.{name}", "VPX.Core.Bumpercap", cap_visible, bake_col, hidden_col, materials, cap_material, "", x, y, 0.0, radius, radius, height_scale, orientation, global_scale)
+                obj.vlmSettings.vpx_object = name
                 shifted_objects.append((obj, surface))
             
             elif item_type == 6: # Trigger
@@ -783,6 +788,7 @@ def read_vpx(context, filepath):
                 # TriggerNone, TriggerWireA, TriggerStar, TriggerWireB, TriggerButton, TriggerWireC, TriggerWireD, TriggerInder
                 meshes = ["", "VPX.Core.Triggersimple", "VPX.Core.Triggerstar", "VPX.Core.Triggersimple", "VPX.Core.Triggerbutton", "VPX.Core.Triggersimple", "VPX.Core.Triggerwired", "VPX.Core.Triggerinder"]
                 obj = add_core_mesh(created_objects, f"VPX.Trigger.{name}", meshes[shape], visible, indirect_col, hidden_col, materials, material, "", x, y, 0.0, scale_x, scale_y, scale_z, orientation, global_scale)
+                obj.vlmSettings.vpx_object = name
                 shifted_objects.append((obj, surface))
                 if shape == 1 or shape == 3 or shape == 5 or shape == 6 and wire_thickness > 0 and obj.vlmSettings.import_mesh:
                     bpy.ops.object.select_all(action='DESELECT')
@@ -861,6 +867,7 @@ def read_vpx(context, filepath):
                     obj.data.extrude = max(opt_light_size + 1, 5) * global_scale
                     obj.data.transform(mathutils.Matrix.Translation((-x * global_scale, y * global_scale, 0.0)))
                     obj.data.materials.append(bpy.data.materials["VPX.Core.Mat.Inserts.Back"])
+                    obj.vlmSettings.vpx_object = name
                     update_location(obj, x * global_scale, -y * global_scale, halo_height * global_scale - obj.data.extrude)
                     created_objects.append(obj)
                     indirect_col.objects.link(obj)
@@ -874,6 +881,7 @@ def read_vpx(context, filepath):
                     obj = update_object(context, obj_name, mesh, True, default_light, hidden_col)
                     # Move below playfield to light through the translucency of the playfield material
                     update_location(obj, x * global_scale, -y * global_scale, -(opt_light_size + 1) * global_scale)
+                    obj.vlmSettings.vpx_object = name
                     created_objects.append(obj)
                 elif bulb:
                     z = halo_height
@@ -884,6 +892,7 @@ def read_vpx(context, filepath):
                     mesh.energy = opt_light_intensity * intensity * global_scale
                     mesh.shadow_soft_size = opt_light_size * global_scale
                     obj = update_object(context, obj_name, mesh, True, default_light, hidden_col)
+                    obj.vlmSettings.vpx_object = name
                     update_location(obj, x * global_scale, -y * global_scale, z * global_scale)
                     created_objects.append(obj)
                 else:
@@ -905,6 +914,7 @@ def read_vpx(context, filepath):
                             uv_layer[loop_index].uv = ((pt.co.x - playfield_left) / playfield_width, (playfield_bottom + pt.co.y) / playfield_height)
                     bake_col.objects.unlink(obj)
                     obj = update_object(context, obj_name, mesh, True, default_light, hidden_col)
+                    obj.vlmSettings.vpx_object = name
                     if obj.vlmSettings.import_transform:
                         z = 0.01 * global_scale # Slightly above playfield
                         if bulb:
@@ -998,6 +1008,7 @@ def read_vpx(context, filepath):
                     meshes = ["", "VPX.Core.Kickerhole", "VPX.Core.Kickercup", "VPX.Core.Kickersimplehole", "VPX.Core.Kickerwilliams", "VPX.Core.Kickergottlieb", "VPX.Core.Kickert1"]
                     images = ["", "VPX.Core.kickerHoleWood", "VPX.Core.kickerCup", "VPX.Core.kickerHoleWood", "VPX.Core.kickerWilliams", "VPX.Core.kickerGottlieb", "VPX.Core.kickerT1"]
                     obj = add_core_mesh(created_objects, f"VPX.Kicker.{name}", meshes[type], True, bake_col, hidden_col, materials, material, images[type], x, y, z, radius, radius, radius, orientation, global_scale)
+                    obj.vlmSettings.vpx_object = name
                     shifted_objects.append((obj, surface))
                 
             elif item_type == 9: # Decal
@@ -1033,8 +1044,10 @@ def read_vpx(context, filepath):
                         item_data.skip_tag()
                 meshes = ["", "VPX.Core.Gatewire", "VPX.Core.Gatewirerectangle", "VPX.Core.Gateplate", "VPX.Core.Gatelongplate"]
                 obj = add_core_mesh(created_objects, f"VPX.Gate.Bracket.{name}", "VPX.Core.Gatebracket", visible and show_bracket, bake_col, hidden_col, materials, material, "", x, y, height, length, length, length, orientation, global_scale)
+                obj.vlmSettings.vpx_object = name
                 shifted_objects.append((obj, surface))
                 obj = add_core_mesh(created_objects, f"VPX.Gate.Wire.{name}", meshes[type], visible, indirect_col, hidden_col, materials, material, "", x, y, height, length, length, length, orientation, global_scale)
+                obj.vlmSettings.vpx_object = name
                 shifted_objects.append((obj, surface))
             
             elif item_type == 11: # Spinner
@@ -1065,8 +1078,12 @@ def read_vpx(context, filepath):
                         visible = item_data.get_bool()
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
-                add_core_mesh(created_objects, f"VPX.Spinner.Bracket.{name}", "VPX.Core.Spinnerbracket", visible and show_bracket, bake_col, hidden_col, materials, material, "", x, y, height, length, length, length, orientation, global_scale)
-                add_core_mesh(created_objects, f"VPX.Spinner.Wire.{name}", "VPX.Core.Spinnerplate", visible, indirect_col, hidden_col, materials, material, image, x, y, height, length, length, length, orientation, global_scale)
+                obj = add_core_mesh(created_objects, f"VPX.Spinner.Bracket.{name}", "VPX.Core.Spinnerbracket", visible and show_bracket, bake_col, hidden_col, materials, material, "", x, y, height, length, length, length, orientation, global_scale)
+                obj.vlmSettings.vpx_object = name
+                shifted_objects.append((obj, surface))
+                obj = add_core_mesh(created_objects, f"VPX.Spinner.Wire.{name}", "VPX.Core.Spinnerplate", visible, indirect_col, hidden_col, materials, material, image, x, y, height, length, length, length, orientation, global_scale)
+                obj.vlmSettings.vpx_object = name
+                shifted_objects.append((obj, surface))
             
             elif item_type == 12: # Ramp
                 material = ""
@@ -1273,6 +1290,7 @@ def read_vpx(context, filepath):
                             else:
                                 polyline.bezier_points[i].handle_right_type = polyline.bezier_points[i].handle_left_type = 'VECTOR'
                     obj = update_object(context, obj_name, curve, visible, bake_col, hidden_col)
+                obj.vlmSettings.vpx_object = name
                 update_location(obj, 0, 0, 0)
                 update_material(obj.data, 0, materials, material, image)
                 created_objects.append(obj)
@@ -1448,6 +1466,7 @@ def read_vpx(context, filepath):
                         vlm_collections.get_collection('BAKE PLAYFIELD').objects.link(obj)
                 else:
                     update_material(obj.data, 0, materials, material, image)
+                obj.vlmSettings.vpx_object = name
                 created_objects.append(obj)
                     
             elif item_type == 20: # Flasher
@@ -1523,6 +1542,7 @@ def read_vpx(context, filepath):
                 existing = obj_name in context.scene.objects
                 is_insert_overlay = opt_detect_insert_overlay and 'insert' in name.casefold()
                 obj = update_object(context, obj_name, mesh, is_insert_overlay, overlay_col, hidden_col)
+                obj.vlmSettings.vpx_object = name
                 if obj.vlmSettings.import_transform:
                     obj.rotation_euler = mathutils.Euler((-radians(rot_x), -radians(rot_y), -radians(rot_z)), 'ZYX')
                     #obj.location = (global_scale * x, -global_scale * y, global_scale * height)
@@ -1661,6 +1681,7 @@ def read_vpx(context, filepath):
                     else:
                         polyline.bezier_points[i].handle_right_type = polyline.bezier_points[i].handle_left_type = 'VECTOR'
                 obj = update_object(context, obj_name, curve, visible, bake_col, hidden_col)
+                obj.vlmSettings.vpx_object = name
                 update_location(obj, 0, 0, global_scale * height)
                 update_material(obj.data, 0, materials, material, image)
                 created_objects.append(obj)
@@ -1698,8 +1719,9 @@ def read_vpx(context, filepath):
                 meshes = ["", "VPX.Core.Droptargett2", "VPX.Core.Droptargett3", 
                     "VPX.Core.Hittargetround", "VPX.Core.Hittargetrectangle", "VPX.Core.Hittargetfatrectangle",
                     "VPX.Core.Hittargetfatsquare", "VPX.Core.Droptargett4", "VPX.Core.Hittargett2slim", "VPX.Core.Hittargett1slim"]
-                add_core_mesh(created_objects, obj_name, meshes[type], visible, bake_col, hidden_col, materials, material, image, x, y, z, x_size, y_size, z_size, rot_z, global_scale)
-            
+                obj = add_core_mesh(created_objects, obj_name, meshes[type], visible, bake_col, hidden_col, materials, material, image, x, y, z, x_size, y_size, z_size, rot_z, global_scale)
+                obj.vlmSettings.vpx_object = name
+
             else:
                 print(f"GameStg/GameItem{index}: unsupported type #{item_type}")
     
@@ -1711,23 +1733,18 @@ def read_vpx(context, filepath):
     # Create the playfield
     if "VPX.Prim.playfield_mesh" in bpy.data.objects:
         playfield_obj = bpy.data.objects["VPX.Prim.playfield_mesh"]
+        [col.objects.unlink(obj) for col in playfield_obj.users_collection]
+        pfmesh = playfield_obj.data
     else:
         vert = [(playfield_left, -playfield_bottom, 0.0), (playfield_right, -playfield_bottom, 0.0), (playfield_left, -playfield_top, 0.0), (playfield_right, -playfield_top, 0.0)]
-        mesh = bpy.data.meshes.new("VPX.Mesh.Playfield")
-        mesh.from_pydata(vert, [], [(0, 1, 3, 2)])
-        mesh.use_auto_smooth = True
-        mesh.normals_split_custom_set([(0,0,1) for i in mesh.loops])
-        uv_layer = mesh.uv_layers.new()
-        update_material(mesh, 0, materials, playfield_material, playfield_image, 0)
-        if "VPX.Playfield" in context.scene.objects:
-            playfield_obj = context.scene.objects["VPX.Playfield"]
-            playfield_obj.data = mesh
-        else:
-            playfield_obj = bpy.data.objects.new("VPX.Playfield", mesh)
-            vlm_collections.get_collection('BAKE PLAYFIELD').objects.link(playfield_obj)
-        created_objects.append(playfield_obj)
-    playfield_obj.name = 'VPX.Playfield'
-    pfmesh = playfield_obj.data
+        pfmesh = bpy.data.meshes.new("VPX.Mesh.Playfield")
+        pfmesh.from_pydata(vert, [], [(0, 1, 3, 2)])
+        pfmesh.use_auto_smooth = True
+        pfmesh.normals_split_custom_set([(0,0,1) for i in pfmesh.loops])
+        uv_layer = pfmesh.uv_layers.new()
+    playfield_obj = update_object(context, "VPX.Playfield", pfmesh, True, vlm_collections.get_collection('BAKE PLAYFIELD'), None)
+    update_material(pfmesh, 0, materials, playfield_material, playfield_image, 0)
+    created_objects.append(playfield_obj)
     if pfmesh.materials[0].name.startswith('VPX.Mat.'):
         print('Creating playfield material')
         mat = pfmesh.materials[0].copy()
@@ -1773,7 +1790,7 @@ def read_vpx(context, filepath):
     camera_object.lock_location[0] = True
 
     # Create a translucency map for the playfield (translucent for inserts, diffuse otherwise)
-    if len(pfmesh.materials) > 0 and pfmesh.materials[0] is not None and pfmesh.materials[0].name == 'VPX.Playfield' and 'TranslucencyMap' in pfmesh.materials[0].node_tree.nodes:
+    if len(pfmesh.materials) > 0 and pfmesh.materials[0] is not None and 'TranslucencyMap' in pfmesh.materials[0].node_tree.nodes:
         translucency_image = bpy.data.images.new('PFTranslucency', int(opt_tex_size/2), opt_tex_size, alpha=True)
         translucency_image.source = 'GENERATED' # Defaults to a full translucent playfield
         translucency_image.generated_type = 'BLANK'

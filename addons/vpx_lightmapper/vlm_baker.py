@@ -588,9 +588,10 @@ def create_bake_meshes(context):
             print(f"\n[{bake_col.name}] Creating bake model for {name}")
             is_light = light_scenario[1] is not None
             if is_light:
-                bake_instance = bpy.data.objects.new(f"VLM.LightMap.{bake_group_name}.{name}", light_mesh.copy())
+                bake_instance = bpy.data.objects.new(f"LM.{name}", light_mesh.copy())
             else:
-                bake_instance = bpy.data.objects.new(f"VLM.BakeMap.{bake_group_name}.{name}", bake_mesh.copy())
+                bake_instance = bpy.data.objects.new(f"BM.{bake_group_name}", bake_mesh.copy())
+            bake_instance.vlmSettings.bake_objects = bake_group_name
             bake_instance_mesh = bake_instance.data
             tmp_col.objects.link(bake_instance)
             bpy.ops.object.select_all(action='DESELECT')
@@ -623,11 +624,17 @@ def create_bake_meshes(context):
             bake_instance.vlmSettings.bake_tex_factor = density
             if is_light:
                 bake_instance.vlmSettings.bake_type = 'lightmap'
+                if light_scenario[2] is not None:
+                    bake_instance.vlmSettings.bake_light = light_scenario[2].name
+                else:
+                    bake_instance.vlmSettings.bake_light = light_scenario[1].name
                 light_merge_groups[name].append(bake_instance)
             elif bake_mode == 'playfield':
                 bake_instance.vlmSettings.bake_type = 'playfield'
+                bake_instance.vlmSettings.bake_light = ''
             else:
                 bake_instance.vlmSettings.bake_type = 'bake'
+                bake_instance.vlmSettings.bake_light = ''
             tmp_col.objects.unlink(bake_instance)
             result_col.objects.link(bake_instance)
 
@@ -654,8 +661,9 @@ def create_bake_meshes(context):
                 obj.select_set(True)
             bpy.ops.object.join()
             bake_instance = context.view_layer.objects.active
-            bake_instance.name = f'VLM.LightMap.{name}'
+            bake_instance.name = f'LM.{name}'
             bake_instance.vlmSettings.bake_tex_factor = density
+            bake_instance.vlmSettings.bake_objects = ''
             bake_results.append(bake_instance)
 
     # Sort from higher texture fill factor to lowest, then fillup packmap buckets
