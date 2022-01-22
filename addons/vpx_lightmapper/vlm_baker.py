@@ -584,8 +584,8 @@ def create_bake_meshes(context):
         bpy.data.objects.remove(vmap_instance)
 
         # Build bake object for each lighting situation
-        for name, light_scenario in light_scenarios.items():
-            print(f"\n[{bake_col.name}] Creating bake model for {name}")
+        for i, (name, light_scenario) in enumerate(light_scenarios.items(), start = 1):
+            print(f"[{bake_col.name} {i:>3}/{len(light_scenarios)}] Creating bake model for {name}")
             is_light = light_scenario[1] is not None
             if is_light:
                 bake_instance = bpy.data.objects.new(f"LM.{name}", light_mesh.copy())
@@ -603,6 +603,12 @@ def create_bake_meshes(context):
                 #prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size)
                 #prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, opt_lightmap_prune_res)
                 prune_lightmap_by_visibility_map(bake_instance_mesh, vlm_utils.get_bakepath(context, type='RENDERS'), name, n_render_groups, vmaps, opt_lightmap_prune_res)
+
+            # Skip mesh if we do not have any polygons left
+            if not bake_instance.data.polygons:
+                tmp_col.objects.unlink(bake_instance)
+                print(f". Mesh {name} has no more faces after optimization")
+                continue
 
             # Compute texture density (depends on the amount of remaining faces)
             density = compute_uvmap_density(bake_instance_mesh, bake_instance_mesh.uv_layers["UVMap"])
@@ -664,7 +670,11 @@ def create_bake_meshes(context):
             bake_instance.name = f'LM.{name}'
             bake_instance.vlmSettings.bake_tex_factor = density
             bake_instance.vlmSettings.bake_objects = ''
-            bake_results.append(bake_instance)
+            if bake_instance.data.polygons:
+                bake_results.append(bake_instance)
+            else:
+                print(f". Warning: light '{name}' has no influence and was entirely removed")
+                [col.objects.unlink(obj) for col in bake_instance.users_collection]
 
     # Sort from higher texture fill factor to lowest, then fillup packmap buckets
     print(f"\nMerging and packing UV maps")
