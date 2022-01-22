@@ -1211,14 +1211,17 @@ def read_vpx(context, filepath):
                                 faces.append((i*4-4 + 1, i*4-4 + 3, i*4 + 3, i*4 + 1)) # Normal pointing inside
                                 #faces.append((i*4 + 1, i*4 + 3, i*4-4 + 3, i*4-4 + 1)) # Normal pointing outside
                     dec = n_verts * 4
+                    dz = - global_scale * 1.0
                     for i in range(n_verts):
                         w = global_scale * (0.5 * (width_bottom + (width_top - width_bottom) * ratios[i] / length) + 0.5)
-                        verts.append((object.data.vertices[i].co.x-w*normals[i].x, object.data.vertices[i].co.y-w*normals[i].y, object.data.vertices[i].co.z-w*normals[i].z))
-                        verts.append((object.data.vertices[i].co.x+w*normals[i].x, object.data.vertices[i].co.y+w*normals[i].y, object.data.vertices[i].co.z+w*normals[i].z))
-                        verts.append((object.data.vertices[i].co.x-w*normals[i].x, object.data.vertices[i].co.y-w*normals[i].y, object.data.vertices[i].co.z-w*normals[i].z + right_wall_height * global_scale))
-                        verts.append((object.data.vertices[i].co.x+w*normals[i].x, object.data.vertices[i].co.y+w*normals[i].y, object.data.vertices[i].co.z+w*normals[i].z + left_wall_height * global_scale))
+                        verts.append((object.data.vertices[i].co.x-w*normals[i].x, object.data.vertices[i].co.y-w*normals[i].y, object.data.vertices[i].co.z-w*normals[i].z + dz))
+                        verts.append((object.data.vertices[i].co.x+w*normals[i].x, object.data.vertices[i].co.y+w*normals[i].y, object.data.vertices[i].co.z+w*normals[i].z + dz))
+                        verts.append((object.data.vertices[i].co.x-w*normals[i].x, object.data.vertices[i].co.y-w*normals[i].y, object.data.vertices[i].co.z-w*normals[i].z + dz + right_wall_height * global_scale))
+                        verts.append((object.data.vertices[i].co.x+w*normals[i].x, object.data.vertices[i].co.y+w*normals[i].y, object.data.vertices[i].co.z+w*normals[i].z + dz + left_wall_height * global_scale))
                         if i > 0:
-                            #faces.append((i*4-4 + 0, i*4-4 + 1, i*4 + 1, i*4 + 0))
+                            faces.append((dec+i*4 + 0, dec+i*4 + 1, dec+i*4-4 + 1, dec+i*4-4 + 0)) # back of center part (facing the bottom of the table)
+                            faces.append((i*4-4 + 2, dec + i*4-4 + 2, dec + i*4 + 2, i*4 + 2)) # Top of left wall
+                            faces.append((i*4-4 + 3, dec + i*4-4 + 3, dec + i*4 + 3, i*4 + 3)) # top of right wall
                             if left_wall_height != 0:
                                 #faces.append((i*4 + 0, i*4 + 2, i*4-4 + 2, i*4-4 + 0)) # Normal pointing inside
                                 faces.append((dec+i*4-4 + 0, dec+i*4-4 + 2, dec+i*4 + 2, dec+i*4 + 0)) # Normal pointing outside
