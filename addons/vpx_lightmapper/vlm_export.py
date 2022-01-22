@@ -30,10 +30,7 @@ from win32com import storagecon
 
 
 # TODO
-# - Update VBS script of the table for light synchronization
-# - Name playfield bake as VLM.Playfield
-# - Hide brackets of baked gates and spinners
-#
+# - On JP's Deadpool, side target are removed
 # - Try exporting bakes as HDR (or provide an evaluation of the benefit it would give)
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
 
@@ -123,6 +120,7 @@ def export_vpx(context):
     append_structure('GameStg/Font', 1, False),
     append_structure('GameStg/Collection', 1, True),
 
+    table_lights = []
 
     # Remove previous baked models and append the new ones, also hide/remove baked items
     n_read_item = 0
@@ -136,6 +134,10 @@ def export_vpx(context):
         data = bytearray(data)
         item_data = biff_io.BIFF_reader(data)
         item_type = item_data.get_32()
+        if item_type < 0 or item_type >= len(prefix):
+            print(f'Bug for item #{n_read_item}')
+            n_read_item += 1
+            continue
         name = 'unknown'
         item_images = []
         is_baked = False
@@ -169,7 +171,6 @@ def export_vpx(context):
             elif item_type == 10 and item_data.tag == 'GVSB': # for gate (10): overall gate (wire and bracket)
                 pass
             elif item_type == 10 and item_data.tag == 'GSUP': # for gate (10) bracket, combined with GVSB
-                print("Name: ", name)
                 if f'VPX.Gate.Bracket.{name}' in bake_col.all_objects:
                     item_data.put_bool(False)
             elif item_type == 11 and item_data.tag == 'SVIS': # for spinner (11): overall spinner (wire and bracket)
@@ -187,11 +188,13 @@ def export_vpx(context):
                 pass
             elif item_type == 5 and item_data.tag == 'SKVS': # for bumper skirt (5)
                 pass
-            elif item_type == 7 and is_baked_light:
-                if item_data.tag == 'BULT':
-                    item_data.put_bool(True)
-                elif item_data.tag == 'BHHI':
-                    item_data.put_float(-28)
+            elif item_type == 7:
+                table_lights.append(name)
+                if is_baked_light:
+                    if item_data.tag == 'BULT':
+                        item_data.put_bool(True)
+                    elif item_data.tag == 'BHHI':
+                        item_data.put_float(-28)
             if visibility_field and is_baked:
                 item_data.put_bool(False)
             item_data.skip_tag()
@@ -443,10 +446,13 @@ def export_vpx(context):
                     code += "Sub UpdateLightMaps\n"
                     for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap']:
                         if obj.vlmSettings.bake_light in light_col.children:
-                            a_light = light_col.children[obj.vlmSettings.bake_light].objects[0]
-                            code += f'	UpdateLightMapOpacity GetElementByName("{a_light.vlmSettings.vpx_object}"), GetElementByName("{obj.name}"), 100\n'
+                            vpx_name = light_col.children[obj.vlmSettings.bake_light].objects[0].vlmSettings.vpx_object
+                        elif obj.vlmSettings.bake_light in light_col.all_objects:
+                            vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object
+                        if vpx_name in table_lights:
+                            code += f'	UpdateLightMapOpacity GetElementByName("{vpx_name}"), GetElementByName("{obj.name}"), 100\n'
                         else:
-                            code += f'	UpdateLightMapOpacity GetElementByName("{obj.vlmSettings.bake_light}"), GetElementByName("{obj.name}"), 100\n'
+                            print(f". {obj.name} is missing a vpx light object to be synchronized on")
                     code += "End Sub\n"
                     code += "\n"
                     code += "Sub UpdateLightMapOpacity(light, lightmap, amount)\n"

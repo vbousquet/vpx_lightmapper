@@ -33,6 +33,8 @@ global_scale = vlm_utils.global_scale
 # - Allow to have an object (or a group) to be baked to a target object (like bake selected to active in Blender) for inserts,...
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
 # - Perform tests with transparent elements (especially ramps)
+# - Packmap is too slow => direct GPU render ?
+# - Packmap renders alphas part as opaque
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -1142,6 +1144,8 @@ def render_packmaps(context):
     bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
     vlm_utils.mkpath(bakepath)
     packmap_index = 0
+    context.scene.cycles.samples = 1
+    context.scene.cycles.use_denoising = False
     while True:
         objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
         if not objects:
@@ -1157,37 +1161,112 @@ def render_packmaps(context):
             tex_width = objects[0].vlmSettings.bake_packmap_width
             tex_height = objects[0].vlmSettings.bake_packmap_height
             pack_image = bpy.data.images.new(f"PackMap{packmap_index}", tex_width, tex_height, alpha=True)
-            context.scene.render.bake.margin = opt_padding
-            context.scene.render.bake.use_clear = True
-            for obj in objects:
-                is_light = obj.vlmSettings.bake_type == 'lightmap'
-                paths = [f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr" for i,_ in enumerate(obj.data.materials)]
-                all_loaded = all((vlm_utils.image_by_path(path) is not None for path in paths))
-                unloads = []
-                for path, mat in zip(paths, obj.data.materials):
-                    if vlm_utils.image_by_path(path) is None:
-                        unloads.append(path)
-                    mat.node_tree.nodes["BakeTex"].image = bpy.data.images.load(path, check_existing=True)
-                for mat in obj.data.materials:
-                    mat.node_tree.nodes["PackMap"].inputs[3].default_value = 0.0 # Bake mode
-                    if is_light:
-                        mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
-                    else:
-                        mat.node_tree.nodes["PackMap"].inputs[2].default_value = 0.0
-                    mat.blend_method = 'OPAQUE'
-                    mat.node_tree.nodes["PackTex"].image = pack_image
-                    mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
-                bpy.ops.object.select_all(action='DESELECT')
-                context.view_layer.objects.active = obj
-                obj.select_set(True)
-                bpy.ops.object.bake(type='EMIT', margin=opt_padding)
-                for mat in obj.data.materials:
-                    mat.node_tree.nodes["PackMap"].inputs[3].default_value = 1.0 # Preview mode
-                    if is_light:
-                        mat.blend_method = 'BLEND'
-                for path in unloads:
-                    bpy.data.images.remove(vlm_utils.image_by_path(path))
-                context.scene.render.bake.use_clear = False
+            
+            if False:
+                # Implementation using Blender's GPU module: fast and efficient, but the offscreen is always RGBA8, color conversion is still to be handled
+                vertex_shader = '''
+                    in vec2 pos;
+                    in vec2 uv;
+                    out vec2 uvInterp;
+                    void main() {
+                        uvInterp = uv;
+                        gl_Position = vec4(2.0 * (pos - vec2(0.5)), 0.0, 1.0);
+                    }
+                '''
+                fragment_shader = '''
+                    uniform sampler2D render;
+                    in vec2 uvInterp;
+                    out vec4 FragColor;
+                    void main() {
+                        FragColor = texture(render, uvInterp).rgba;
+                    }
+                '''
+                shader = gpu.types.GPUShader(vertex_shader, fragment_shader)
+                offscreen = gpu.types.GPUOffScreen(tex_width, tex_height)
+                with offscreen.bind():
+                    fb = gpu.state.active_framebuffer_get()
+                    fb.clear(color=(0.0, 0.0, 0.0, 0.0))
+                    shader.bind()
+                    for obj in objects:
+                        mesh = obj.data
+                        n_materials = len(mesh.materials)
+                        uv_layer = mesh.uv_layers["UVMap"]
+                        uv_layer_packed = mesh.uv_layers["UVMap Packed"]
+                        pts = [[] for i in range(n_materials)]
+                        uvs = [[] for i in range(n_materials)]
+                        for poly in mesh.polygons:
+                            if len(poly.loop_indices) != 3:
+                                print(f'Bug, {obj} has polygons which are not triangles...')
+                                continue
+                            for loop_index in poly.loop_indices:
+                                uvs[poly.material_index].append(uv_layer.data[loop_index].uv)
+                                pts[poly.material_index].append(uv_layer_packed.data[loop_index].uv)
+                        for i,_ in enumerate(mesh.materials):
+                            if pts[i]:
+                                path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr"
+                                unload = vlm_utils.image_by_path(path) is None
+                                render = bpy.data.images.load(path, check_existing=True)
+                                shader.uniform_sampler("render", gpu.texture.from_image(render))
+                                batch_for_shader(shader, 'TRIS', {"pos": pts[i], "uv": uvs[i]}).draw(shader)
+                                if unload:
+                                    bpy.data.images.remove(render)
+                    buffer = offscreen.texture_color.read()
+                    buffer.dimensions = tex_width * tex_height * 4
+                offscreen.free()
+                pack_image.pixels = [v / 255 for v in buffer]
+            
+            else:
+                # Implemented using Blender's bake (sadly, this is very slow)
+                pack_alpha = bpy.data.images.new(f"PackAlpha{packmap_index}", tex_width, tex_height, alpha=True)
+                context.scene.render.bake.margin = opt_padding
+                context.scene.render.bake.use_clear = True
+                for obj in objects:
+                    bpy.ops.object.select_all(action='DESELECT')
+                    context.view_layer.objects.active = obj
+                    obj.select_set(True)
+                    is_light = obj.vlmSettings.bake_type == 'lightmap'
+                    paths = [f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr" for i,_ in enumerate(obj.data.materials)]
+                    all_loaded = all((vlm_utils.image_by_path(path) is not None for path in paths))
+                    unloads = []
+                    for path, mat in zip(paths, obj.data.materials):
+                        if vlm_utils.image_by_path(path) is None:
+                            unloads.append(path)
+                        mat.node_tree.nodes["BakeTex"].image = bpy.data.images.load(path, check_existing=True)
+                    # Perform a first bake for the color part
+                    for mat in obj.data.materials:
+                        mat.node_tree.nodes["PackMap"].inputs[3].default_value = 0.0 # Bake color mode
+                        if is_light:
+                            mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
+                        else:
+                            mat.node_tree.nodes["PackMap"].inputs[2].default_value = 0.0
+                        mat.blend_method = 'OPAQUE'
+                        mat.node_tree.nodes["PackTex"].image = pack_image
+                        mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
+                    bpy.ops.object.bake(type='EMIT', margin=opt_padding)
+                    # Perform a second bake for the alpha part of solid bakes (lightmaps are additive, and are full black in transparent parts so they do not need this)
+                    if not is_light:
+                        for mat in obj.data.materials:
+                            mat.node_tree.nodes["PackMap"].inputs[3].default_value = 0.5 # Bake alpha mode
+                            mat.node_tree.nodes["PackTex"].image = pack_alpha
+                        bpy.ops.object.bake(type='EMIT', margin=opt_padding)
+                    # Return to preview mode and unload images to avoid an out of memory crash
+                    for mat in obj.data.materials:
+                        mat.node_tree.nodes["PackMap"].inputs[3].default_value = 1.0 # Preview mode
+                        if is_light:
+                            mat.blend_method = 'BLEND'
+                    for path in unloads:
+                        img = vlm_utils.image_by_path(path)
+                        if img:
+                            bpy.data.images.remove(img)
+                    context.scene.render.bake.use_clear = False
+                # FIXME combine alpha bake with color bake (holes have an rgb of 1, other is 0)
+                #for i in range(0, tex_width * tex_height * 4, 4):
+                #    pack_image.pixels[i + 3] *= 1.0 - pack_alpha.pixels[i]
+                pack_alpha.filepath_raw = bpy.path.abspath(basepath + '-alpha.png')
+                pack_alpha.file_format = 'PNG'
+                pack_alpha.save()
+                bpy.data.images.remove(pack_alpha)
+                
             pack_image.filepath_raw = path_exr
             pack_image.file_format = 'OPEN_EXR'
             pack_image.save()
@@ -1201,6 +1280,8 @@ def render_packmaps(context):
 
         packmap_index += 1
 
+    context.scene.cycles.samples = 64
+    context.scene.cycles.use_denoising = True
     vlm_collections.pop_state(col_state)
     vlm_utils.pop_color_grading(cg)
     print(f"\n{packmap_index} packmaps rendered in {int(time.time() - start_time)}s.")

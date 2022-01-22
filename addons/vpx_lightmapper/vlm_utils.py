@@ -150,7 +150,8 @@ def render_mask(context, width, height, target_image, view_matrix, projection_ma
     space.shading.background_type = state[2]
     space.shading.background_color = state[3]
     space.shading.light = state[4]
-    space.shading.color_type = state[5]
+    if state[5] != '':
+        space.shading.color_type = state[5]
     space.shading.single_color = state[6]
     space.shading.type = state[7]
     

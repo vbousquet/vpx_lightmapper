@@ -33,13 +33,14 @@ from PIL import Image
 import olefile
 
 global_scale = vlm_utils.global_scale
-curve_resolution = 3
+curve_resolution = 6
 
 # TODO
 # - Implement surface positionning relative to a ramp
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 # - Place drop target in movable or indirect bake group
 # - Evaluate elements that can need an active material (z<0, transparent material / alpha texture)
+# - JP's STar Trek as a wrong texture positionning above ramp
 
 
 class VPX_Material(object):
@@ -979,9 +980,9 @@ def read_vpx(context, filepath):
                         group.inputs[7].default_value = intensity
                 shifted_objects.append((obj, surface))
                 if show_bulb:
-                    obj = add_core_mesh(created_objects, f"VPX.Light.Bulb.{name}", "VPX.Core.Bulblight", True, bake_col, hidden_col, materials, "VPX.Core.Mat.Light.Bulb", "", x, y, 0, bulb_mesh_radius, bulb_mesh_radius, bulb_mesh_radius, 0, global_scale)
+                    obj = add_core_mesh(created_objects, f"VPX.Light.Bulb.{name}", "VPX.Core.Bulblight", True, bake_col, hidden_col, materials, "VPX.Core.Mat.Light.Bulb", "", x, y, 10, bulb_mesh_radius, bulb_mesh_radius, bulb_mesh_radius, 0, global_scale)
                     shifted_objects.append((obj, surface))
-                    obj = add_core_mesh(created_objects, f"VPX.Light.Socket.{name}", "VPX.Core.Bulbsocket", True, bake_col, hidden_col, materials, "VPX.Core.Mat.Light.Socket", "", x, y, 0, bulb_mesh_radius, bulb_mesh_radius, bulb_mesh_radius, 0, global_scale)
+                    obj = add_core_mesh(created_objects, f"VPX.Light.Socket.{name}", "VPX.Core.Bulbsocket", True, bake_col, hidden_col, materials, "VPX.Core.Mat.Light.Socket", "", x, y, 10, bulb_mesh_radius, bulb_mesh_radius, bulb_mesh_radius, 0, global_scale)
                     shifted_objects.append((obj, surface))
                 
             elif item_type == 8: # Kicker
@@ -1744,7 +1745,7 @@ def read_vpx(context, filepath):
     # Create the playfield
     if "VPX.Prim.playfield_mesh" in bpy.data.objects:
         playfield_obj = bpy.data.objects["VPX.Prim.playfield_mesh"]
-        [col.objects.unlink(obj) for col in playfield_obj.users_collection]
+        [col.objects.unlink(playfield_obj) for col in playfield_obj.users_collection]
         pfmesh = playfield_obj.data
     else:
         vert = [(playfield_left, -playfield_bottom, 0.0), (playfield_right, -playfield_bottom, 0.0), (playfield_left, -playfield_top, 0.0), (playfield_right, -playfield_top, 0.0)]
@@ -1822,6 +1823,7 @@ def read_vpx(context, filepath):
             vlm_utils.render_mask(context, int(opt_tex_size / 2), opt_tex_size, translucency_image.name, view_matrix, projection_matrix)
             vlm_collections.restore_all_col_links(cups_initial_collection)
             vlm_collections.delete_collection(tmp_col)
+            translucency_image.pack()
 
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)

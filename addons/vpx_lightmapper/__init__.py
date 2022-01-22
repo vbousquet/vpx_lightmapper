@@ -97,7 +97,7 @@ class VLM_Scene_props(PropertyGroup):
     process_inserts: BoolProperty(name="Convert inserts", description="Detect inserts and converts them", default = True)
     use_pf_translucency_map: BoolProperty(name="PF Translucency Map", description="Generate a translucency map for inserts", default = True)
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
-    bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 0.0)
+    bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
     # Baker options
     tex_size: EnumProperty(
         items=[
