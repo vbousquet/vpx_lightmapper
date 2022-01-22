@@ -33,12 +33,11 @@ from PIL import Image
 import olefile
 
 global_scale = vlm_utils.global_scale
-
+curve_resolution = 3
 
 # TODO
 # - Implement surface positionning relative to a ramp
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
-# - Add automatic plastic beveling, allowing to have beveled for bake and unbeveled for export
 # - Place drop target in movable or indirect bake group
 # - Evaluate elements that can need an active material (z<0, transparent material / alpha texture)
 
@@ -214,8 +213,8 @@ def load_point(item_data):
 def create_curve(curve_name, points, cyclic, flat, global_scale):
     # Create the curve object
     curve = bpy.data.curves.new(curve_name, type='CURVE')
-    curve.render_resolution_u = 12
-    curve.resolution_u = 12
+    curve.render_resolution_u = curve_resolution
+    curve.resolution_u = curve_resolution
     polyline = curve.splines.new('BEZIER')
     polyline.bezier_points.add(len(points) - 1)
     polyline.use_cyclic_u = cyclic
@@ -280,7 +279,6 @@ def read_vpx(context, filepath):
     opt_use_pf_translucency_map = context.scene.vlmSettings.use_pf_translucency_map
     opt_plastic_translucency = 1.0
     opt_bevel_plastics = context.scene.vlmSettings.bevel_plastics
-    opt_bevel_thin_walls = False # This causes artifact on complex walls
     opt_detect_insert_overlay = True # Place any flasher containing 'insert' in its name to the overlay collection
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
     
@@ -557,6 +555,13 @@ def read_vpx(context, filepath):
                 bpy.ops.object.shade_smooth()
                 obj = context.view_layer.objects.active
                 mesh = obj.data
+                # Set bevelling on top and bottom edges
+                mesh.use_customdata_edge_bevel = True
+                for edge in mesh.edges:
+                    if abs(mesh.vertices[edge.vertices[0]].co.z - mesh.vertices[edge.vertices[1]].co.z) < 0.01 * global_scale:
+                         edge.bevel_weight = 1.0
+                    else:
+                         edge.bevel_weight = 0.0
                 # Compute split normals, trying to get the right smoothing
                 mesh.calc_normals_split()
                 normals = [(0,0,0) for i in mesh.loops]
@@ -652,15 +657,18 @@ def read_vpx(context, filepath):
 
                 is_plastic = 2.5 < (height_top - height_bottom) < 3.5 # and 45 < height_bottom < 55
 
-                bevel_size = min(0.5 * extrude_height, global_scale * 1)
-                if opt_bevel_thin_walls and is_plastic and bevel_size > 0 and not existing:
+                bevel_size = min(extrude_height, global_scale * opt_bevel_plastics)
+                if is_plastic and bevel_size > 0:
                     bpy.ops.object.select_all(action='DESELECT')
                     obj.select_set(True)
                     context.view_layer.objects.active = obj
-                    bpy.ops.object.modifier_add(type='BEVEL')
+                    if "Bevel" not in obj.modifiers:
+                        bpy.ops.object.modifier_add(type='BEVEL')
                     obj.modifiers["Bevel"].offset_type = 'OFFSET'
                     obj.modifiers["Bevel"].width = bevel_size
-                    obj.modifiers["Bevel"].segments = 2
+                    obj.modifiers["Bevel"].segments = 5
+                    obj.modifiers["Bevel"].limit_method = 'WEIGHT'
+
                 created_objects.append(obj)
                 obj.vlmSettings.vpx_object = name
 
@@ -1248,8 +1256,8 @@ def read_vpx(context, filepath):
                     # RampType4Wire = 1, RampType2Wire = 2, RampType3WireLeft = 3, RampType3WireRight = 4, RampType1Wire = 5
                     curve = bpy.data.curves.new(curve_name, type='CURVE')
                     curve.dimensions = '3D'
-                    curve.render_resolution_u = 12
-                    curve.resolution_u = 12
+                    curve.render_resolution_u = curve_resolution
+                    curve.resolution_u = curve_resolution
                     curve.fill_mode = 'FULL'
                     curve.use_fill_caps = True
                     curve.bevel_depth = wire_diameter * 0.5 * global_scale
@@ -1659,8 +1667,8 @@ def read_vpx(context, filepath):
                 curve_name = f"VPX.Curve.{name}"
                 curve = bpy.data.curves.new(curve_name, type='CURVE')
                 curve.dimensions = '3D'
-                curve.render_resolution_u = 12
-                curve.resolution_u = 12
+                curve.render_resolution_u = curve_resolution
+                curve.resolution_u = curve_resolution
                 curve.fill_mode = 'FULL'
                 curve.bevel_depth = thickness * 0.5 * global_scale
                 polyline = curve.splines.new('BEZIER')
