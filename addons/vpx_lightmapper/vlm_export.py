@@ -33,6 +33,7 @@ from win32com import storagecon
 # - Try exporting bakes as HDR (or provide an evaluation of the benefit it would give)
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
 # - Add support for dynamic light coloring (needs update to VPX with Additive Blend as well)
+# - Export to static rendering / not active / active according to the part exported (static, translucency, below playfield ?)
 
 
 # FIXME rewrite an export to obj operator
@@ -275,10 +276,7 @@ def export_vpx(context):
         writer.write_tagged_string(b'NRMA', '')
         writer.write_tagged_u32(b'SIDS', 4)
         writer.write_tagged_wide_string(b'NAME', obj.name)
-        if is_light:
-            writer.write_tagged_string(b'MATR', 'VLM.Lightmap')
-        else:
-            writer.write_tagged_string(b'MATR', 'VLM.Bake.Solid') # FIXME we should have 2 variants (active/not active)
+        writer.write_tagged_string(b'MATR', 'VLM.Lightmap' if is_light else 'VLM.Bake.Active') # FIXME we should have 2 variants (active/not active)
         writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
         writer.write_tagged_bool(b'TVIS', not is_playfield)
         writer.write_tagged_bool(b'DTXI', False)
@@ -293,7 +291,7 @@ def export_vpx(context):
         writer.write_tagged_bool(b'CLDR', False)
         writer.write_tagged_bool(b'ISTO', True)
         writer.write_tagged_bool(b'U3DM', True)
-        writer.write_tagged_bool(b'STRE', not is_light) # FIXME static rendering should be true for solid map without transparency
+        writer.write_tagged_bool(b'STRE', False) # not is_light) # FIXME static rendering should be true for solid map without transparency
         writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
         writer.write_tagged_bool(b'REEN', False)
