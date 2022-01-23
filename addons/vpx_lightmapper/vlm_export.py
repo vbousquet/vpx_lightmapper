@@ -342,7 +342,7 @@ def export_vpx(context):
         writer.write_tagged_u32(b'M3CJ', len(compressed_indices))
         writer.write_tagged_data(b'M3CI', compressed_indices)
         
-        writer.write_tagged_float(b'PIDB', 0.0)
+        writer.write_tagged_float(b'PIDB', -1000.0 if is_light else 1000.0)
         writer.write_tagged_bool(b'ADDB', is_light) # Additive blending VPX mod
         writer.write_tagged_u32(b'FALP', 100) # Additive blending VPX mod
         writer.write_tagged_bool(b'LOCK', True)
@@ -519,6 +519,7 @@ def export_vpx(context):
                     code += "Sub UpdateLightMapFromLight(light, lightmap, amount)\n"
                     code += "	Dim percent: percent = light.GetCurrentIntensity() / light.Intensity\n"
                     code += "	lightmap.Opacity = amount * percent\n"
+                    code += "	lightmap.Color = light.colorfull\n"
                     code += "End Sub\n"
                     code += "' ZVLM End of Virtual Pinball X Light Mapper generated code\n"
                     wr = biff_io.BIFF_writer()
