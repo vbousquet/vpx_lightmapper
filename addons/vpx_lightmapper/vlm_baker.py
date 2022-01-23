@@ -29,10 +29,9 @@ from PIL import Image # External dependency
 global_scale = vlm_utils.global_scale
 
 # TODO
-# - Allow to use either internal UV packing or UVPacker addon
+# - Allow to use either internal UV packing or UVPacker addon (which is really really better)
 # - Allow to have an object (or a group) to be baked to a target object (like bake selected to active in Blender) for inserts,...
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
-# - Perform tests with transparent elements (especially ramps)
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -198,6 +197,7 @@ def render_all_groups(context):
     context.scene.render.image_settings.color_depth = '16'
     context.scene.view_layers["ViewLayer"].use_pass_z = True
     context.scene.render.film_transparent = True
+    context.scene.cycles.film_transparent_glass = True
     context.scene.use_nodes = False
     cg = vlm_utils.push_color_grading(True)
     n_render_performed = 0

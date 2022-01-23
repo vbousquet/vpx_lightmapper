@@ -33,7 +33,6 @@ from PIL import Image
 import olefile
 
 global_scale = vlm_utils.global_scale
-curve_resolution = 6
 
 # TODO
 # - Implement surface positionning relative to a ramp
@@ -211,7 +210,7 @@ def load_point(item_data):
     return [x, y, z, smooth, auto_tex, tex_coord]
 
 
-def create_curve(curve_name, points, cyclic, flat, global_scale):
+def create_curve(curve_name, points, cyclic, flat, global_scale, curve_resolution=6):
     # Create the curve object
     curve = bpy.data.curves.new(curve_name, type='CURVE')
     curve.render_resolution_u = curve_resolution
@@ -539,8 +538,10 @@ def read_vpx(context, filepath):
                         item_data.skip_tag()
                 surface_offsets[name] = height_top
                 obj_name = f"VPX.Wall.{name}"
+                is_plastic = 2.5 < (height_top - height_bottom) < 3.5 # and 45 < height_bottom < 55
                 extrude_height = global_scale * 0.5 * (height_top - height_bottom)
-                curve = create_curve(f"VPX.Curve.{name}", points, True, True, global_scale)
+                # limit resolution for plastics, since if too high, it breaks Blender's bevel operator
+                curve = create_curve(f"VPX.Curve.{name}", points, True, True, global_scale, curve_resolution=3 if is_plastic else 6)
                 curve.extrude = extrude_height
                 obj = bpy.data.objects.new(f"VPX.Temp", curve)
                 bake_col.objects.link(obj)
@@ -656,8 +657,6 @@ def read_vpx(context, filepath):
                 obj = update_object(context, obj_name, obj.data, top_visible or side_visible, bake_col, hidden_col)
                 update_location(obj, 0, 0, global_scale * 0.5 * (height_top + height_bottom))
 
-                is_plastic = 2.5 < (height_top - height_bottom) < 3.5 # and 45 < height_bottom < 55
-
                 bevel_size = min(extrude_height, global_scale * opt_bevel_plastics)
                 if is_plastic and bevel_size > 0:
                     bpy.ops.object.select_all(action='DESELECT')
@@ -676,8 +675,8 @@ def read_vpx(context, filepath):
                 while len(mesh.materials) < 3:
                     mesh.materials.append(None)
                 if opt_process_plastics and is_plastic:
-                    obj.data.materials[0] = bpy.data.materials["VPX.Core.Mat.Plastic"]
-                    obj.data.materials[1] = bpy.data.materials["VPX.Core.Mat.Plastic"]
+                    obj.data.materials[0] = bpy.data.materials["VPX.Core.Mat.Plastic"] # Alpha plastic glass (no IOR, alpha bake suited for alpha blended in VPX)
+                    obj.data.materials[1] = bpy.data.materials["VPX.Core.Mat.Plastic.NoAlpha"] # Normal plastic glass (with IOR, opaque bake)
                     update_material(obj.data, 2, materials, top_material, top_image, opt_plastic_translucency)
                 else:
                     update_material(obj.data, 0, materials, top_material, top_image)

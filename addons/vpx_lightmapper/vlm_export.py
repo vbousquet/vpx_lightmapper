@@ -32,6 +32,7 @@ from win32com import storagecon
 # TODO
 # - Try exporting bakes as HDR (or provide an evaluation of the benefit it would give)
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
+# - Add support for dynamic light coloring (needs update to VPX with Additive Blend as well)
 
 
 # FIXME rewrite an export to obj operator
@@ -76,6 +77,7 @@ def export_vpx(context):
     export_mode = vlmProps.export_mode
     export_image_type = vlmProps.export_image_type
     bake_col = vlm_collections.get_collection('BAKE')
+    overlay_col = vlm_collections.get_collection('OVERLAY')
     light_col = vlm_collections.get_collection('LIGHTS')
     if not os.path.isfile(input_path):
         self.report({'WARNING'},f"{input_path} does not exist")
@@ -151,16 +153,19 @@ def export_vpx(context):
             item_data.next()
             if item_data.tag == 'NAME':
                 name = item_data.get_wide_string()
-                is_baked = f'VPX.{prefix[item_type]}.{name}' in bake_col.all_objects
-                is_baked_light = f'VPX.{prefix[item_type]}.{name}' in light_col.all_objects
+                is_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name), None) is not None
+                is_baked = is_baked or next((o for o in overlay_col.all_objects if o.vlmSettings.vpx_object == name), None) is not None
+                is_baked_light = next((o for o in light_col.all_objects if o.vlmSettings.vpx_object == name), None) is not None
                 break
             item_data.skip_tag()
         item_data = biff_io.BIFF_reader(data)
         item_type = item_data.get_32()
         while not item_data.is_eof():
             item_data.next()
-            visibility_field = False
-            if item_data.tag == 'CLDR' or item_data.tag == 'CLDW': # Collidable for wall ramps and primitives
+            reflection_field = visibility_field = False
+            if item_data.tag == 'REEN':
+                reflection_field = True
+            elif item_data.tag == 'CLDR' or item_data.tag == 'CLDW': # Collidable for wall ramps and primitives
                 is_physics = item_data.get_bool()
             elif item_data.tag == 'IMAG' or item_data.tag == 'SIMG' or item_data.tag == 'IMGF' or item_data.tag == 'IMAB':
                 item_images.append(item_data.get_string())
@@ -171,37 +176,41 @@ def export_vpx(context):
             elif (item_type == 12 or item_type == 21) and item_data.tag == 'RVIS': # for ramps (12) and rubbers (21)
                 visibility_field = True
             elif item_type == 8 and item_data.tag == 'TYPE': # for kicker (8), type 0 is invisible
-                pass
+                pass # FIXME implement
             elif item_type == 10 and item_data.tag == 'GVSB': # for gate (10): overall gate (wire and bracket)
-                pass
+                pass # FIXME implement
             elif item_type == 10 and item_data.tag == 'GSUP': # for gate (10) bracket, combined with GVSB
                 if f'VPX.Gate.Bracket.{name}' in bake_col.all_objects:
                     item_data.put_bool(False)
             elif item_type == 11 and item_data.tag == 'SVIS': # for spinner (11): overall spinner (wire and bracket)
-                pass
+                pass # FIXME implement
             elif item_type == 11 and item_data.tag == 'SSUP': # for spinner bracket (11) combined with SVIS
                 if f'VPX.Spinner.Bracket.{name}' in bake_col.all_objects:
                     item_data.put_bool(False)
             elif (item_type == 19 or item_type == 22) and item_data.tag == 'TVIS': # for primitives (19) and hit targets (22)
                 visibility_field = True
             elif item_type == 5 and item_data.tag == 'CAVI': # for bumper caps (5)
-                pass
+                pass # FIXME implement
             elif item_type == 5 and item_data.tag == 'BSVS': # for bumper ring & skirt (5)
-                pass
+                pass # FIXME implement
             elif item_type == 5 and item_data.tag == 'RIVS': # for bumper ring (5)
-                pass
+                pass # FIXME implement
             elif item_type == 5 and item_data.tag == 'SKVS': # for bumper skirt (5)
-                pass
-            elif item_type == 7:
+                pass # FIXME implement
+            elif item_type == 20 and item_data.tag == 'FVIS': # for flashers (20)
+                visibility_field = True
+            if item_type == 7:
                 table_lights.append(name)
                 if is_baked_light:
                     if item_data.tag == 'BULT':
                         item_data.put_bool(True)
                     elif item_data.tag == 'BHHI':
                         item_data.put_float(-28)
-            elif item_type == 20:
+            if item_type == 20:
                 table_flashers.append(name)
             if visibility_field and is_baked:
+                item_data.put_bool(False)
+            if reflection_field and is_baked:
                 item_data.put_bool(False)
             item_data.skip_tag()
         remove = (export_mode == 'remove' or export_mode == 'remove_all') and is_baked and not is_physics
