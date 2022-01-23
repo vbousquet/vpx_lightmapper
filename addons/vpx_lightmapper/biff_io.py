@@ -189,6 +189,10 @@ class BIFF_writer:
         self.record_size = self.record_size + 4
         self.data.write(struct.pack("<I", value))
 
+    def write_32(self, value):
+        self.record_size = self.record_size + 4
+        self.data.write(struct.pack("<i", value))
+
     def write_float(self, value):
         self.record_size = self.record_size + 4
         self.data.write(struct.pack("<f", value))
@@ -232,6 +236,11 @@ class BIFF_writer:
         self.write_u32(value)
         self.end_tag()
 
+    def write_tagged_32(self, tag, value):
+        self.new_tag(tag)
+        self.write_32(value)
+        self.end_tag()
+
     def write_tagged_string(self, tag, value):
         self.new_tag(tag)
         self.write_string(value)
@@ -242,6 +251,12 @@ class BIFF_writer:
         self.write_wide_string(value)
         self.end_tag()
     
+    def write_tagged_vec2(self, tag, x, y):
+        self.new_tag(tag)
+        self.write_float(x)
+        self.write_float(y)
+        self.end_tag()
+
     def write_tagged_padded_vector(self, tag, x, y, z):
         self.new_tag(tag)
         self.write_float(x)

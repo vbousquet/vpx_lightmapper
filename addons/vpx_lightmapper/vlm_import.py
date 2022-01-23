@@ -39,7 +39,7 @@ curve_resolution = 6
 # - Implement surface positionning relative to a ramp
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 # - Place drop target in movable or indirect bake group
-# - Evaluate elements that can need an active material (z<0, transparent material / alpha texture)
+# - Evaluate elements that need an active material (z<0, transparent material / alpha texture)
 # - JP's STar Trek as a wrong texture positionning above ramp
 
 
@@ -983,6 +983,7 @@ def read_vpx(context, filepath):
                     obj = add_core_mesh(created_objects, f"VPX.Light.Bulb.{name}", "VPX.Core.Bulblight", True, bake_col, hidden_col, materials, "VPX.Core.Mat.Light.Bulb", "", x, y, 10, bulb_mesh_radius, bulb_mesh_radius, bulb_mesh_radius, 0, global_scale)
                     shifted_objects.append((obj, surface))
                     obj = add_core_mesh(created_objects, f"VPX.Light.Socket.{name}", "VPX.Core.Bulbsocket", True, bake_col, hidden_col, materials, "VPX.Core.Mat.Light.Socket", "", x, y, 10, bulb_mesh_radius, bulb_mesh_radius, bulb_mesh_radius, 0, global_scale)
+                    obj.rotation_euler = (0, 0, x + y)
                     shifted_objects.append((obj, surface))
                 
             elif item_type == 8: # Kicker

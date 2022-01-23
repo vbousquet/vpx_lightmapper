@@ -78,6 +78,13 @@ def mkpath(path):
     pathlib.Path(bpy.path.abspath(path)).mkdir(parents=True, exist_ok=True)
 
 
+def select(condition, v_true, v_false):
+    if condition:
+        return v_true
+    else:
+        return v_false
+
+
 def render_mask(context, width, height, target_image, view_matrix, projection_matrix):
     """Uses Blender's internal renderer to render the active scene as an opacity mask
     to the given image (not saved)

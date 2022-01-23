@@ -114,6 +114,16 @@ class VLM_Scene_props(PropertyGroup):
     padding: IntProperty(name="Padding:", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
     # Exporter options
+    export_image_type: EnumProperty(
+        items=[
+            ('png', 'PNG', 'Use PNG images', '', 0),
+            ('webp', 'WEBP', 'Use WebP images', '', 1),
+            #('hdr', 'HDR', 'Use HDR images', '', 2),
+        ],
+        name='Image format',
+        description='Image format used in exported table',
+        default='webp'
+    )
     export_mode: EnumProperty(
         items=[
             ('default', 'Default', 'Add bakes and lightmap to the table', '', 0),
@@ -581,6 +591,8 @@ class VLM_PT_Properties(bpy.types.Panel):
 
         layout.label(text="Baked Model Exporter", icon='EXPORT') 
         row = layout.row(align=True)
+        row.prop(vlmProps, "export_image_type")
+        row = layout.row(align=True)
         row.prop(vlmProps, "export_mode", expand=True)
         row = layout.row()
         row.scale_y = 1.5
@@ -631,6 +643,9 @@ class VLM_PT_3D(bpy.types.Panel):
         bake_objects = [obj for obj in context.selected_objects if (root_col is not None and obj.name in root_col.all_objects) and (result_col is None or obj.name not in result_col.all_objects)]
         if bake_objects:
             show_info = False
+            if len(bake_objects) == 1:
+                layout.prop(bake_objects[0].vlmSettings, 'vpx_object', text='VPX', expand=True)
+            
             layout.label(text="Import options:")
             row = layout.row(align=True)
             row.scale_y = 1.5

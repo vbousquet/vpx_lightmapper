@@ -30,7 +30,6 @@ from win32com import storagecon
 
 
 # TODO
-# - On JP's Deadpool, side target are removed
 # - Try exporting bakes as HDR (or provide an evaluation of the benefit it would give)
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
 
@@ -75,6 +74,7 @@ def export_vpx(context):
     vlm_utils.mkpath(f"{bakepath}Export/")
     input_path = bpy.path.abspath(vlmProps.table_file)
     export_mode = vlmProps.export_mode
+    export_image_type = vlmProps.export_image_type
     bake_col = vlm_collections.get_collection('BAKE')
     light_col = vlm_collections.get_collection('LIGHTS')
     if not os.path.isfile(input_path):
@@ -121,21 +121,25 @@ def export_vpx(context):
     append_structure('GameStg/Collection', 1, True),
 
     table_lights = []
+    table_flashers = []
 
     # Remove previous baked models and append the new ones, also hide/remove baked items
     n_read_item = 0
     n_game_items = 0
     used_images = {}
     removed_images = {}
-    prefix = ['Wall', '', '', '', '', 'Bumper', 'Trigger', 'Light', 'Kicker', '', 'Gate', 'Spinner', 'Ramp', 
-        '', '', '', '', '', '', 'Prim', 'Flasher', 'Rubber']
+    prefix = ['Wall', 'Flipper', 'Timer', 'Plunger', 'Text', 'Bumper', 'Trigger', 'Light', 'Kicker', '', 'Gate', 'Spinner', 'Ramp', 
+        'Table', 'LightCenter', 'DragPoint', 'Collection', 'DispReel', 'LightSeq', 'Prim', 'Flasher', 'Rubber', 'Target']
     while src_storage.exists(f'GameStg/GameItem{n_read_item}'):
         data = src_storage.openstream(f'GameStg/GameItem{n_read_item}').read()
         data = bytearray(data)
         item_data = biff_io.BIFF_reader(data)
         item_type = item_data.get_32()
         if item_type < 0 or item_type >= len(prefix):
-            print(f'Bug for item #{n_read_item}')
+            print(f'Unsupported item #{n_read_item} type #{item_type}')
+            dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+            dst_stream.Write(data)
+            n_game_items += 1
             n_read_item += 1
             continue
         name = 'unknown'
@@ -156,7 +160,7 @@ def export_vpx(context):
         while not item_data.is_eof():
             item_data.next()
             visibility_field = False
-            if item_data.tag == 'CLDR' or item_data.tag == 'CLDW': # Wall ramps and primitives
+            if item_data.tag == 'CLDR' or item_data.tag == 'CLDW': # Collidable for wall ramps and primitives
                 is_physics = item_data.get_bool()
             elif item_data.tag == 'IMAG' or item_data.tag == 'SIMG' or item_data.tag == 'IMGF' or item_data.tag == 'IMAB':
                 item_images.append(item_data.get_string())
@@ -195,22 +199,51 @@ def export_vpx(context):
                         item_data.put_bool(True)
                     elif item_data.tag == 'BHHI':
                         item_data.put_float(-28)
+            elif item_type == 20:
+                table_flashers.append(name)
             if visibility_field and is_baked:
                 item_data.put_bool(False)
             item_data.skip_tag()
         remove = (export_mode == 'remove' or export_mode == 'remove_all') and is_baked and not is_physics
-        remove = remove or name.startswith('VLM.')
-        if remove:
-            print(f'. Item {name:>21s} was removed from export table')
+        remove = remove or name.startswith('VLM.') or name == 'VLMTimer'
+        # Mark images as used or not (if baked)
+        if remove or ((export_mode == 'remove' or export_mode == 'remove_all') and is_baked):
             for image in item_images:
-                removed_images[image] = True
+                if image not in removed_images:
+                    removed_images[image] = [name]
+                else:
+                    removed_images[image].append(name)
         else:
             for image in item_images:
-                used_images[image] = True
+                if image not in used_images:
+                    used_images[image] = [name]
+                else:
+                    used_images[image].append(name)
+        # Filters out object
+        if remove:
+            print(f'. Item {name:>21s} was removed from export table')
+        else:
             dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
             dst_stream.Write(data)
             n_game_items += 1
         n_read_item = n_read_item + 1
+
+    # Add the sync timer
+    writer = biff_io.BIFF_writer()
+    writer.write_u32(2)
+    writer.write_tagged_vec2(b'VCEN', 0, 0)
+    writer.write_tagged_bool(b'TMON', True)
+    writer.write_tagged_32(b'TMIN', -1)
+    writer.write_tagged_wide_string(b'NAME', 'VLMTimer')
+    writer.write_tagged_bool(b'BGLS', False)
+    writer.write_tagged_bool(b'LOCK', True)
+    writer.write_tagged_u32(b'LAYR', 0)
+    writer.write_tagged_string(b'LANR', 'VLM.Visuals')
+    writer.write_tagged_bool(b'LVIS', True)
+    writer.close()
+    dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+    dst_stream.Write(writer.get_data())
+    n_game_items += 1
 
     # Add new bake models
     for obj in sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}'):
@@ -322,7 +355,7 @@ def export_vpx(context):
             br.next()
             if br.tag == "IMAG":
                 playfield_image = br.get_string()
-                removed_images[playfield_image]=True
+                #FIXME removed_images[playfield_image]=True
                 break
             br.skip_tag()
 
@@ -341,15 +374,15 @@ def export_vpx(context):
                 break
             br.skip_tag()
         remove = name.startswith('VLM.')
-        remove = remove or (name in removed_images and not name in used_images)
+        remove = remove or (export_mode=='remove_all' and name not in used_images and name in removed_images)
         if remove:
             print(f'. Image {name:>20s} was removed from export table')
         else:
+            print(f'. Image {name:>20s} was kept (known users: {used_images.get(name)})')
             dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
             dst_stream.Write(data)
             n_images += 1
         n_read_images = n_read_images + 1
-
 
     # Add new bake/lightmap textures
     packmap_index = 0
@@ -357,7 +390,12 @@ def export_vpx(context):
         objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
         if not objects:
             break
-        packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.png")
+        if export_image_type == 'webp':
+            packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.webp")
+        elif export_image_type == 'hdr':
+            packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.hdr")
+        else:
+            packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.png")
         img_writer = biff_io.BIFF_writer()
         img_writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
         img_writer.write_tagged_string(b'PATH', packmap_path)
@@ -440,22 +478,38 @@ def export_vpx(context):
                     code = br.get_string()
                     br.pos = code_pos
                     br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
-                    # FIXME find a previously added ZVLM block, load the intensinty from this block, then remove it
+                    # FIXME find a previously added ZVLM block, load the custom intensity from this block, then replace it
                     code += "\n\n"
                     code += "' ZVLM Begin of Virtual Pinball X Light Mapper generated code\n"
-                    code += "Sub UpdateLightMaps\n"
+                    code += "Sub VLMTimer_Timer\n"
                     for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap']:
                         if obj.vlmSettings.bake_light in light_col.children:
                             vpx_name = light_col.children[obj.vlmSettings.bake_light].objects[0].vlmSettings.vpx_object
                         elif obj.vlmSettings.bake_light in light_col.all_objects:
                             vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object
+                        def elem_ref(name):
+                            name = name[:31] if len(name) > 31 else name
+                            if ' ' in name or '.' in name:
+                                return f'GetElementByName("{name}")'
+                            else:
+                                return name
                         if vpx_name in table_lights:
-                            code += f'	UpdateLightMapOpacity GetElementByName("{vpx_name}"), GetElementByName("{obj.name}"), 100\n'
+                            code += f'	UpdateLightMapFromLight {elem_ref(vpx_name)}, {elem_ref(obj.name)}, 100\n'
+                        elif vpx_name in table_flashers:
+                            code += f'	UpdateLightMapFromFlasher {elem_ref(vpx_name)}, {elem_ref(obj.name)}, 100\n'
                         else:
                             print(f". {obj.name} is missing a vpx light object to be synchronized on")
                     code += "End Sub\n"
                     code += "\n"
-                    code += "Sub UpdateLightMapOpacity(light, lightmap, amount)\n"
+                    code += "Sub UpdateLightMapFromFlasher(flasher, lightmap, amount)\n"
+                    code += "	If flasher.Visible Then\n"
+                    code += "		lightmap.Opacity = amount * flasher.Opacity / 100.0\n"
+                    code += "	Else\n"
+                    code += "		lightmap.Opacity = 0\n"
+                    code += "	End If\n"
+                    code += "End Sub\n"
+                    code += "\n"
+                    code += "Sub UpdateLightMapFromLight(light, lightmap, amount)\n"
                     code += "	Dim percent: percent = light.GetCurrentIntensity() / light.Intensity\n"
                     code += "	lightmap.Opacity = amount * percent\n"
                     code += "End Sub\n"
