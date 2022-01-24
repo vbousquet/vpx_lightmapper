@@ -16,7 +16,7 @@
 import bpy
 
 
-collection_ids = ['ROOT', 'TRASH', 'HIDDEN', 'INDIRECT', 'OVERLAY', 'LIGHTS', 'GI LIGHTS', 'BAKE', 'BAKE DEFAULT', 'BAKE PLAYFIELD', 'BAKE RESULT']
+collection_ids = ['ROOT', 'TRASH', 'HIDDEN', 'INDIRECT', 'OVERLAY', 'LIGHTS', 'GI LIGHTS', 'BAKE', 'BAKE DEFAULT', 'BAKE ACTIVE', 'BAKE PLAYFIELD', 'BAKE RESULT']
 
 
 def find_layer_collection(root_layer_collection, col):
@@ -30,18 +30,15 @@ def find_layer_collection(root_layer_collection, col):
     return found
 
 
-def create_collection(context, name, parent, excluded, create = True, indirect = False):
+def create_collection(context, name, parent, excluded, create = True):
     if name not in bpy.data.collections:
         if not create or parent is None:
-            return None
+            return False, None
         col = bpy.data.collections.new(name)
         parent.children.link(col)
-        lc = find_layer_collection(context.view_layer.layer_collection, col)
-        lc.exclude = excluded
-        lc.indirect_only = indirect
+        return True, col
     else:
-        col = bpy.data.collections[name]
-    return col
+        return False, bpy.data.collections[name]
 
 
 def delete_collection(col):
@@ -55,31 +52,63 @@ def delete_collection(col):
 def get_collection(name, create=True):
     context = bpy.context
     if name == 'ROOT':
-        return create_collection(context, "VPX Light Mapper", context.scene.collection, False, create)
+        n, c = create_collection(context, "VPX Light Mapper", context.scene.collection, create)
+        return c
     if name == 'TRASH':
-        return create_collection(context, "VLM.Trash", get_collection('ROOT', create), True, create)
+        n, c = create_collection(context, "VLM.Trash", get_collection('ROOT', create), create)
+        if n:
+            find_layer_collection(context.view_layer.layer_collection, c).exclude = True
+        return c
     if name == 'HIDDEN':
-        return create_collection(context, "VLM.Hidden", get_collection('ROOT', create), True, create)
+        n, c = create_collection(context, "VLM.Hidden", get_collection('ROOT', create), create)
+        if n:
+            find_layer_collection(context.view_layer.layer_collection, c).exclude = True
+        return c
     if name == 'INDIRECT':
-        return create_collection(context, "VLM.Indirect", get_collection('ROOT', create), False, create, True)
+        n, c = create_collection(context, "VLM.Indirect", get_collection('ROOT', create), create, True)
+        if n:
+            find_layer_collection(context.view_layer.layer_collection, c).indirect_only = True
+        return c
     if name == 'OVERLAY':
-        return create_collection(context, "VLM.Overlays", get_collection('ROOT', create), False, create)
+        n, c = create_collection(context, "VLM.Overlays", get_collection('ROOT', create), create)
+        return c
     if name == 'LIGHTS':
-        return create_collection(context, "VLM.Light Groups", get_collection('ROOT', create), False, create)
+        n, c = create_collection(context, "VLM.Light Groups", get_collection('ROOT', create), create)
+        return c
     if name == 'GI LIGHTS':
-        return create_collection(context, "VLM.GI Lights", get_collection('LIGHTS', create), False, create)
+        n, c = create_collection(context, "VLM.GI Lights", get_collection('LIGHTS', create), create)
+        if n:
+            c.vlmSettings.light_mode = True
+        return c
     if name == 'PLAYFIELD LIGHTS':
-        return create_collection(context, "VLM.Inserts", get_collection('LIGHTS', create), False, create)
+        n, c = create_collection(context, "VLM.Inserts", get_collection('LIGHTS', create), create)
+        if n:
+            c.vlmSettings.light_mode = False
+        return c
     if name == 'BAKE':
-        return create_collection(context, "VLM.Bake Groups", get_collection('ROOT', create), False, create)
+        n, c = create_collection(context, "VLM.Bake Groups", get_collection('ROOT', create), create)
+        return c
     if name == 'BAKE DEFAULT':
-        return create_collection(context, "VLM.Default", get_collection('BAKE', create), False, create)
+        n, c = create_collection(context, "VLM.Default", get_collection('BAKE', create), create)
+        if n:
+            c.vlmSettings.bake_mode = 'default'
+        return c
+    if name == 'BAKE ACTIVE':
+        n, c = create_collection(context, "VLM.Active", get_collection('BAKE', create), create)
+        if n:
+            c.vlmSettings.bake_mode = 'default'
+        return c
     if name == 'BAKE PLAYFIELD':
-        return create_collection(context, "VLM.Playfield", get_collection('BAKE', create), False, create)
+        n, c = create_collection(context, "VLM.Playfield", get_collection('BAKE', create), create)
+        if n:
+            c.vlmSettings.bake_mode = 'playfield'
+        return c
     if name == 'BAKE RESULT':
-        return create_collection(context, "VLM.Bake Result", get_collection('ROOT', create), False, create)
+        n, c = create_collection(context, "VLM.Bake Result", get_collection('ROOT', create), create)
+        return c
     if name == 'BAKETMP':
-        return create_collection(context, "VLM.Bake Temp", get_collection('ROOT', create), False, create)
+        n, c = create_collection(context, "VLM.Bake Temp", get_collection('ROOT', create), create)
+        return c
 
 
 def setup_collections():

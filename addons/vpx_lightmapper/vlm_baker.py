@@ -229,6 +229,18 @@ def render_all_groups(context):
     n_lighting_situations = len(light_scenarios)
 
     # Apply a ligth scenario for rendering, returning the previous state and a lambda to apply it
+    def restore_light_setup(initial_state):
+        if initial_state[0] == 0:
+            initial_state[1].data.color = initial_state[2]
+            vlm_collections.restore_col_links(initial_state[3])
+        elif initial_state[0] == 1:
+            vlm_collections.restore_col_links(initial_state[1])
+        elif initial_state[0] == 2:
+            vlm_collections.restore_all_col_links(initial_state[1])
+        elif initial_state[0] == 3:
+            for obj, color in zip(initial_state[1], initial_state[2]):
+                obj.data.color = color
+            vlm_collections.restore_all_col_links(initial_state[3])
     def setup_light_scenario(context, scenario):
         if scenario[1] is None: # Base render
             context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
@@ -236,9 +248,23 @@ def render_all_groups(context):
         else:
             context.scene.world = bpy.data.worlds["VPX.Env.Black"]
             if scenario[2] is None: # Light group render
-                return vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col), lambda initial_state : vlm_collections.restore_all_col_links(initial_state)
-            else: # single light render
-                return vlm_collections.move_to_col(scenario[2], tmp_col), lambda initial_state : vlm_collections.restore_col_links(initial_state)
+                if vlm_utils.is_same_light_color(scenario[1].objects, 0.1):
+                    colors = [o.data.color for o in scenario[1].objects if o.type=='LIGHT']
+                    for o in scenario[1].objects:
+                        o.data.color = (1.0, 1.0, 1.0)
+                    initial_state = (3, scenario[1].objects, colors, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
+                else:
+                    print(f". light scenario '{scenario[0]}' contains lights with different colors or colored emitters. Lightmap will baked with these colors instead of full white.")
+                    initial_state = (2, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
+            else: # single light render (rendered as full white since they are colored when rendered)
+                if scenario[2].type == 'LIGHT':
+                    prev_color = scenario[2].data.color
+                    scenario[2].data.color = (1.0, 1.0, 1.0)
+                    initial_state = (0, scenario[2], prev_color, vlm_collections.move_to_col(scenario[2], tmp_col))
+                else:
+                    print(f". light scenario '{scenario[0]}' is a colored emitters. Lightmap will baked with these colors instead of full white.")
+                    initial_state = (1, vlm_collections.move_to_col(scenario[2], tmp_col))
+            return initial_state, lambda initial_state : restore_light_setup(initial_state)
 
     # Render overlay collection and save it, activate composer accordingly to overlay it on object group renders (z masked)
     overlays = [obj for obj in overlay_col.all_objects]
@@ -260,6 +286,7 @@ def render_all_groups(context):
         context.scene.render.image_settings.use_zbuffer = False
         
         # Prepare compositor to apply overlay for the upcoming renders
+        context.scene.use_nodes = True
         nodes = context.scene.node_tree.nodes
         nodes.clear() # I did not find a way to switch the active composer output, so we clear it each time
         links = context.scene.node_tree.links
@@ -306,6 +333,7 @@ def render_all_groups(context):
         bpy.data.images.remove(overlay) 
 
     print(f"\nRendering {n_render_groups} render groups for {n_lighting_situations} lighting situations")
+    context.scene.use_nodes = False
     for group_index in range(n_render_groups):
         objects = [obj for obj in root_bake_col.all_objects if obj.vlmSettings.render_group == group_index]
         n_objects = len(objects)
@@ -328,7 +356,9 @@ def render_all_groups(context):
                 restore_func(state)
         vlm_collections.restore_all_col_links(initial_collections)
 
+    context.scene.use_nodes = True
     context.scene.node_tree.nodes.clear()
+    context.scene.use_nodes = False
 
     context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
     vlm_utils.pop_color_grading(cg)
@@ -462,6 +492,11 @@ def create_bake_meshes(context):
             if not obj.data.has_custom_normals:
                 print(f". Warning '{name}' does not have split normals. Final mesh will be flat shaded.")
             to_join.append(obj)
+        
+        # No mesh in this bake group
+        if not to_join:
+            continue
+            
         bpy.ops.object.select_all(action='DESELECT')
         context.view_layer.objects.active = to_join[0]
         for obj in to_join:
@@ -1289,7 +1324,7 @@ def render_packmaps_bake(context):
                         render = bpy.data.images.load(path, check_existing=False)
                         unloads.append(render)
                     mat.node_tree.nodes["BakeTex"].image = render
-                    mat.node_tree.nodes["PackMap"].inputs[2].default_value = vlm_utils.select(is_light, 1.0, 0.0)
+                    mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0 if is_light else 0.0
                     mat.node_tree.nodes["PackMap"].inputs[3].default_value = 0.0 # Bake
                     mat.node_tree.nodes["PackTex"].image = pack_image
                     mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
@@ -1297,7 +1332,7 @@ def render_packmaps_bake(context):
                 bpy.ops.object.bake(type='COMBINED', pass_filter={'EMIT', 'DIRECT'}, margin=opt_padding)
                 for mat in obj.data.materials:
                     mat.node_tree.nodes["PackMap"].inputs[3].default_value = 1.0 # Preview
-                    mat.blend_method = vlm_utils.select(is_light, 'BLEND', 'OPAQUE')
+                    mat.blend_method = 'BLEND' if is_light else 'OPAQUE'
                 for render in unloads:
                     bpy.data.images.remove(render)
                 context.scene.render.bake.use_clear = False

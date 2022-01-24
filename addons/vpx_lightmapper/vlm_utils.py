@@ -19,6 +19,7 @@ import os
 import pathlib
 import gpu
 import mathutils
+import functools
 from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
 
@@ -78,11 +79,15 @@ def mkpath(path):
     pathlib.Path(bpy.path.abspath(path)).mkdir(parents=True, exist_ok=True)
 
 
-def select(condition, v_true, v_false):
-    if condition:
-        return v_true
-    else:
-        return v_false
+def is_same_light_color(objects, threshold):
+    colors = [o.data.color for o in objects if o.type=='LIGHT']
+    n_colors = len(colors)
+    base_color = functools.reduce(lambda a, b: (a[0]+b[0], a[1]+b[1], a[2]+b[2]), colors)
+    base_color = (base_color[0] / n_colors, base_color[1] / n_colors, base_color[2] / n_colors)
+    # maybe use intensity distance instead of raw RGB distance ?
+    max_dif = max(map(lambda a: mathutils.Vector((a[0] - base_color[0], a[1] - base_color[1], a[2] - base_color[2])).length_squared, colors))
+    # colors are similar enough to be considered as a single color situation
+    return n_colors == len(objects) and max_dif < threshold * threshold
 
 
 def render_mask(context, width, height, target_image, view_matrix, projection_matrix):

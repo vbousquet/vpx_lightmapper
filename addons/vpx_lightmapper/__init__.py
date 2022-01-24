@@ -39,8 +39,6 @@ from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty,
 from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, Collection)
 from rna_prop_ui import PropertyPanel
 
-# TODO
-
 
 # Use import.reload for all submodule to allow iterative development using bpy.ops.script.reload()
 if "vlm_dependencies" in locals():
@@ -158,7 +156,7 @@ class VLM_Object_props(PropertyGroup):
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     # Bake result properties
     bake_name: StringProperty(name="Bake Name", description="Lighting situation identifier", default="")
-    bake_objects: StringProperty(name="Object Source", description="Ocject or collection of object used to create this bake/lightmap", default="")
+    bake_objects: StringProperty(name="Object Source", description="Object or collection of object used to create this bake/lightmap", default="")
     bake_light: StringProperty(name="Light Source", description="Light or collection of lights used to create this lightmap", default="")
     bake_type: EnumProperty(
         items=[

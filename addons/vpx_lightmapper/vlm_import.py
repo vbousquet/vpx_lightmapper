@@ -37,9 +37,9 @@ global_scale = vlm_utils.global_scale
 # TODO
 # - Implement surface positionning relative to a ramp
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
-# - Place drop target in movable or indirect bake group
-# - Evaluate elements that need an active material (z<0, transparent material / alpha texture)
-# - JP's STar Trek as a wrong texture positionning above ramp
+# - JP's Star Trek as a wrong texture positionning above ramp
+# - Use the imported vpx_object property to identify objects instead of their name
+
 
 
 class VPX_Material(object):
@@ -78,6 +78,14 @@ class VPX_Material(object):
             group.inputs[13].default_value = 1
         else:
             group.inputs[13].default_value = 0
+
+
+def is_active(materials, mat_name, image, opaque_images):
+    if mat_name not in materials:
+        return image not in opaque_images
+    mat = materials[mat_name]
+    #return mat.opacity_active and (mat.opacity < 1.0 or image not in opaque_images)
+    return mat.opacity_active and image not in opaque_images
 
 
 def update_material(mesh, slot, materials, mat_name, image, translucency=-1):
@@ -290,13 +298,17 @@ def read_vpx(context, filepath):
     root_col = vlm_collections.get_collection('ROOT')
     trash_col = vlm_collections.get_collection('TRASH')
     hidden_col = vlm_collections.get_collection('HIDDEN')
+    movable_col = hidden_col
     indirect_col = vlm_collections.get_collection('INDIRECT')
     overlay_col = vlm_collections.get_collection('OVERLAY')
     gi_col = vlm_collections.get_collection('GI LIGHTS')
     lights_col = vlm_collections.get_collection('PLAYFIELD LIGHTS')
     bake_col = vlm_collections.get_collection('BAKE DEFAULT')
+    active_col = vlm_collections.get_collection('BAKE ACTIVE')
     vlm_collections.find_layer_collection(context.view_layer.layer_collection, bake_col).exclude = False
+    vlm_collections.find_layer_collection(context.view_layer.layer_collection, active_col).exclude = False
     vlm_collections.find_layer_collection(context.view_layer.layer_collection, hidden_col).exclude = False
+    vlm_collections.find_layer_collection(context.view_layer.layer_collection, movable_col).exclude = False
     vlm_collections.find_layer_collection(context.view_layer.layer_collection, indirect_col).exclude = False
     
     # Append core meshes (without linking them in order to dispose the unused ones after import)
@@ -390,9 +402,11 @@ def read_vpx(context, filepath):
         playfield_height = playfield_bottom - playfield_top
         
         # Read the textures
+        opaque_images = ['']
+        alpha_images = ['']
         for index in range(n_images):
             image_data = biff_io.BIFF_reader(ole.openstream(f"GameStg/Image{index}").read())
-            name = ""
+            vpx_name = ""
             path = ""
             width = 0
             height = 0
@@ -401,7 +415,7 @@ def read_vpx(context, filepath):
             while not image_data.is_eof():
                 image_data.next()
                 if image_data.tag == 'NAME':
-                    name = image_data.get_string()
+                    vpx_name = image_data.get_string()
                 elif image_data.tag == 'PATH':
                     path = image_data.get_string()
                 elif image_data.tag == 'WDTH':
@@ -411,7 +425,7 @@ def read_vpx(context, filepath):
                 elif image_data.tag == 'ALTV':
                     image_data.skip_tag()
                 elif image_data.tag == 'BITS':
-                    print(f"GameStg/Image{index} {name}: Unsupported bmp image file")
+                    print(f"GameStg/Image{index} {vpx_name}: Unsupported bmp image file")
                     #uncompressed = zlib.decompress(image_data.data[image_data.pos:]) #, wbits=9)
                     data = None
                     break
@@ -428,7 +442,7 @@ def read_vpx(context, filepath):
                         elif sub_data.tag == 'PATH':
                             path = sub_data.get_string()
                     image_data.skip(sub_data.pos)
-            name = f"VPX.Tex.{name.casefold()}"
+            name = f"VPX.Tex.{vpx_name.casefold()}"
             if name in bpy.data.images:
                 image = bpy.data.images[name]
                 try:
@@ -445,11 +459,20 @@ def read_vpx(context, filepath):
                         im.save(byte_io, 'PNG')
                         data = byte_io.getvalue()
                         size = len(data)
+                    extrema = im.getextrema()
+                    if len(extrema) < 4 or extrema[3][0] == 255:
+                        image.alpha_mode = 'NONE' # Identify opaque image including images with an opaque alpha channel
+                        opaque_images.append(vpx_name)
+                    else:
+                        image.alpha_mode = 'STRAIGHT' 
+                        alpha_images.append(vpx_name)
                 except OSError:
-                    print(f"cannot load {name} initially imported from {path}")
+                    print(f"cannot load {vpx_name} initially imported from {path}")
                 image.pack(data=data, data_len=size)
             image.source = 'FILE'
-            
+        print(f'. Following images are fully opaque: {opaque_images}')
+        print(f'. Following images have transparent pixels: {alpha_images}')
+        
         # Setup environment lighting
         env_image = f"VPX.Tex.{env_image.casefold()}" 
         if "VPX.Env.Black" not in bpy.data.worlds:
@@ -654,7 +677,9 @@ def read_vpx(context, filepath):
 
                 bake_col.objects.unlink(obj)
                 existing = obj_name in context.scene.objects
-                obj = update_object(context, obj_name, obj.data, top_visible or side_visible, bake_col, hidden_col)
+                active = is_active(materials, top_material, top_image, opaque_images)
+                target_col = active_col if active else bake_col
+                obj = update_object(context, obj_name, obj.data, top_visible or side_visible, target_col, hidden_col)
                 update_location(obj, 0, 0, global_scale * 0.5 * (height_top + height_bottom))
 
                 bevel_size = min(extrude_height, global_scale * opt_bevel_plastics)
@@ -675,7 +700,8 @@ def read_vpx(context, filepath):
                 while len(mesh.materials) < 3:
                     mesh.materials.append(None)
                 if opt_process_plastics and is_plastic:
-                    obj.data.materials[0] = bpy.data.materials["VPX.Core.Mat.Plastic"] # Alpha plastic glass (no IOR, alpha bake suited for alpha blended in VPX)
+                    # Use alpha plastic glass (no IOR, alpha bake suited for alpha blended in VPX) on top if the image is not opaque
+                    obj.data.materials[0] = bpy.data.materials["VPX.Core.Mat.Plastic" if top_image not in opaque_images else "VPX.Core.Mat.Plastic.NoAlpha"]
                     obj.data.materials[1] = bpy.data.materials["VPX.Core.Mat.Plastic.NoAlpha"] # Normal plastic glass (with IOR, opaque bake)
                     update_material(obj.data, 2, materials, top_material, top_image, opt_plastic_translucency)
                 else:
@@ -882,11 +908,11 @@ def read_vpx(context, filepath):
                     insert_cups.append(obj)
                     bake_col.objects.unlink(obj)
                     obj.name = f"VPX.Light.Shape.{name}"
-                    mesh = bpy.data.lights.new(name=name, type='POINT')
-                    mesh.color = (color[0], color[1], color[2])
-                    mesh.energy = opt_insert_intensity * intensity * global_scale
-                    mesh.shadow_soft_size = opt_light_size * global_scale
-                    obj = update_object(context, obj_name, mesh, True, default_light, hidden_col)
+                    light = bpy.data.lights.new(name=name, type='POINT')
+                    light.color = (color[0], color[1], color[2])
+                    light.energy = opt_insert_intensity * intensity * global_scale
+                    light.shadow_soft_size = opt_light_size * global_scale
+                    obj = update_object(context, obj_name, light, True, default_light, hidden_col)
                     # Move below playfield to light through the translucency of the playfield material
                     update_location(obj, x * global_scale, -y * global_scale, -(opt_light_size + 1) * global_scale)
                     obj.vlmSettings.vpx_object = name
@@ -895,11 +921,11 @@ def read_vpx(context, filepath):
                     z = halo_height
                     bake_col.objects.unlink(obj)
                     obj.name = f"VPX.Light.Shape.{name}"
-                    mesh = bpy.data.lights.new(name=name, type='POINT')
-                    mesh.color = (color[0], color[1], color[2])
-                    mesh.energy = opt_light_intensity * intensity * global_scale
-                    mesh.shadow_soft_size = opt_light_size * global_scale
-                    obj = update_object(context, obj_name, mesh, True, default_light, hidden_col)
+                    light = bpy.data.lights.new(name=name, type='POINT')
+                    light.color = (color[0], color[1], color[2])
+                    light.energy = opt_light_intensity * intensity * global_scale
+                    light.shadow_soft_size = opt_light_size * global_scale
+                    obj = update_object(context, obj_name, light, True, default_light, hidden_col)
                     obj.vlmSettings.vpx_object = name
                     update_location(obj, x * global_scale, -y * global_scale, z * global_scale)
                     created_objects.append(obj)
@@ -1153,6 +1179,8 @@ def read_vpx(context, filepath):
                 z_axis = mathutils.Vector((0,0,1))
                 obj_name = f"VPX.Ramp.{name}"
                 curve_name = f"VPX.Curve.{name}"
+                active = is_active(materials, material, image, opaque_images)
+                target_col = active_col if active else bake_col
                 if ramp_type == 0:
                     # Flat ramp, with texture coordinates, RampTypeFlat = 0
                     curve = create_curve(f"VPX.Curve.{name}", points, False, False, global_scale)
@@ -1254,14 +1282,14 @@ def read_vpx(context, filepath):
                     vlm_utils.apply_split_normals(mesh)
                     object.data = mesh
                     bake_col.objects.unlink(object)
-                    obj = update_object(context, obj_name, object.data, visible, bake_col, hidden_col)
+                    obj = update_object(context, obj_name, object.data, visible, target_col, hidden_col)
                 else:
                     # Wire ramp (no texture coordinate)
                     # RampType4Wire = 1, RampType2Wire = 2, RampType3WireLeft = 3, RampType3WireRight = 4, RampType1Wire = 5
                     curve = bpy.data.curves.new(curve_name, type='CURVE')
                     curve.dimensions = '3D'
-                    curve.render_resolution_u = curve_resolution
-                    curve.resolution_u = curve_resolution
+                    curve.render_resolution_u = 6
+                    curve.resolution_u = 6
                     curve.fill_mode = 'FULL'
                     curve.use_fill_caps = True
                     curve.bevel_depth = wire_diameter * 0.5 * global_scale
@@ -1301,7 +1329,7 @@ def read_vpx(context, filepath):
                                 polyline.bezier_points[i].handle_right_type = polyline.bezier_points[i].handle_left_type = 'AUTO'
                             else:
                                 polyline.bezier_points[i].handle_right_type = polyline.bezier_points[i].handle_left_type = 'VECTOR'
-                    obj = update_object(context, obj_name, curve, visible, bake_col, hidden_col)
+                    obj = update_object(context, obj_name, curve, visible, target_col, hidden_col)
                 obj.vlmSettings.vpx_object = name
                 update_location(obj, 0, 0, 0)
                 update_material(obj.data, 0, materials, material, image)
@@ -1463,8 +1491,10 @@ def read_vpx(context, filepath):
                             else:
                                 uv_layer[loop_index].uv = ((vi >> 1) / (n_sides - 1), 0.5 * (0.5 - pt.z))
                     
+                active = is_active(materials, material, image, opaque_images)
+                target_col = active_col if active else bake_col
                 existing = obj_name in context.scene.objects
-                obj = update_object(context, obj_name, mesh, visible, bake_col, hidden_col)
+                obj = update_object(context, obj_name, mesh, visible, target_col, hidden_col)
                 if obj.vlmSettings.import_transform:
                     axis_matrix = mathutils.Matrix.Scale(-1, 4, (1,0,0)) @ axis_conversion('-Y', 'Z', 'Y', 'Z').to_4x4()
                     pos = mathutils.Vector(((position[0] + rot_tra[3])* global_scale, (position[1] + rot_tra[4])* global_scale, (position[2] + rot_tra[5])* global_scale))
@@ -1671,8 +1701,8 @@ def read_vpx(context, filepath):
                 curve_name = f"VPX.Curve.{name}"
                 curve = bpy.data.curves.new(curve_name, type='CURVE')
                 curve.dimensions = '3D'
-                curve.render_resolution_u = curve_resolution
-                curve.resolution_u = curve_resolution
+                curve.render_resolution_u = 6
+                curve.resolution_u = 6
                 curve.fill_mode = 'FULL'
                 curve.bevel_depth = thickness * 0.5 * global_scale
                 polyline = curve.splines.new('BEZIER')
@@ -1692,7 +1722,9 @@ def read_vpx(context, filepath):
                         polyline.bezier_points[i].handle_right_type = polyline.bezier_points[i].handle_left_type = 'AUTO'
                     else:
                         polyline.bezier_points[i].handle_right_type = polyline.bezier_points[i].handle_left_type = 'VECTOR'
-                obj = update_object(context, obj_name, curve, visible, bake_col, hidden_col)
+                active = is_active(materials, material, image, opaque_images)
+                target_col = active_col if active else bake_col
+                obj = update_object(context, obj_name, curve, visible, target_col, hidden_col)
                 obj.vlmSettings.vpx_object = name
                 update_location(obj, 0, 0, global_scale * height)
                 update_material(obj.data, 0, materials, material, image)
@@ -1731,7 +1763,10 @@ def read_vpx(context, filepath):
                 meshes = ["", "VPX.Core.Droptargett2", "VPX.Core.Droptargett3", 
                     "VPX.Core.Hittargetround", "VPX.Core.Hittargetrectangle", "VPX.Core.Hittargetfatrectangle",
                     "VPX.Core.Hittargetfatsquare", "VPX.Core.Droptargett4", "VPX.Core.Hittargett2slim", "VPX.Core.Hittargett1slim"]
-                obj = add_core_mesh(created_objects, obj_name, meshes[type], visible, bake_col, hidden_col, materials, material, image, x, y, z, x_size, y_size, z_size, rot_z, global_scale)
+                active = is_active(materials, material, image, opaque_images)
+                target_col = active_col if active else bake_col
+                target_col = movable_col if type in [1, 2, 7] else active_col if active else bake_col
+                obj = add_core_mesh(created_objects, obj_name, meshes[type], visible, target_col, hidden_col, materials, material, image, x, y, z, x_size, y_size, z_size, rot_z, global_scale)
                 obj.vlmSettings.vpx_object = name
 
             else:
@@ -1830,7 +1865,11 @@ def read_vpx(context, filepath):
 
     vlm_collections.pop_state(col_initial_state)
 
-    context.scene.vlmSettings.table_file = bpy.path.relpath(filepath)
+    try:
+        context.scene.vlmSettings.table_file = bpy.path.relpath(filepath)
+    except:
+        context.scene.vlmSettings.table_file = filepath
+    
     context.scene.vlmSettings.playfield_size = (playfield_left, playfield_top, playfield_width, playfield_height)
     print(f"\nImport finished.")
     return {"FINISHED"}

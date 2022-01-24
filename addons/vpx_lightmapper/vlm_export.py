@@ -30,35 +30,13 @@ from win32com import storagecon
 
 
 # TODO
-# - Try exporting bakes as HDR (or provide an evaluation of the benefit it would give)
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
-# - Add support for dynamic light coloring (needs update to VPX with Additive Blend as well)
 # - Export to static rendering / not active / active according to the part exported (static, translucency, below playfield ?)
+# - Sort faces of bakes (not lightmaps) from front to back except for active bakes which should be sorted from back to front
 
 
-# FIXME rewrite an export to obj operator
-def export_obj(context):
-    vlmProps = context.scene.vlmSettings
-    result_col = vlm_collections.get_collection('BAKE RESULT')
-    exportpath = vlm_utils.get_bakepath(context, type='EXPORT')
-    vlm_utils.mkpath(exportpath)
-    vlm_collections.find_layer_collection(context.view_layer.layer_collection, result_col).exclude = False
-    print(f"\nStarting export process for {len(result_col.all_objects)} bakes")
-    
-    for i, obj in enumerate(result_col.all_objects, start = 1):
-        bpy.ops.object.select_all(action='DESELECT')
-        obj.select_set(True)
-        context.view_layer.objects.active = obj
-
-        # see https://docs.blender.org/api/current/bpy.ops.export_scene.html
-        print(f". {i}/{len(result_col.all_objects)} Exporting bake mesh for '{obj.name}'")
-        bpy.ops.export_scene.obj(
-            filepath=os.path.join(bpy.path.abspath(exportpath), f"{obj.name}.obj"),
-            use_selection=True, use_materials=False, use_triangles=True,
-            global_scale=1000.0 / global_scale, axis_forward='-Y', axis_up='-Z')
-
-    print(f"\nExport finished.")
-    return {"FINISHED"}
+def export_name(object_name):
+    return object_name.replace(".", "_").replace(" ", "_")
 
 
 def export_vpx(context):
@@ -164,6 +142,7 @@ def export_vpx(context):
         while not item_data.is_eof():
             item_data.next()
             reflection_field = visibility_field = False
+            is_part_baked = is_baked
             if item_data.tag == 'REEN':
                 reflection_field = True
             elif item_data.tag == 'CLDR' or item_data.tag == 'CLDW': # Collidable for wall ramps and primitives
@@ -176,30 +155,33 @@ def export_vpx(context):
                 visibility_field = True
             elif (item_type == 12 or item_type == 21) and item_data.tag == 'RVIS': # for ramps (12) and rubbers (21)
                 visibility_field = True
-            elif item_type == 8 and item_data.tag == 'TYPE': # for kicker (8), type 0 is invisible
-                pass # FIXME implement
-            elif item_type == 10 and item_data.tag == 'GVSB': # for gate (10): overall gate (wire and bracket)
-                pass # FIXME implement
             elif item_type == 10 and item_data.tag == 'GSUP': # for gate (10) bracket, combined with GVSB
                 if f'VPX.Gate.Bracket.{name}' in bake_col.all_objects:
                     item_data.put_bool(False)
-            elif item_type == 11 and item_data.tag == 'SVIS': # for spinner (11): overall spinner (wire and bracket)
-                pass # FIXME implement
             elif item_type == 11 and item_data.tag == 'SSUP': # for spinner bracket (11) combined with SVIS
                 if f'VPX.Spinner.Bracket.{name}' in bake_col.all_objects:
                     item_data.put_bool(False)
             elif (item_type == 19 or item_type == 22) and item_data.tag == 'TVIS': # for primitives (19) and hit targets (22)
                 visibility_field = True
-            elif item_type == 5 and item_data.tag == 'CAVI': # for bumper caps (5)
-                pass # FIXME implement
-            elif item_type == 5 and item_data.tag == 'BSVS': # for bumper ring & skirt (5)
-                pass # FIXME implement
-            elif item_type == 5 and item_data.tag == 'RIVS': # for bumper ring (5)
-                pass # FIXME implement
-            elif item_type == 5 and item_data.tag == 'SKVS': # for bumper skirt (5)
-                pass # FIXME implement
             elif item_type == 20 and item_data.tag == 'FVIS': # for flashers (20)
                 visibility_field = True
+            elif item_type == 5 and item_data.tag == 'CAVI': # for bumper caps (5)
+                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.name.startswith('VPX.Bumper.Cap.')), None) is not None
+                visibility_field = True
+            elif item_type == 5 and item_data.tag == 'BSVS': # for bumper base & ring & skirt (5), recent files also have separate fields for ring & skirt
+                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.name.startswith('VPX.Bumper.Base.')), None) is not None
+                visibility_field = True
+            elif item_type == 5 and item_data.tag == 'RIVS': # for bumper ring (5)
+                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.name.startswith('VPX.Ring.Base.')), None) is not None
+                visibility_field = True
+            elif item_type == 5 and item_data.tag == 'SKVS': # for bumper skirt (5)
+                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.name.startswith('VPX.Bumper.Socket.')), None) is not None
+                visibility_field = True
+            elif item_type == 8 and item_data.tag == 'TYPE': # for kicker (8), type 0 is invisible
+                pass # FIXME implement
+            # Not needed since we do not bake wires / movable part of spinners
+            # elif item_type == 10 and item_data.tag == 'GVSB': # for gate (10): overall gate (wire and bracket)
+            # elif item_type == 11 and item_data.tag == 'SVIS': # for spinner (11): overall spinner (wire and bracket)
             if item_type == 7:
                 table_lights.append(name)
                 if is_baked_light:
@@ -209,9 +191,9 @@ def export_vpx(context):
                         item_data.put_float(-28)
             if item_type == 20:
                 table_flashers.append(name)
-            if visibility_field and is_baked:
+            if visibility_field and is_part_baked:
                 item_data.put_bool(False)
-            if reflection_field and is_baked:
+            if reflection_field and is_part_baked:
                 item_data.put_bool(False)
             item_data.skip_tag()
         remove = (export_mode == 'remove' or export_mode == 'remove_all') and is_baked and not is_physics
@@ -275,7 +257,7 @@ def export_vpx(context):
         writer.write_tagged_string(b'IMAG', f'VLM.Packmap{obj.vlmSettings.bake_packmap}')
         writer.write_tagged_string(b'NRMA', '')
         writer.write_tagged_u32(b'SIDS', 4)
-        writer.write_tagged_wide_string(b'NAME', obj.name)
+        writer.write_tagged_wide_string(b'NAME', export_name(obj.name))
         writer.write_tagged_string(b'MATR', 'VLM.Lightmap' if is_light else 'VLM.Bake.Active') # FIXME we should have 2 variants (active/not active)
         writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
         writer.write_tagged_bool(b'TVIS', not is_playfield)
@@ -490,9 +472,14 @@ def export_vpx(context):
                     code += "' ZVLM Begin of Virtual Pinball X Light Mapper generated code\n"
                     code += "Sub VLMTimer_Timer\n"
                     for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap']:
+                        sync_color = False
                         if obj.vlmSettings.bake_light in light_col.children:
-                            vpx_name = light_col.children[obj.vlmSettings.bake_light].objects[0].vlmSettings.vpx_object
+                            baked_lights = light_col.children[obj.vlmSettings.bake_light].objects
+                            sync_color = vlm_utils.is_same_light_color(baked_lights, 0.1)
+                            vpx_name = baked_lights[0].vlmSettings.vpx_object
                         elif obj.vlmSettings.bake_light in light_col.all_objects:
+                            baked_light = context.scene.objects[obj.vlmSettings.bake_light]
+                            sync_color = baked_light.type == 'LIGHT'
                             vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object
                         def elem_ref(name):
                             name = name[:31] if len(name) > 31 else name
@@ -501,25 +488,25 @@ def export_vpx(context):
                             else:
                                 return name
                         if vpx_name in table_lights:
-                            code += f'	UpdateLightMapFromLight {elem_ref(vpx_name)}, {elem_ref(obj.name)}, 100\n'
+                            code += f'	UpdateLightMapFromLight {elem_ref(vpx_name)}, {elem_ref(export_name(obj.name))}, 100, {"True" if sync_color else "False"}\n'
                         elif vpx_name in table_flashers:
-                            code += f'	UpdateLightMapFromFlasher {elem_ref(vpx_name)}, {elem_ref(obj.name)}, 100\n'
+                            code += f'	UpdateLightMapFromFlasher {elem_ref(vpx_name)}, {elem_ref(export_name(obj.name))}, 100\n'
                         else:
                             print(f". {obj.name} is missing a vpx light object to be synchronized on")
                     code += "End Sub\n"
                     code += "\n"
-                    code += "Sub UpdateLightMapFromFlasher(flasher, lightmap, amount)\n"
+                    code += "Sub UpdateLightMapFromFlasher(flasher, lightmap, intensity_scale)\n"
                     code += "	If flasher.Visible Then\n"
-                    code += "		lightmap.Opacity = amount * flasher.Opacity / 100.0\n"
+                    code += "		lightmap.Opacity = intensity_scale * flasher.Opacity / 100.0\n"
                     code += "	Else\n"
                     code += "		lightmap.Opacity = 0\n"
                     code += "	End If\n"
                     code += "End Sub\n"
                     code += "\n"
-                    code += "Sub UpdateLightMapFromLight(light, lightmap, amount)\n"
+                    code += "Sub UpdateLightMapFromLight(light, lightmap, intensity_scale, sync_color)\n"
                     code += "	Dim percent: percent = light.GetCurrentIntensity() / light.Intensity\n"
-                    code += "	lightmap.Opacity = amount * percent\n"
-                    code += "	lightmap.Color = light.colorfull\n"
+                    code += "	lightmap.Opacity = intensity_scale * percent\n"
+                    code += "	If sync_color Then lightmap.Color = light.colorfull\n"
                     code += "End Sub\n"
                     code += "' ZVLM End of Virtual Pinball X Light Mapper generated code\n"
                     wr = biff_io.BIFF_writer()

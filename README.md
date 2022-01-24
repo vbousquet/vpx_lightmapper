@@ -34,12 +34,16 @@ This tool aims at helping with the process of baking textures and additive light
 
 ## Installation
 
+### Blender Console
+
+This add-on use the Blender console for all its output. You need to enable the console before everything else (Window > Toggle System Console).
+
 ### Blender add-on
 
 1. Download add-on (zipped) from the [release section](https://github.com/vbousquet/vpx_lightmapper/releases).
 2. In blender, go to : Edit -> Preferences -> Add-ons -> Install.
 3. Select the downloaded file.
-4. This add-on requires external python dependencies that may not be available with your Blender installation. If so, it will show an 'install dependencies' button that you need to perform before use. Depending on your security configuration, this additional installation step may need to be performed from a Blender instance started with administrator rights.
+4. This add-on requires external python dependencies that may not be available with your Blender installation. If so, it will show an 'install dependencies' button that you need to perform before use. Depending on your security configuration, this additional installation step may need to be performed from a Blender instance started with administrator rights. You may also have to restart Blender after installation.
 
 ### Visual Pinball X with additive blended primitives
 
@@ -47,8 +51,8 @@ Additionnally, this tool use an experimental build of Visual Pinball X which add
 
 ### Better packing of UV maps
 
-At some points bake maps have to be tightly packed in a big UV map. For this, Blender offers a default operator called 'Pack Islands' which give ok results. For better packing, you can choose to install and use other UV map packing tools like:
-- [UV Packer](https://www.uv-packer.com/) which works fine (better than Blender's default) and is free,
+At some points bake maps have to be tightly packed in a big UV map. For this, Blender offers a default operator called 'Pack Islands' which give not that good results. For better packing, you can choose to install and use other UV map packing tools like:
+- [UV Packer](https://www.uv-packer.com/) which works great (far better than Blender's default) and is free,
 - [UV Pack master](https://uvpackmaster.com/) which is known to give very good results, but needs a paid license.
 
 ## Overview
@@ -60,21 +64,19 @@ This tool is splitted in 3 modules which are accessed through the usual Blender 
 The workflow can be whatever you want, but the tool was designed around the following one:
 1. Create a table in VPX
 2. Import the table in Blender (or update if this is done after the first iteration) 
-3. Configure its baking (create light groups, bake groups, bake modes,...)
+3. Adjust the generated baking configuration (light groups, bake groups, bake modes,...)
 4. Improve the materials and adjust the lights in Blender
 5. Bake
 6. Review the result direclty inside Blender
-7. Export bakes (and generate a little integration script)
-8. Import in VPX, hide all the visual elements that have been baked
-9. Add the little generated script to the table script
-10. Test and adjust light factors in VPX
-11. When the table is ready to be released, create a copy of the table, remove all the hidden visual elements and initial textures to get a small size version.
+7. Export an updated table with all the bakes and and updated script with lightmap synchronization integrated
+10. Test and adjust light factors in VPX, eventually go back to step 2, using update button
+11. When the table is ready to be released, export using the option to remove all the hidden visual elements and initial textures to get a small file size.
 
 The tool expects a scene using the following collections:
 - 'VLM.Trash': deleted objects, not rendered
 - 'VLM.Hidden': hidden objects, not rendered
 - 'VLM.Indirect': objects which are not baked (not included in the output meshes and textures) but *indirectly* influence the lighting. For example this can be used for trigger wires, gate wires,...
-- *TODO* 'VLM.Overlays': objects which are not baked (not included in the output meshes and textures) but *directly* influence the lighting. For example this can be used for insert text overlays,...
+- 'VLM.Overlays': objects which are not baked (not included in the output meshes and textures) but *directly* influence the lighting. For example this can be used for insert text overlays,...
 - 'VLM.Light Groups': this collection hosts sub-collections which define each lighting situation (see below).
 - 'VLM.Bake Groups': this collection hosts sub-collections which define each bake group (see below).
 
@@ -84,7 +86,7 @@ The UI is available in the scene property panel, inside the "VPX Light Mapper" p
 
 The import tool is used to create a scene setup (empty or from an existing table), then update it. The initial imports will create the default collections, loads everything and try to set up the right collections. A few things to note:
 - All flasher are imported initially hidden since they are mainly use for lighting effects. You will have to move the ones you need to the wanted bake groups.
-- Lights are imported as emitting geometry or point lights depending on the 'bulb' option in VPX.
+- Lights are imported as emitting geometry or point lights depending on the 'bulb' option in VPX. Lights which arelikely inserts follow a specific process (generate a slightly reflective cup below playfield, generate a translucency map for the playfield)
 - Movable parts of gates, spinner, triggers and bumpers are placed in the indirect collection.
 
 When updating, the process is the following:
@@ -113,6 +115,7 @@ The lightmap baker automates all the baking process according to the following w
 3. Generate a base optimized mesh from all the objects, suitable for fixed view baking (including preliminary mesh optimization, and automatically subdivision to avoid projection artefacts)
 4. For each light group, derive an optimized mesh by removing unlit faces
 5. For each of these meshes, prepare a packed bake map from the initial renders
+6. Combine all this packed bake/lightmap together, except for playfield bakemaps
 
 In the collection property panel, each bake groups has a 'bake mode' which determine how it will be processed:
 - Default
@@ -123,8 +126,6 @@ In the collection property panel, each bake groups has a 'bake mode' which deter
 	- Light map behave exactly the same as in default mode and are merged together (including the ones from default mode groups)
 - *TODO* Movable
 	- Solid and light map bake outputs splitted mesh per object in the bake group, keeping each object origin
-
-*TODO* Except for playfield solid images, all texture can be optionally combined together for better performance/mem usage/file size.
 
 Note that playfield bake mode is rendered from the camera point of view to have the right view dependent shading.
 
@@ -142,28 +143,35 @@ To avoid ending up with very large meshes (in terms of number of faces, as well 
 - pruning duplicate vertices,
 - performing a limited dissolve of the mesh (see Blender doc),
 - performing backface culling,
-- removing unlit faces for light maps.
+- removing unlit faces from lightmaps.
 
 ## Export tool
 
-Exporting consist of:
-- generating the packed bake map (in the bake process, rendering is performed but not packing the result for each bake model) as a PNG and optionally as a WebP file,
-- exporting the bake mesh to a wavefront OBJ file that can be easily imported inside VPX,
-- *TODO* generating a small script that can be copy/pasted inside the table script to animate the lightmaps according to the corresponding light state.
+Exporting consist of generating a new VPX table file with:
+- the new packed bake/lightmap images,
+- the bake/lightmap primitives,
+- an updated script for lightmap synchronization,
+- a timer to drive the script.
+
+The exporter has an option to decide what to do with the initial items of the table that have been baked:
+- Default: don't touh them,
+- Hide: hide items that have been baked,
+- Remove: remove items that have been baked and do not have physics, hide the one that have been baked but are needed for physics,
+- Remove all: same as remove, but also remove images that are not needed anymore.
 
 ## Advanced use
 
 ### Plastics
 
-The importer has an option to detect plastic walls and process them accordingly. If set, all wall with a thickness from 2.5 to 3.5 VP units will be processed like this:
-- place the top material at the bottom,
-- set sides and top material to a predefined transparent plastic material,
-- set the bottom material to be shaded as translucent instead of diffuse,
-- *TODO* bevel the edges of the resulting mesh.
+The importer has an option to detect plastic walls and process them accordingly. If set, all walls with a thickness from 2.5 to 3.5 VP units will be processed like this:
+- place the top material at the bottom, and set it to be shaded as translucent instead of diffuse,
+- set side material to a predefined transparent plastic material,
+- set top material to a predefined transparent plastic material, with alpha blending support,
+- bevel the edges of the resulting mesh (only for baking, the bevel is not exported).
 
 ### Inserts
 
 The importer has an option to detect inserts (lights placed on the playfield, with a name which does not start by 'gi') and apply the following process:
 - move light slightly below playfield,
 - generate a cup mesh, opened on the top side, corresponding to the VPX light shape, with a core reflective material,
-- adjust the playfield material to be partly translucent.
+- adjust the playfield material to be partly translucent for the inserts, using an automatically generated translucency map.
