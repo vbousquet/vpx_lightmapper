@@ -30,7 +30,7 @@ def find_layer_collection(root_layer_collection, col):
     return found
 
 
-def create_collection(context, name, parent, excluded, create = True):
+def create_collection(context, name, parent, create = True):
     if name not in bpy.data.collections:
         if not create or parent is None:
             return False, None
@@ -65,7 +65,7 @@ def get_collection(name, create=True):
             find_layer_collection(context.view_layer.layer_collection, c).exclude = True
         return c
     if name == 'INDIRECT':
-        n, c = create_collection(context, "VLM.Indirect", get_collection('ROOT', create), create, True)
+        n, c = create_collection(context, "VLM.Indirect", get_collection('ROOT', create), create)
         if n:
             find_layer_collection(context.view_layer.layer_collection, c).indirect_only = True
         return c
@@ -120,18 +120,18 @@ def setup_collections():
 def push_state():
     state = []
     for id in collection_ids:
-        col = get_collection(id)
-        exc = find_layer_collection(bpy.context.view_layer.layer_collection, col).exclude
-        state.append((exc, col.hide_render, col.hide_viewport))
+        col = get_collection(id, False)
+        if col:
+            exclude = find_layer_collection(bpy.context.view_layer.layer_collection, col).exclude
+            state.append((col, exclude, col.hide_render, col.hide_viewport))
     return state
 
 
 def pop_state(state):
-    for id, s in zip(collection_ids, state):
-        col = get_collection(id)
-        find_layer_collection(bpy.context.view_layer.layer_collection, col).exclude = s[0]
-        col.hide_render = s[1]
-        col.hide_viewport = s[2]
+    for col, exclude, hide_render, hide_viewport in state:
+        find_layer_collection(bpy.context.view_layer.layer_collection, col).exclude = exclude
+        col.hide_render = hide_render
+        col.hide_viewport = hide_viewport
 
 
 def move_to_col(obj, target_col):
