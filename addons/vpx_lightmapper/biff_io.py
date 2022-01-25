@@ -70,6 +70,8 @@ class BIFF_reader:
         return i
 
     def get_str(self, count):
+        if count == 0:
+            return ''
         pos_0 = count
         for p in range(count):
             if self.data[self.pos+p] == 0:
@@ -85,6 +87,8 @@ class BIFF_reader:
     
     def get_wide_string(self):
         count = self.get_u32()
+        if count == 0:
+            return ''
         i = str(self.data[self.pos:self.pos+count], 'utf-16-le')
         self.pos = self.pos + count
         self.bytes_in_record_remaining = self.bytes_in_record_remaining - count

@@ -36,7 +36,7 @@ from win32com import storagecon
 
 
 def export_name(object_name):
-    return object_name.replace(".", "_").replace(" ", "_")
+    return object_name.replace(".", "_").replace(" ", "_").replace("-", "_")
 
 
 def export_vpx(context):

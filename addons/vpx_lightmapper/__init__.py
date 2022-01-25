@@ -108,7 +108,7 @@ class VLM_Scene_props(PropertyGroup):
         ],
         default='256'
     )
-    tex_size_old: IntProperty(name="Tex Size:", description="Texture size", default = 256, min = 8)
+    render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
     padding: IntProperty(name="Padding:", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
     # Exporter options
@@ -150,7 +150,8 @@ class VLM_Collection_props(PropertyGroup):
 
 class VLM_Object_props(PropertyGroup):
     # Bake objects properties
-    vpx_object: StringProperty(name="VPX", description="Name of reference VPX object", default = '')
+    vpx_object: StringProperty(name="VPX", description="Identifier of reference VPX object", default = '')
+    vpx_subpart: StringProperty(name="Part", description="Sub part identifier for multi part object like bumpers,...", default = '')
     import_mesh: BoolProperty(name="Mesh", description="Update mesh on import", default = True)
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
@@ -643,6 +644,7 @@ class VLM_PT_3D(bpy.types.Panel):
             show_info = False
             if len(bake_objects) == 1:
                 layout.prop(bake_objects[0].vlmSettings, 'vpx_object', text='VPX', expand=True)
+                layout.prop(bake_objects[0].vlmSettings, 'vpx_subpart', text='Part', expand=True)
             
             layout.label(text="Import options:")
             row = layout.row(align=True)

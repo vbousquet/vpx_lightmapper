@@ -32,6 +32,8 @@ global_scale = vlm_utils.global_scale
 # - Allow to use either internal UV packing or UVPacker addon (which is really really better)
 # - Allow to have an object (or a group) to be baked to a target object (like bake selected to active in Blender) for inserts,...
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
+# - Sort faces front to back for static, back to front for active
+
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -127,6 +129,7 @@ def compute_render_groups(context):
     opt_mask_size = 1024 # Height used for the object masks
     opt_mask_threshold = 0.0 # Alpha threshold used when building object groups
     opt_force_render = False # Force rendering even if cache is available
+    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     
     col_state = vlm_collections.push_state()
     rlc = context.view_layer.layer_collection
@@ -141,7 +144,7 @@ def compute_render_groups(context):
     context.scene.render.film_transparent = True
     context.scene.eevee.taa_render_samples = 1
     context.scene.render.resolution_y = opt_mask_size
-    context.scene.render.resolution_x = opt_mask_size / 2
+    context.scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
     context.scene.render.image_settings.file_format = "PNG"
     context.scene.render.image_settings.color_mode = 'RGBA'
     context.scene.render.image_settings.color_depth = '8'
@@ -190,8 +193,9 @@ def render_all_groups(context):
     vlmProps = context.scene.vlmSettings
     opt_tex_size = int(vlmProps.tex_size)
     opt_force_render = False # Force rendering even if cache is available
+    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     context.scene.render.resolution_y = opt_tex_size
-    context.scene.render.resolution_x = opt_tex_size / 2
+    context.scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio)
     context.scene.render.image_settings.file_format = 'OPEN_EXR'
     context.scene.render.image_settings.color_mode = 'RGBA'
     context.scene.render.image_settings.color_depth = '16'
@@ -372,7 +376,7 @@ def create_bake_meshes(context):
     """
     print("\nCreating all bake meshes")
     start_time = time.time()
-    camera = bpy.data.objects['Camera']
+    camera = bpy.data.objects['Bake Camera']
     vlmProps = context.scene.vlmSettings
     n_render_groups = get_n_render_groups(context)
 
@@ -543,6 +547,8 @@ def create_bake_meshes(context):
                 face.select = False
             for edge in bme.edges:
                 edge.select = False
+                if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
+                    continue
                 ua, va = edge.verts[0].link_loops[0][bme.loops.layers.uv.active].uv
                 ub, vb = edge.verts[1].link_loops[0][bme.loops.layers.uv.active].uv
                 l = math.sqrt(0.25*(ub-ua)*(ub-ua)+(vb-va)*(vb-va))
@@ -618,7 +624,8 @@ def create_bake_meshes(context):
         bpy.ops.object.select_all(action='DESELECT')
         vmap_instance.select_set(True)
         context.view_layer.objects.active = vmap_instance
-        vmaps = build_visibility_map(vmap_instance.data, n_render_groups, opt_lightmap_prune_res)
+        render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
+        vmaps = build_visibility_map(vmap_instance.data, n_render_groups, int(opt_lightmap_prune_res * render_aspect_ratio), opt_lightmap_prune_res)
         tmp_col.objects.unlink(vmap_instance)
         bpy.data.objects.remove(vmap_instance)
 
@@ -793,14 +800,13 @@ def orient2d(ax, ay, bx, by, x, y):
     return (bx-ax)*(y-ay) - (by-ay)*(x-ax)
 
 
-def build_visibility_map(bake_instance_mesh, n_render_groups, height):
+def build_visibility_map(bake_instance_mesh, n_render_groups, width, height):
     """Build a set of rasterized maps where each pixels contains the list of 
     visible faces for the given render group.
     """
     bpy.ops.object.mode_set(mode='EDIT')
     bm = bmesh.from_edit_mesh(bake_instance_mesh)
     uv_layer = bm.loops.layers.uv["UVMap"]
-    width = max(1, int(height/2))
     vmaps = [[[] for xy in range(width * height)] for g in range(n_render_groups)]
     bm.faces.ensure_lookup_table()
     for face in bm.faces:
