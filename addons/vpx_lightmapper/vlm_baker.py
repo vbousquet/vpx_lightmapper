@@ -30,9 +30,10 @@ global_scale = vlm_utils.global_scale
 
 # TODO
 # - Allow to use either internal UV packing or UVPacker addon (which is really really better)
-# - Allow to have an object (or a group) to be baked to a target object (like bake selected to active in Blender) for inserts,...
+# - Allow to have an object (or a group) to be baked to a target object (like bake selected to active in Blender) for inserts,... => one way would be to use the overlay system now that it is fully functionnal
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
 # - Sort faces front to back for static, back to front for active
+# - Save object masks as BW to save disk space
 
 
 
@@ -248,9 +249,11 @@ def render_all_groups(context):
     def setup_light_scenario(context, scenario):
         if scenario[1] is None: # Base render
             context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
+            context.scene.render.image_settings.color_mode = 'RGBA'
             return 0, lambda a : a
         else:
             context.scene.world = bpy.data.worlds["VPX.Env.Black"]
+            context.scene.render.image_settings.color_mode = 'RGB'
             if scenario[2] is None: # Light group render
                 if vlm_utils.is_same_light_color(scenario[1].objects, 0.1):
                     colors = [o.data.color for o in scenario[1].objects if o.type=='LIGHT']
@@ -283,6 +286,7 @@ def render_all_groups(context):
                 print(f". Rendering overlay ({len(overlays)} objects) for '{scenario[0]}' ({i}/{n_lighting_situations})")
                 state, restore_func = setup_light_scenario(context, scenario)
                 n_render_performed = n_render_performed + 1
+                context.scene.render.image_settings.color_mode = 'RGBA' # Force alpha channel, even for lightmaps
                 bpy.ops.render.render(write_still=True)
                 restore_func(state)
         vlm_collections.restore_all_col_links(initial_collections)

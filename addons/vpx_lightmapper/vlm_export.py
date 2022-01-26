@@ -33,6 +33,7 @@ from win32com import storagecon
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
 # - Export to static rendering / not active / active according to the part exported (static, translucency, below playfield ?)
 # - Sort faces of bakes (not lightmaps) from front to back except for active bakes which should be sorted from back to front
+# - Use depth bias to allow group rendering (same texture, same material, see primitive.cpp) / check if setting depth bias of lightmap to limit state changes improve performance (create depth groups based on packmap index for efficient batching)
 
 
 def export_name(object_name):
@@ -59,7 +60,7 @@ def export_vpx(context):
     overlay_col = vlm_collections.get_collection('OVERLAY')
     light_col = vlm_collections.get_collection('LIGHTS')
     if not os.path.isfile(input_path):
-        self.report({'WARNING'},f"{input_path} does not exist")
+        print(f"{input_path} does not exist")
         return {'CANCELLED'}
     
     output_path = bpy.path.abspath(f"//{os.path.splitext(bpy.path.basename(input_path))[0]} - VLM.vpx")

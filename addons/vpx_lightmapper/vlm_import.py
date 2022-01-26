@@ -40,6 +40,8 @@ global_scale = vlm_utils.global_scale
 # - JP's Star Trek has a wrong texture positionning (panel above ramp)
 # - Try importing inserts as transparent holes in PF, with an overlay flat face for better perf (smaller overdraw) and packing
 # - Identify static/active bake and export accordingly
+# - Some core meshes seem to loose there smoothing data (light bulb for example, check and fix)
+# - Add a 1 subdivision for light bulbs ?
 
 
 
@@ -1789,6 +1791,7 @@ def read_vpx(context, filepath):
     if playfield_obj:
         [col.objects.unlink(playfield_obj) for col in playfield_obj.users_collection]
         pfmesh = playfield_obj.data
+        pfmesh.transform(playfield_obj.matrix_basis)
     else:
         vert = [(playfield_left, -playfield_bottom, 0.0), (playfield_right, -playfield_bottom, 0.0), (playfield_left, -playfield_top, 0.0), (playfield_right, -playfield_top, 0.0)]
         pfmesh = bpy.data.meshes.new("VPX.Mesh.Playfield")
@@ -1830,60 +1833,16 @@ def read_vpx(context, filepath):
         if obj.type == 'MESH' and not obj.data.has_custom_normals:
             print(f". Warning '{obj.name}' does not have split normals. This will break normals on the final bake mesh.")
 
-    # Compute the view camera with the following constraints:
-    # - look at the center of the playfield
-    # - orientation if the sum of inclination and layback (since layback is a fake rotation in VPX to avoid too much narrowing at the back of the pinball)
-    # - fit to all baked objects
-    # - satisfying the target texture size on the vertical axis (height of the render)
+    # Setup the bake camera, with an inclination equals to the sum of layback and inclination
+    # since layback is a fake rotation in VPX to avoid too much narrowing at the back of the pinball
     camera_object = context.scene.objects.get('Bake Camera') 
     if not camera_object:
         camera_data = bpy.data.cameras.new(name='Camera')
         camera_object = bpy.data.objects.new('Bake Camera', camera_data)
         root_col.objects.link(camera_object)
-    camera_angle = radians(camera_layback + camera_inclination)
-    camera_object.rotation_euler = mathutils.Euler((camera_angle, 0.0, 0.0), 'XYZ')
-    camera_object.location = (0.5 * (playfield_left + playfield_right), -0.5 * (playfield_top + playfield_bottom), 0)
     camera_object.data.angle = radians(camera_fov)
-    camera_object.data.shift_x = 0
-    camera_object.data.shift_y = 0
-    view_vector = mathutils.Vector((0, math.sin(camera_angle), -math.cos(camera_angle)))
-    aspect_ratio = 1.0
-    for i in range(3):
-        # Compute the camera distance with the current aspect ratio
-        camera_object.location = (0.5 * (playfield_left + playfield_right), -0.5 * (playfield_top + playfield_bottom), 0)
-        modelview_matrix = camera_object.matrix_basis.inverted()
-        s = 1.0 / math.tan(radians(camera_fov)/2.0)
-        sx = s if aspect_ratio > 1.0 else s/aspect_ratio
-        sy = s if aspect_ratio < 1.0 else s*aspect_ratio
-        min_dist = 0
-        for obj in bake_col.all_objects:
-            if obj.type == 'MESH':
-                bbox_corners = [modelview_matrix @ obj.matrix_world @ mathutils.Vector(corner) for corner in obj.bound_box]
-                proj_x = map(lambda a: abs(sx * a.x + a.z), bbox_corners)
-                proj_y = map(lambda a: abs(sy * a.y + a.z), bbox_corners)
-                min_dist = max(min_dist, max(proj_x), max(proj_y))
-        camera_object.location.y -= min_dist * view_vector.y
-        camera_object.location.z -= min_dist * view_vector.z
-        # adjust aspect ratio and compute camera shift to fill the render output
-        modelview_matrix = camera_object.matrix_basis.inverted()
-        projection_matrix = camera_object.calc_matrix_camera(context.evaluated_depsgraph_get())
-        max_x = max_y = min_x = min_y = 0
-        for obj in bake_col.all_objects:
-            if obj.type == 'MESH':
-                bbox_corners = [projection_matrix @ modelview_matrix @ obj.matrix_world @ mathutils.Vector((corner[0], corner[1], corner[2], 1)) for corner in obj.bound_box]
-                proj_x = [o for o in map(lambda a: a.x / a.w, bbox_corners)]
-                proj_y = [o for o in map(lambda a: a.y / a.w, bbox_corners)]
-                min_x = min(min_x, min(proj_x))
-                min_y = min(min_y, min(proj_y))
-                max_x = max(max_x, max(proj_x))
-                max_y = max(max_y, max(proj_y))
-        aspect_ratio = (max_x - min_x) / (max_y - min_y)
-        context.scene.render.resolution_x = int(opt_tex_size * aspect_ratio)
-        context.scene.render.resolution_y = opt_tex_size
-        context.scene.vlmSettings.render_aspect_ratio = aspect_ratio
-    # Center on render output
-    camera_object.data.shift_x = 0.25 * (max_x + min_x)
-    camera_object.data.shift_y = 0.25 * (max_y + min_y)
+    camera_angle = radians(camera_layback + camera_inclination)
+    context.scene.vlmSettings.camera_inclination = camera_layback + camera_inclination
 
     # Create a translucency map for the playfield (translucent for inserts, diffuse otherwise)
     if len(pfmesh.materials) > 0 and pfmesh.materials[0] is not None and 'TranslucencyMap' in pfmesh.materials[0].node_tree.nodes:

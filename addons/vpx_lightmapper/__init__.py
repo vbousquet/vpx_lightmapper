@@ -96,6 +96,7 @@ class VLM_Scene_props(PropertyGroup):
     use_pf_translucency_map: BoolProperty(name="PF Translucency Map", description="Generate a translucency map for inserts", default = True)
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
+    camera_inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 45.0, update=vlm_utils.camera_inclination_update)
     # Baker options
     tex_size: EnumProperty(
         items=[
@@ -564,6 +565,9 @@ class VLM_PT_Properties(bpy.types.Panel):
         row = layout.row()
         row.label(text='')
         row.prop(vlmProps, "insert_intensity")
+        row = layout.row()
+        row.label(text='')
+        row.prop(vlmProps, "camera_inclination")
 
         layout.separator()
 
