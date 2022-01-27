@@ -17,6 +17,7 @@ import bpy
 import os
 import zlib
 import struct
+import re
 from . import biff_io
 from . import vlm_utils
 from . import vlm_collections
@@ -32,8 +33,6 @@ from win32com import storagecon
 # TODO
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
 # - Export to static rendering / not active / active according to the part exported (static, translucency, below playfield ?)
-# - Sort faces of bakes (not lightmaps) from front to back except for active bakes which should be sorted from back to front
-# - Use depth bias to allow group rendering (same texture, same material, see primitive.cpp) / check if setting depth bias of lightmap to limit state changes improve performance (create depth groups based on packmap index for efficient batching)
 
 
 def export_name(object_name):
@@ -49,6 +48,9 @@ def export_vpx(context):
     . Add all bakes as primitives with 'VLM.' prefixed name
     . Update the table script with the needed light/lightmap sync code
     """
+    if context.blend_data.filepath == '':
+        print('ERROR: you must save your project before baking')
+        return {'CANCELLED'}
     vlmProps = context.scene.vlmSettings
     result_col = vlm_collections.get_collection('BAKE RESULT')
     bakepath = vlm_utils.get_bakepath(context)
@@ -192,6 +194,11 @@ def export_vpx(context):
                         item_data.put_float(-28)
             if item_type == 20:
                 table_flashers.append(name)
+                if is_baked_light:
+                    if item_data.tag == 'FLAX':
+                        x = item_data.get_float()
+                        item_data.skip(-4)
+                        item_data.put_float(x + 1000)
             if visibility_field and is_part_baked:
                 item_data.put_bool(False)
             if reflection_field and is_part_baked:
@@ -468,10 +475,19 @@ def export_vpx(context):
                     code = br.get_string()
                     br.pos = code_pos
                     br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
-                    # FIXME find a previously added ZVLM block, load the custom intensity from this block, then replace it
-                    code += "\n\n"
-                    code += "' ZVLM Begin of Virtual Pinball X Light Mapper generated code\n"
-                    code += "Sub VLMTimer_Timer\n"
+                    updates = []
+                    def elem_ref(name):
+                        name = name[:31] if len(name) > 31 else name
+                        if ' ' in name or '.' in name:
+                            return f'GetElementByName("{name}")'
+                        else:
+                            return name
+                    def push_update(mode, vpx_ref, obj_ref, intensity, sync_color):
+                        if mode == 0:
+                            return f'	UpdateLightMapFromLight {vpx_ref}, {obj_ref}, {intensity}, {"True" if sync_color else "False"}\n'
+                        else:
+                            return f'	UpdateLightMapFromFlasher {vpx_ref}, {obj_ref}, {intensity}, {"True" if sync_color else "False"}\n'
+                    
                     for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap']:
                         sync_color = False
                         if obj.vlmSettings.bake_light in light_col.children:
@@ -482,34 +498,69 @@ def export_vpx(context):
                             baked_light = context.scene.objects[obj.vlmSettings.bake_light]
                             sync_color = baked_light.type == 'LIGHT'
                             vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object
-                        def elem_ref(name):
-                            name = name[:31] if len(name) > 31 else name
-                            if ' ' in name or '.' in name:
-                                return f'GetElementByName("{name}")'
-                            else:
-                                return name
                         if vpx_name in table_lights:
-                            code += f'	UpdateLightMapFromLight {elem_ref(vpx_name)}, {elem_ref(export_name(obj.name))}, 100, {"True" if sync_color else "False"}\n'
+                            updates.append((elem_ref(vpx_name), 0, elem_ref(obj.name), sync_color))
                         elif vpx_name in table_flashers:
-                            code += f'	UpdateLightMapFromFlasher {elem_ref(vpx_name)}, {elem_ref(export_name(obj.name))}, 100\n'
+                            updates.append((elem_ref(vpx_name), 1, elem_ref(obj.name), sync_color))
                         else:
-                            print(f". {obj.name} is missing a vpx light object to be synchronized on")
-                    code += "End Sub\n"
-                    code += "\n"
-                    code += "Sub UpdateLightMapFromFlasher(flasher, lightmap, intensity_scale)\n"
-                    code += "	If flasher.Visible Then\n"
-                    code += "		lightmap.Opacity = intensity_scale * flasher.Opacity / 100.0\n"
-                    code += "	Else\n"
-                    code += "		lightmap.Opacity = 0\n"
-                    code += "	End If\n"
-                    code += "End Sub\n"
-                    code += "\n"
-                    code += "Sub UpdateLightMapFromLight(light, lightmap, intensity_scale, sync_color)\n"
-                    code += "	Dim percent: percent = light.GetCurrentIntensity() / light.Intensity\n"
-                    code += "	lightmap.Opacity = intensity_scale * percent\n"
-                    code += "	If sync_color Then lightmap.Color = light.colorfull\n"
-                    code += "End Sub\n"
-                    code += "' ZVLM End of Virtual Pinball X Light Mapper generated code\n"
+                            print(f". {obj.name} is missing a vpx light/flasher object to be synchronized on")
+
+                    in_block = 0 # Search and update existing block if any
+                    for line in code.splitlines():
+                        line_stripped = line.strip()
+                        if in_block == 1:
+                            if line_stripped.startswith('End Sub'):
+                                in_block = 2
+                                for upd in updates:
+                                    code += push_update(upd[1], upd[0], upd[2], 100, upd[3])
+                                code += "End Sub\n"
+                            else:
+                                updl = re.match("UpdateLightMapFromLight\s*([^,]*),\s*([^,]*),\s*(\d*),\s*(True|False)\s*", line_stripped)
+                                updf = re.match("UpdateLightMapFromFlasher\s*([^,]*),\s*([^,]*),\s*(\d*),\s*(True|False)\s*", line_stripped)
+                                if updl: 
+                                    vpx_ref, obj_ref, intensity, sync_color = updl.groups()
+                                elif updf:
+                                    vpx_ref, obj_ref, intensity, sync_color = updf.groups()
+                                else:
+                                    vpx_ref = obj_ref = intensity = sync_color = None
+                                if vpx_ref:
+                                    upd = next((u for u in updates if u[0] == vpx_ref), None)
+                                    if upd:
+                                        updates.remove(upd)
+                                        if upd[2] != obj_ref: print(f'. Warning: for {vpx_ref}, lightmap changed from {obj_ref} to {upd[2]}')
+                                        code += push_update(upd[1], upd[0], upd[2], intensity, upd[3])
+                                    else:
+                                        code += f"  ' {line_stripped}\n"
+                                else:
+                                    code += f"{line}\n"
+                        elif in_block == 0 and line_stripped.startswith('Sub VLMTimer_Timer'):
+                            in_block = 1
+                    if in_block < 2: # Block need to be created
+                        code += "\n\n"
+                        code += "' ===============================================================\n"
+                        code += "' ZVLM       Virtual Pinball X Light Mapper generated code\n"
+                        code += "' ===============================================================\n"
+                        code += "' Warning: Only intensity can be edited in the following code block\n"
+                        code += "Sub VLMTimer_Timer\n"
+                        for upd in updates:
+                            code += push_update(upd[1], upd[0], upd[2], 100, upd[3])
+                        code += "End Sub\n\n"
+                        code += "Sub UpdateLightMapFromFlasher(flasher, lightmap, intensity_scale, sync_color)\n"
+                        code += "	If flasher.Visible Then\n"
+                        code += "		If sync_color Then lightmap.Color = flasher.Color\n"
+                        code += "		lightmap.Opacity = intensity_scale * flasher.IntensityScale * flasher.Opacity / 1000.0\n"
+                        code += "	    lightmap.Visible = lightmap.Opacity > 0.1\n"
+                        code += "	Else\n"
+                        code += "		lightmap.Opacity = 0\n"
+                        code += "	    lightmap.Visible = False\n"
+                        code += "	End If\n"
+                        code += "End Sub\n\n"
+                        code += "Sub UpdateLightMapFromLight(light, lightmap, intensity_scale, sync_color)\n"
+                        code += "	If sync_color Then lightmap.Color = light.Colorfull\n"
+                        code += "	Dim percent: percent = light.GetCurrentIntensity() / light.Intensity\n"
+                        code += "	lightmap.Opacity = intensity_scale * percent\n"
+                        code += "	lightmap.Visible = lightmap.Opacity > 0.1\n"
+                        code += "End Sub\n\n"
                     wr = biff_io.BIFF_writer()
                     wr.write_string(code)
                     br.insert_data(wr.get_data())
