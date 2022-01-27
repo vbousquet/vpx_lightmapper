@@ -30,11 +30,14 @@ global_scale = vlm_utils.global_scale
 
 # TODO
 # - Allow to use either internal UV packing or UVPacker addon (which is really really better)
-# - Allow to have an object (or a group) to be baked to a target object (like bake selected to active in Blender) for inserts,... => one way would be to use the overlay system now that it is fully functionnal
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
 # - Sort faces front to back for static, back to front for active
 # - Save object masks as BW to save disk space
+# - Evaluate all compression options for renders to save space
+# - Delete loose vertices/edges after face pruning
 
+# DONE
+# - Allow to have an object (or a group) to be baked to a target object (like bake selected to active in Blender) for inserts,... => just use the overlay system now that it is fully functionnal
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -125,6 +128,9 @@ def compute_render_groups(context):
     """Evaluate the set of bake groups (groups of objects that do not overlap when rendered 
     from the camera point of view) and store the result in the object properties.
     """
+    if context.blend_data.filepath == '':
+        print('ERROR: you must save your project before baking')
+        return
     start_time = time.time()
     print(f"\nEvaluating render groups")
     opt_mask_size = 1024 # Height used for the object masks
@@ -188,6 +194,9 @@ def compute_render_groups(context):
 def render_all_groups(context):
     """Render all render groups for all lighting situations
     """
+    if context.blend_data.filepath == '':
+        print('ERROR: you must save your project before baking')
+        return
     start_time = time.time()
     bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
@@ -199,6 +208,9 @@ def render_all_groups(context):
     context.scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio)
     context.scene.render.image_settings.file_format = 'OPEN_EXR'
     context.scene.render.image_settings.color_mode = 'RGBA'
+    context.scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
+    # another way to compact lightmaps is to remove the alpha channel using the composer (moderate win and makes the code more complex)
+    context.scene.render.image_settings.exr_codec = 'DWAA' # Lossy compression (5x to 10x smaller on lightmaps)
     context.scene.render.image_settings.color_depth = '16'
     context.scene.view_layers["ViewLayer"].use_pass_z = True
     context.scene.render.film_transparent = True
@@ -378,11 +390,16 @@ def render_all_groups(context):
 def create_bake_meshes(context):
     """Create all bake meshes, building from the render groups and renders cached during the previous steps
     """
+    if context.blend_data.filepath == '':
+        print('ERROR: you must save your project before baking')
+        return
     print("\nCreating all bake meshes")
     start_time = time.time()
     camera = bpy.data.objects['Bake Camera']
     vlmProps = context.scene.vlmSettings
     n_render_groups = get_n_render_groups(context)
+    cursor_loc = context.scene.cursor.location
+    context.scene.cursor.location = camera.location # Used for sorting faces by distance from view point
 
     # Purge unlinked datas to avoid wrong names
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -606,6 +623,10 @@ def create_bake_meshes(context):
         bm = bmesh.from_edit_mesh(bake_mesh)
         bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
         bmesh.update_edit_mesh(bake_mesh)
+        # Sort front to back faces for bake mesh
+        # FIXME for 'active' objects, we should reverse the sorting
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.sort_elements(type='CURSOR_DISTANCE', elements={'VERT', 'FACE'}, reverse=False) # nearest to farthest
         bpy.ops.object.mode_set(mode='OBJECT')
 
         # Create lightmap shell (extrude mesh along vertex normal according to its shell factor)
@@ -653,6 +674,10 @@ def create_bake_meshes(context):
                 #prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size)
                 #prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, opt_lightmap_prune_res)
                 prune_lightmap_by_visibility_map(bake_instance_mesh, vlm_utils.get_bakepath(context, type='RENDERS'), name, n_render_groups, vmaps, opt_lightmap_prune_res)
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.mesh.select_all(action='SELECT')
+                bpy.ops.mesh.sort_elements(type='CURSOR_DISTANCE', elements={'VERT', 'FACE'}, reverse=True) # Farthest to nearest
+                bpy.ops.object.mode_set(mode='OBJECT')
 
             # Skip mesh if we do not have any polygons left
             if not bake_instance.data.polygons:
@@ -698,6 +723,7 @@ def create_bake_meshes(context):
         tmp_col.objects.unlink(bake_target)
 
     # Final view setup
+    context.scene.cursor.location = cursor_loc
     vlm_collections.delete_collection(tmp_col)
     vlm_collections.find_layer_collection(rlc, result_col).exclude = False
     vlm_collections.find_layer_collection(rlc, lights_col).exclude = True
@@ -1551,4 +1577,7 @@ def render_packmaps_eevee(context):
     
  
 def render_packmaps(context):
+    if context.blend_data.filepath == '':
+        print('ERROR: you must save your project before baking')
+        return
     render_packmaps_bake(context)
