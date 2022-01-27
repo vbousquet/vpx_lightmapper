@@ -168,22 +168,22 @@ This little guide gives you the step to create your first lightmap baked table:
 3. Delete everything from the default Blender scene
 4. In the scene panel, press the 'New from VPX' button, and select the saved VPX table
 5. Press 0 for camera point of view
-7. In the 3D view, in thr ight panel (N shotcut), select the VLM pane
-6. In the 3D view, select the primitives on the left and right side of the table, then click 'Hide' in the VLM side panel
-7. In the 'Active' collection, select all shadow objects ('FlipperRsh', 'BallShadow1',...) and press the 'Hide' button of the VLM side panel
-8. Move the remaining primitive of the 'Active' collection to the 'Default' collection
-9. Save your scene
-10. In the scene panel, select a target resolution (start with very low for an ugly but fast preview), then press 'Batch Bake & Export'
-11. Wait (this may be long depending on your computer and the resolution), watching in the console what is happening
-12. Open the new VPX table with the version of VPX that supports additive blended primitive and play !
-12b You can also preview/inspect the result directly in blender: select 'Rendered' mode for the 3D View, you now have a pink table! Select it, and press 'Load/Unload Renders' in the VLM panel to view it with the baked textures. Do the same for the different bake mesh you want to inspect.
+6. In the 3D view, in thr ight panel (N shotcut), select the VLM pane
+7. In the 3D view, select the primitives on the left and right side of the table, then click 'Hide' in the VLM side panel
+8. In the 'Active' collection, select all shadow objects ('FlipperRsh', 'BallShadow1',...) and press the 'Hide' button of the VLM side panel
+9. Move the remaining primitive of the 'Active' collection to the 'Default' collection
+10. Save your scene
+11. In the scene panel, select a target resolution (start with very low for an ugly but fast preview), then press 'Batch Bake & Export'
+12. Wait (this may be long depending on your computer and the resolution), watching in the console what is happening
+13. Open the new VPX table with the version of VPX that supports additive blended primitive and play !
+14 You can also preview/inspect the result directly in blender: select 'Rendered' mode for the 3D View, you now have a pink table! Select it, and press 'Load/Unload Renders' in the VLM panel to view it with the baked textures. Do the same for the different bake mesh you want to inspect.
 
-Additionally, you should:
-13. Select the 'bake results' objects, the side panel will show to which packmaps they belong. Press 'Select' in the side panel to select all the baked objects belonging to the same packmaps
-14. Pack the UV island using UV packer, with the right padding/texture size, and 'rescale  UV charts' unchecked
-15. Do it for each of the packmap, except the playfield
-16. Clear the packmap cache (the 'Export' folder in the cache)
-17. Press the 'Packmap' button, then the 'Export' button
+Additionally, you should install UV Packer addon, then:
+- Select the 'bake results' objects, the side panel will show to which packmaps they belong. Press 'Select' in the side panel to select all the baked objects belonging to the same packmaps
+- Pack the UV island using UV packer, with the right padding/texture size, and 'rescale  UV charts' unchecked
+- Do it for each of the packmap, except the playfield
+- Clear the packmap cache (the 'Export' folder in the cache)
+- Press the 'Packmap' button, then the 'Export' button
 
 ## Advanced informations
 
