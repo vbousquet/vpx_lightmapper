@@ -39,6 +39,10 @@ from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty,
 from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, Collection)
 from rna_prop_ui import PropertyPanel
 
+# TODO
+# - Add an occluded geometry tool, to identify occluded objects that should be moved to the indirect baking collection
+
+
 
 # Use import.reload for all submodule to allow iterative development using bpy.ops.script.reload()
 if "vlm_dependencies" in locals():
@@ -107,7 +111,7 @@ class VLM_Scene_props(PropertyGroup):
             ('4096', '4096', '4096x4096', '', 4096),
             ('8192', '8192', '8192x8192', '', 8192),
         ],
-        default='256'
+        default='256', update=vlm_utils.camera_inclination_update
     )
     render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
     padding: IntProperty(name="Padding:", description="Padding between bakes", default = 2, min = 0)
