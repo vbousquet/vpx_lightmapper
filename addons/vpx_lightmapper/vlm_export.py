@@ -344,7 +344,6 @@ def export_vpx(context):
         dst_stream.Write(writer.get_data())
         n_game_items += 1
             
-            
     # Mark playfield image has removable
     if next((obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'playfield'), None) is not None:
         br = biff_io.BIFF_reader(src_storage.openstream('GameStg/GameData').read())
@@ -355,7 +354,6 @@ def export_vpx(context):
                 #FIXME removed_images[playfield_image]=True
                 break
             br.skip_tag()
-
 
     # Remove previous packmaps and append the new ones
     n_images = 0
@@ -499,9 +497,9 @@ def export_vpx(context):
                             sync_color = baked_light.type == 'LIGHT'
                             vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object
                         if vpx_name in table_lights:
-                            updates.append((elem_ref(vpx_name), 0, elem_ref(obj.name), sync_color))
+                            updates.append((elem_ref(vpx_name), 0, elem_ref(export_name(obj.name)), sync_color))
                         elif vpx_name in table_flashers:
-                            updates.append((elem_ref(vpx_name), 1, elem_ref(obj.name), sync_color))
+                            updates.append((elem_ref(vpx_name), 1, elem_ref(export_name(obj.name)), sync_color))
                         else:
                             print(f". {obj.name} is missing a vpx light/flasher object to be synchronized on")
 
@@ -540,7 +538,7 @@ def export_vpx(context):
                         code += "' ===============================================================\n"
                         code += "' ZVLM       Virtual Pinball X Light Mapper generated code\n"
                         code += "' ===============================================================\n"
-                        code += "' Warning: Only intensity can be edited in the following code block\n"
+                        code += "' Warning: Only intensity will be preserved if edited and re-exported\n"
                         code += "Sub VLMTimer_Timer\n"
                         for upd in updates:
                             code += push_update(upd[1], upd[0], upd[2], 100, upd[3])
