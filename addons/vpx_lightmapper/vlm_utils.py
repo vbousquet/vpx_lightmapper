@@ -109,7 +109,7 @@ def camera_inclination_update(self, context):
     
     camera_fov = camera_object.data.angle
     camera_inclination = context.scene.vlmSettings.camera_inclination
-    camera_layback = context.scene.vlmSettings.camera_layback
+    camera_layback = context.scene.vlmSettings.camera_layback if context.scene.vlmSettings.enable_layback else 0
     playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
 

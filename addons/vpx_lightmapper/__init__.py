@@ -105,6 +105,7 @@ class VLM_Scene_props(PropertyGroup):
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
     camera_inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 15.0, update=vlm_utils.camera_inclination_update)
     camera_layback: FloatProperty(name="Layback", description="Camera layback", default = 35.0, update=vlm_utils.camera_inclination_update)
+    enable_layback: BoolProperty(name="Enable Layback", description="Toggle layback to ease editing", default = True, update=vlm_utils.camera_inclination_update)
     # Baker options
     tex_size: EnumProperty(
         items=[
@@ -594,11 +595,11 @@ class VLM_PT_Properties(bpy.types.Panel):
         row.prop(vlmProps, "light_size")
         row.prop(vlmProps, "light_intensity")
         row = layout.row()
-        row.label(text='')
+        row.prop(vlmProps, "enable_layback")
         row.prop(vlmProps, "insert_intensity")
         row = layout.row()
-        row.prop(vlmProps, "camera_inclination")
         row.prop(vlmProps, "camera_layback")
+        row.prop(vlmProps, "camera_inclination")
 
         layout.separator()
 
