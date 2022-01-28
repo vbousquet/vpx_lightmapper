@@ -52,9 +52,11 @@ Additionnally, this tool use an experimental build of Visual Pinball X which add
 
 ### Better packing of UV maps
 
-At some points bake maps have to be tightly packed in a big UV map. For this, Blender offers a default operator called 'Pack Islands' which give not that good results. For better packing, you can choose to install and use other UV map packing tools like:
+At some points bake maps have to be tightly packed in a big UV map. For this, Blender offers a default operator called 'Pack Islands' which give not that good results. For better packing, you should install and use another UV map packing tools like:
 - [UV Packer](https://www.uv-packer.com/) which works great (far better than Blender's default) and is free,
 - [UV Pack master](https://uvpackmaster.com/) which is known to give very good results, but needs a paid license.
+
+This add-on natively supports the free [UV Packer](https://www.uv-packer.com/) and fully integrates with him for batch processing. To use this feature, you need to download the UVPacker exe and place it in the addon folder.
 
 ## Overview
 
@@ -186,6 +188,10 @@ Additionally, you should install UV Packer addon, then:
 - Press the 'Packmap' button, then the 'Export' button
 
 ## Advanced informations
+
+### Optimizing the bake mesh (and render time)
+
+As much as possible, you should avoid including occluded (not directly visible) geometry from your bakes. To help you in doing so, teh addon offers a small tool that will identify occluded geometry from the camera view point. You can then choose to mark is as 'Indirect' (it will influence the image but won't be part of the bake mesh). This tool can be accessed from the 3D view, by clicking the button 'Select Occluded'. Note that this can be a lengthy operation. Another side benefit of tagging as indirect the occluded geometry is that this will help limiting the number of render groups, and therefore limit the render time.
 
 ### Plastics
 
