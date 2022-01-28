@@ -24,21 +24,17 @@ from math import radians
 from gpu_extras.batch import batch_for_shader
 from . import vlm_utils
 from . import vlm_collections
+from . import vlm_uvpacker
 from PIL import Image # External dependency
 
 global_scale = vlm_utils.global_scale
 
 # TODO
-# - Allow to use either internal UV packing or UVPacker addon (which is really really better)
-# - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
-# - Sort faces front to back for static, back to front for active
 # - Save object masks as BW to save disk space
-# - Evaluate all compression options for renders to save space
-# - Delete loose vertices/edges after face pruning
-
-# DONE
-# - Allow to have an object (or a group) to be baked to a target object (like bake selected to active in Blender) for inserts,... => just use the overlay system now that it is fully functionnal
-
+# - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
+#   . Object must be UV unwrapped, solid bake from base lighting
+#   . Light map are computed on the UV unwrapped model
+#   . VBS sync position of lightmap models to main
 
 def remove_backfacing(context, obj, eye_position, limit):
     bpy.ops.object.select_all(action='DESELECT')
@@ -537,7 +533,7 @@ def create_bake_meshes(context):
             n_faces = len(bake_target.data.polygons)
             remove_backfacing(context, bake_target, camera.location, opt_backface_limit_angle)
             print(f". {n_faces - len(bake_target.data.polygons)} backfacing faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
-        
+
         # Simplify mesh
         if opt_optimize_mesh:
             n_faces = len(bake_target.data.polygons)
@@ -545,6 +541,7 @@ def create_bake_meshes(context):
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.mesh.remove_doubles(threshold = 0.001 * global_scale)
             bpy.ops.mesh.dissolve_limited(angle_limit = radians(0.1))
+            bpy.ops.mesh.delete_loose()
             bpy.ops.object.mode_set(mode='OBJECT')
             print(f". {n_faces - len(bake_target.data.polygons)} faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
 
@@ -623,10 +620,9 @@ def create_bake_meshes(context):
         bm = bmesh.from_edit_mesh(bake_mesh)
         bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
         bmesh.update_edit_mesh(bake_mesh)
-        # Sort front to back faces for bake mesh
-        # FIXME for 'active' objects, we should reverse the sorting
+        # Sort front to back faces if opaque, back to front for 'active', i.e. non opaque
         bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.mesh.sort_elements(type='CURSOR_DISTANCE', elements={'VERT', 'FACE'}, reverse=False) # nearest to farthest
+        bpy.ops.mesh.sort_elements(type='CURSOR_DISTANCE', elements={'VERT', 'FACE'}, reverse=bake_col.vlmSettings.is_active_mat)
         bpy.ops.object.mode_set(mode='OBJECT')
 
         # Create lightmap shell (extrude mesh along vertex normal according to its shell factor)
@@ -705,16 +701,19 @@ def create_bake_meshes(context):
             bake_instance.vlmSettings.bake_tex_factor = density
             if is_light:
                 bake_instance.vlmSettings.bake_type = 'lightmap'
-                if light_scenario[2] is not None:
-                    bake_instance.vlmSettings.bake_light = light_scenario[2].name
-                else:
-                    bake_instance.vlmSettings.bake_light = light_scenario[1].name
+                bake_instance.vlmSettings.bake_light = light_scenario[2].name if light_scenario[2] is not None else light_scenario[1].name
                 light_merge_groups[name].append(bake_instance)
             elif bake_mode == 'playfield':
                 bake_instance.vlmSettings.bake_type = 'playfield'
                 bake_instance.vlmSettings.bake_light = ''
+            elif bake_col.vlmSettings.is_active_mat:
+                bake_instance.vlmSettings.bake_type = 'active'
+                bake_instance.vlmSettings.bake_light = ''
+            elif bake_mode == 'movable':
+                bake_instance.vlmSettings.bake_type = 'default'
+                bake_instance.vlmSettings.bake_light = ''
             else:
-                bake_instance.vlmSettings.bake_type = 'bake'
+                bake_instance.vlmSettings.bake_type = 'static'
                 bake_instance.vlmSettings.bake_light = ''
             tmp_col.objects.unlink(bake_instance)
             result_col.objects.link(bake_instance)
@@ -756,7 +755,9 @@ def create_bake_meshes(context):
     print(f"\nMerging and packing UV maps")
     bake_results.sort(key=lambda obj: obj.vlmSettings.bake_tex_factor, reverse=True)
     packmaps = []
+    lattice = bpy.data.objects.get('Layback')
     for bake in bake_results:
+        if lattice: bake.modifiers.new('Layback', 'LATTICE').object = lattice
         bake_density = bake.vlmSettings.bake_tex_factor
         if bake.vlmSettings.bake_type == 'playfield': # Playfield projection, no packing
             bake.vlmSettings.bake_packmap = len(packmaps)
@@ -812,7 +813,10 @@ def create_bake_meshes(context):
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.uv.select_all(action='SELECT')
-            bpy.ops.uv.pack_islands(margin=opt_padding / opt_tex_size)
+            if vlmProps.uv_packer == 'blender':
+                bpy.ops.uv.pack_islands(margin=opt_padding / opt_tex_size)
+            elif vlmProps.uv_packer == 'uvpacker':
+                vlm_uvpacker.uvpacker_pack(bakes, opt_padding, w, h)
             bpy.ops.object.mode_set(mode='OBJECT')
             packed_density = 0
             for obj in bakes:

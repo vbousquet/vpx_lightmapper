@@ -40,8 +40,7 @@ from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, C
 from rna_prop_ui import PropertyPanel
 
 # TODO
-# - Add an occluded geometry tool, to identify occluded objects that should be moved to the indirect baking collection
-
+# - Add an option for double render size (or split render / texture size option)
 
 
 # Use import.reload for all submodule to allow iterative development using bpy.ops.script.reload()
@@ -61,6 +60,10 @@ if "vlm_uvpacker" in locals():
     importlib.reload(vlm_uvpacker)
 else:
     from . import vlm_uvpacker
+if "vlm_occlusion" in locals():
+    importlib.reload(vlm_occlusion)
+else:
+    from . import vlm_occlusion
 
 # Only load submodules that have external dependencies if they are satisfied
 dependencies = (
@@ -100,7 +103,8 @@ class VLM_Scene_props(PropertyGroup):
     use_pf_translucency_map: BoolProperty(name="PF Translucency Map", description="Generate a translucency map for inserts", default = True)
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
-    camera_inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 45.0, update=vlm_utils.camera_inclination_update)
+    camera_inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 15.0, update=vlm_utils.camera_inclination_update)
+    camera_layback: FloatProperty(name="Layback", description="Camera layback", default = 35.0, update=vlm_utils.camera_inclination_update)
     # Baker options
     tex_size: EnumProperty(
         items=[
@@ -116,6 +120,15 @@ class VLM_Scene_props(PropertyGroup):
     render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
     padding: IntProperty(name="Padding:", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
+    uv_packer: EnumProperty(
+        items=[
+            ('blender', 'Blender', 'Use Blender internal UV island packing', '', 0),
+            ('uvpacker', 'UVPacker', 'Use UVPacker for packing islands', '', 1),
+        ],
+        name='UV Packer',
+        description='UV Packer to use',
+        default='blender'
+    )
     # Exporter options
     export_image_type: EnumProperty(
         items=[
@@ -150,6 +163,7 @@ class VLM_Collection_props(PropertyGroup):
         ],
         default='default'
     )
+    is_active_mat: BoolProperty(name="Active Material", description="True if this bake group need an 'Active' material (non opaque, under playfield,...)", default = False)
     light_mode: BoolProperty(name="Group lights", description="Bake all lights as a group", default = True)
 
 
@@ -157,6 +171,7 @@ class VLM_Object_props(PropertyGroup):
     # Bake objects properties
     vpx_object: StringProperty(name="VPX", description="Identifier of reference VPX object", default = '')
     vpx_subpart: StringProperty(name="Part", description="Sub part identifier for multi part object like bumpers,...", default = '')
+    layback_offset: FloatProperty(name="Layback offset", description="Y offset caused by current layback", default = 0.0)
     import_mesh: BoolProperty(name="Mesh", description="Update mesh on import", default = True)
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
@@ -166,11 +181,13 @@ class VLM_Object_props(PropertyGroup):
     bake_light: StringProperty(name="Light Source", description="Light or collection of lights used to create this lightmap", default="")
     bake_type: EnumProperty(
         items=[
-            ('bake', 'Bake', 'Default bake process', '', 0),
-            ('lightmap', 'Lightmap', 'Additive lightmap bake', '', 1),
-            ('playfield', 'Playfield', 'Bake to a orthographic playfield sized image', '', 2)
+            ('default', 'Default', "Default non static opaque bake", '', 0),
+            ('static', 'Static', 'Static bake', '', 1),
+            ('active', 'Active', "'Active', i.e. non opaque, bake", '', 2),
+            ('lightmap', 'Lightmap', 'Additive lightmap bake', '', 3),
+            ('playfield', 'Playfield', 'Bake to a orthographic playfield sized image', '', 4)
         ],
-        default='bake'
+        default='default'
     )
     bake_tex_factor: FloatProperty(name="Bake Tex Ratio", description="Texture size factor", default=1)
     bake_packmap: IntProperty(name="Packmap", description="ID of output packmap (multiple bakes may share a packmap)", default = -1)
@@ -226,6 +243,16 @@ class VLM_OT_update(Operator):
     def execute(self, context):
         vlmProps = context.scene.vlmSettings
         return vlm_import.read_vpx(context, bpy.path.abspath(context.scene.vlmSettings.table_file))
+
+
+class VLM_OT_select_occluded(Operator):
+    bl_idname = "vlm.select_ocluded_operator"
+    bl_label = "Select Occluded"
+    bl_description = "Select occluded objects"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        return vlm_occlusion.select_occluded(context)
 
 
 class VLM_OT_compute_render_groups(Operator):
@@ -570,8 +597,8 @@ class VLM_PT_Properties(bpy.types.Panel):
         row.label(text='')
         row.prop(vlmProps, "insert_intensity")
         row = layout.row()
-        row.label(text='')
         row.prop(vlmProps, "camera_inclination")
+        row.prop(vlmProps, "camera_layback")
 
         layout.separator()
 
@@ -582,6 +609,9 @@ class VLM_PT_Properties(bpy.types.Panel):
         row = layout.row()
         row.prop(vlmProps, "padding")
         row.prop(vlmProps, "remove_backface", text='Backface')
+
+        row = layout.row()
+        row.prop(vlmProps, "uv_packer")
 
         row = layout.row()
         row.scale_y = 1.5
@@ -630,11 +660,11 @@ class VLM_PT_Col_Props(bpy.types.Panel):
         if col.name in bake_col.children:
             layout.label(text="Bake mode:") 
             layout.prop(col.vlmSettings, 'bake_mode', expand=True)
+            layout.prop(col.vlmSettings, 'is_active_mat', expand=True)
         elif col.name in light_col.children:
             layout.prop(col.vlmSettings, 'light_mode', expand=True)
         else:
             layout.label(text="Select a bake or light group") 
-
 
 class VLM_PT_3D(bpy.types.Panel):
     bl_label = "Visual Pinball X Light Mapper"
@@ -715,6 +745,8 @@ class VLM_PT_3D(bpy.types.Panel):
             
         if show_info:
             layout.label(text="Select a baked object or a bake result") 
+
+        layout.operator(VLM_OT_select_occluded.bl_idname)
 
 
 class VLM_PT_3D_warning_panel(bpy.types.Panel):
@@ -824,6 +856,7 @@ classes = (
     VLM_OT_select_render_group,
     VLM_OT_select_packmap_group,
     VLM_OT_export_packmap,
+    VLM_OT_select_occluded,
     VLM_OT_load_render_images,
     VLM_OT_export_vpx,
     )

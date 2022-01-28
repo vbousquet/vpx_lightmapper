@@ -99,16 +99,47 @@ def camera_inclination_update(self, context):
     - view all baked objects
     - satisfy the target texture size on the vertical axis (height of the render)
     """
+    lattice = bpy.data.objects.get('Layback')
     camera_object = context.scene.objects.get('Bake Camera') 
+    setup_col = vlm_collections.get_collection('SETUP', create=False)
+    root_col = vlm_collections.get_collection('ROOT', create=False)
     bake_col = vlm_collections.get_collection('BAKE', create=False)
-    if not camera_object or not bake_col:
+    if not root_col or not lattice or not setup_col or not camera_object or not bake_col:
         return
     
     camera_fov = camera_object.data.angle
     camera_inclination = context.scene.vlmSettings.camera_inclination
+    camera_layback = context.scene.vlmSettings.camera_layback
     playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
+
+    # Update the layback lattice transform
+    layback_factor = -math.tan(math.radians(camera_layback) / 2)
+    for obj in root_col.all_objects:
+        if obj.type == 'LIGHT':
+            new_lb = -obj.location.z * layback_factor
+            obj.location.y = obj.location.y - obj.vlmSettings.layback_offset + new_lb
+            obj.vlmSettings.layback_offset = new_lb
+    setup_exclude = vlm_collections.find_layer_collection(context.view_layer.layer_collection, setup_col).exclude
+    vlm_collections.find_layer_collection(context.view_layer.layer_collection, setup_col).exclude = False
+    bpy.ops.object.select_all(action='DESELECT')
+    lattice.data = bpy.data.lattices.new('Layback')
+    lattice.select_set(True)
+    context.view_layer.objects.active = lattice
+    bpy.ops.object.mode_set(mode = 'EDIT')
+    bpy.ops.lattice.select_all(action='SELECT')
+    bpy.ops.transform.shear(value=layback_factor, orient_axis='X', orient_axis_ortho='Y', orient_type='GLOBAL', orient_matrix=((0, 1, 0), (0, 0, 1), (1, 0, 0)), orient_matrix_type='VIEW', mirror=True, use_proportional_edit=False, proportional_edit_falloff='SMOOTH', proportional_size=1, use_proportional_connected=False, use_proportional_projected=False)
+    bpy.ops.object.mode_set(mode = 'OBJECT')
+    lattice.data.interpolation_type_u = 'KEY_LINEAR'
+    lattice.data.interpolation_type_v = 'KEY_LINEAR'
+    lattice.data.interpolation_type_w = 'KEY_LINEAR'
+    lattice.scale[0] = 6
+    lattice.scale[1] = 6
+    lattice.scale[2] = 6
+    vlm_collections.find_layer_collection(context.view_layer.layer_collection, setup_col).exclude = setup_exclude
     
+    layback = mathutils.Matrix()
+    layback[0][2] -math.tan(math.radians(camera_layback) / 2)
     camera_angle = math.radians(camera_inclination)
     camera_object.rotation_euler = mathutils.Euler((camera_angle, 0.0, 0.0), 'XYZ')
     camera_object.data.shift_x = 0
@@ -125,7 +156,7 @@ def camera_inclination_update(self, context):
         min_dist = 0
         for obj in bake_col.all_objects:
             if obj.type == 'MESH':
-                bbox_corners = [modelview_matrix @ obj.matrix_world @ mathutils.Vector(corner) for corner in obj.bound_box]
+                bbox_corners = [modelview_matrix @ obj.matrix_world @ layback @ mathutils.Vector(corner) for corner in obj.bound_box]
                 proj_x = map(lambda a: abs(sx * a.x + a.z), bbox_corners)
                 proj_y = map(lambda a: abs(sy * a.y + a.z), bbox_corners)
                 min_dist = max(min_dist, max(proj_x), max(proj_y))
@@ -137,7 +168,7 @@ def camera_inclination_update(self, context):
         max_x = max_y = min_x = min_y = 0
         for obj in bake_col.all_objects:
             if obj.type == 'MESH':
-                bbox_corners = [projection_matrix @ modelview_matrix @ obj.matrix_world @ mathutils.Vector((corner[0], corner[1], corner[2], 1)) for corner in obj.bound_box]
+                bbox_corners = [projection_matrix @ modelview_matrix @ obj.matrix_world @ layback @ mathutils.Vector((corner[0], corner[1], corner[2], 1)) for corner in obj.bound_box]
                 proj_x = [o for o in map(lambda a: a.x / a.w, bbox_corners)]
                 proj_y = [o for o in map(lambda a: a.y / a.w, bbox_corners)]
                 min_x = min(min_x, min(proj_x))

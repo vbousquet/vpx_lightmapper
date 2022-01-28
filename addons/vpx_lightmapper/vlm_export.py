@@ -32,7 +32,6 @@ from win32com import storagecon
 
 # TODO
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
-# - Export to static rendering / not active / active according to the part exported (static, translucency, below playfield ?)
 
 
 def export_name(object_name):
@@ -249,6 +248,8 @@ def export_vpx(context):
     for obj in sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}'):
         is_light = obj.vlmSettings.bake_type == 'lightmap'
         is_playfield = obj.vlmSettings.bake_type == 'playfield'
+        is_active = obj.vlmSettings.bake_type == 'active'
+        is_static = obj.vlmSettings.bake_type == 'static' or obj.vlmSettings.bake_type == 'playfield'
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', 0, 0, 0)
@@ -266,7 +267,7 @@ def export_vpx(context):
         writer.write_tagged_string(b'NRMA', '')
         writer.write_tagged_u32(b'SIDS', 4)
         writer.write_tagged_wide_string(b'NAME', export_name(obj.name))
-        writer.write_tagged_string(b'MATR', 'VLM.Lightmap' if is_light else 'VLM.Bake.Active') # FIXME we should have 2 variants (active/not active)
+        writer.write_tagged_string(b'MATR', 'VLM.Lightmap' if is_light else 'VLM.Bake.Active' if is_active else 'VLM.Bake.Solid')
         writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
         writer.write_tagged_bool(b'TVIS', not is_playfield)
         writer.write_tagged_bool(b'DTXI', False)
@@ -281,7 +282,7 @@ def export_vpx(context):
         writer.write_tagged_bool(b'CLDR', False)
         writer.write_tagged_bool(b'ISTO', True)
         writer.write_tagged_bool(b'U3DM', True)
-        writer.write_tagged_bool(b'STRE', False) # not is_light) # FIXME static rendering should be true for solid map without transparency
+        writer.write_tagged_bool(b'STRE', is_static)
         writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
         writer.write_tagged_bool(b'REEN', False)

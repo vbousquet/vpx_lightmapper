@@ -16,7 +16,7 @@
 import bpy
 
 
-collection_ids = ['ROOT', 'TRASH', 'HIDDEN', 'INDIRECT', 'OVERLAY', 'LIGHTS', 'GI LIGHTS', 'BAKE', 'BAKE DEFAULT', 'BAKE ACTIVE', 'BAKE PLAYFIELD', 'BAKE RESULT']
+collection_ids = ['ROOT', 'SETUP', 'TRASH', 'HIDDEN', 'INDIRECT', 'OVERLAY', 'LIGHTS', 'GI LIGHTS', 'BAKE', 'BAKE DEFAULT', 'BAKE ACTIVE', 'BAKE PLAYFIELD', 'BAKE RESULT']
 
 
 def find_layer_collection(root_layer_collection, col):
@@ -53,6 +53,9 @@ def get_collection(name, create=True):
     context = bpy.context
     if name == 'ROOT':
         n, c = create_collection(context, "VPX Light Mapper", context.scene.collection, create)
+        return c
+    if name == 'SETUP':
+        n, c = create_collection(context, "Setup", get_collection('ROOT', create), create)
         return c
     if name == 'TRASH':
         n, c = create_collection(context, "Trash", get_collection('ROOT', create), create)
