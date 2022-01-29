@@ -1818,6 +1818,7 @@ def read_vpx(context, filepath):
         pfmesh.normals_split_custom_set([(0,0,1) for i in pfmesh.loops])
         uv_layer = pfmesh.uv_layers.new()
     _, playfield_obj = update_object(context, lattice, 'Playfield', '', pfmesh, True, vlm_collections.get_collection('BAKE PLAYFIELD'), None)
+    playfield_obj.location = (0, 0, -0.01 * global_scale) # Move very slightly back to avoid exact matching with bottom of wall that would led to a 'hold out' shading
     update_material(pfmesh, 0, materials, playfield_material, playfield_image, 0)
     created_objects.append(playfield_obj)
     if pfmesh.materials[0].name.startswith('VPX.Mat.'):

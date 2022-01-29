@@ -16,7 +16,7 @@
 import bpy
 
 
-collection_ids = ['ROOT', 'SETUP', 'TRASH', 'HIDDEN', 'INDIRECT', 'OVERLAY', 'LIGHTS', 'GI LIGHTS', 'BAKE', 'BAKE DEFAULT', 'BAKE ACTIVE', 'BAKE PLAYFIELD', 'BAKE RESULT']
+collection_ids = ['ROOT', 'SETUP', 'TRASH', 'HIDDEN', 'INDIRECT', 'OVERLAY', 'LIGHTS', 'WORLD', 'GI LIGHTS', 'BAKE', 'BAKE DEFAULT', 'BAKE ACTIVE', 'BAKE PLAYFIELD', 'BAKE RESULT']
 
 
 def find_layer_collection(root_layer_collection, col):
@@ -78,15 +78,20 @@ def get_collection(name, create=True):
     if name == 'LIGHTS':
         n, c = create_collection(context, "Light Groups", get_collection('ROOT', create), create)
         return c
+    if name == 'WORLD':
+        n, c = create_collection(context, "WORLD", get_collection('LIGHTS', create), create)
+        if n:
+            c.vlmSettings.light_mode = 'world'
+        return c
     if name == 'GI LIGHTS':
         n, c = create_collection(context, "GI", get_collection('LIGHTS', create), create)
         if n:
-            c.vlmSettings.light_mode = True
+            c.vlmSettings.light_mode = 'group'
         return c
     if name == 'PLAYFIELD LIGHTS':
         n, c = create_collection(context, "Inserts", get_collection('LIGHTS', create), create)
         if n:
-            c.vlmSettings.light_mode = False
+            c.vlmSettings.light_mode = 'split'
         return c
     if name == 'BAKE':
         n, c = create_collection(context, "Bake Groups", get_collection('ROOT', create), create)

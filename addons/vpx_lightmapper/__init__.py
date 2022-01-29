@@ -164,8 +164,15 @@ class VLM_Collection_props(PropertyGroup):
         ],
         default='default'
     )
+    light_mode: EnumProperty(
+        items=[
+            ('world', 'World', 'Contribute to base lighting', '', 0),
+            ('group', 'Group', 'Bake all lights as a single group', '', 1),
+            ('split', 'Split', 'Bake each light separately', '', 2)
+        ],
+        default='group'
+    )
     is_active_mat: BoolProperty(name="Active Material", description="True if this bake group need an 'Active' material (non opaque, under playfield,...)", default = False)
-    light_mode: BoolProperty(name="Group lights", description="Bake all lights as a group", default = True)
 
 
 class VLM_Object_props(PropertyGroup):

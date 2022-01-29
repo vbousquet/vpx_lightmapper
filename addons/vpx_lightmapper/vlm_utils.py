@@ -27,6 +27,9 @@ from gpu_extras.batch import batch_for_shader
 from . import vlm_collections
 
 
+# TODO Layback breaks the split normals: we should rotate them accordingly when this is toggled
+
+
 global_scale = 0.01
 
 

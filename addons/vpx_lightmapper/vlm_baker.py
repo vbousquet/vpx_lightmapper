@@ -35,6 +35,8 @@ global_scale = vlm_utils.global_scale
 #   . Object must be UV unwrapped, solid bake from base lighting
 #   . Light map are computed on the UV unwrapped model
 #   . VBS sync position of lightmap models to main
+# - Don't save the packmap EXR. They are not used and eat a huge lot of space
+
 
 def remove_backfacing(context, obj, eye_position, limit):
     bpy.ops.object.select_all(action='DESELECT')
@@ -87,21 +89,24 @@ def compute_uvmap_density(mesh, uv_layer):
 
 def get_lightings(context):
     """Return the list of lighting situations to be rendered as list of tuples
-        (scenario id, light collection, single light, custom data)
+        (name, None/light collection, single light, custom data)
     """
-    light_scenarios = {"Environment": ["Environment", None, None, None]}
+    world = ["Environment", None, [], None]
+    light_scenarios = {"Environment": world}
     lights_col = vlm_collections.get_collection('LIGHTS', create=False)
     if lights_col is not None:
         for light_col in lights_col.children:
             lights = light_col.objects
             if light_col.hide_render == False and len(lights) > 0:
-                if light_col.vlmSettings.light_mode:
+                if light_col.vlmSettings.light_mode == 'group':
                     name = vlm_utils.strip_vlm(light_col.name)
                     light_scenarios[name] = [name, light_col, None, None]
-                else:
+                elif light_col.vlmSettings.light_mode == 'split':
                     for light in lights:
                         name = f"{vlm_utils.strip_vlm(light_col.name)} - {light.name}"
                         light_scenarios[name] = [name, light_col, light, None]
+                elif light_col.vlmSettings.light_mode == 'world':
+                    world[2].extend(lights)
     return light_scenarios
 
 
@@ -221,6 +226,7 @@ def render_all_groups(context):
     indirect_col = vlm_collections.get_collection('INDIRECT')
     result_col = vlm_collections.get_collection('BAKE RESULT')
     lights_col = vlm_collections.get_collection('LIGHTS')
+    world_col = vlm_collections.get_collection('WORLD')
     root_bake_col = vlm_collections.get_collection('BAKE')
     overlay_col = vlm_collections.get_collection('OVERLAY')
     vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('HIDDEN')).exclude = True
@@ -243,42 +249,42 @@ def render_all_groups(context):
 
     # Apply a ligth scenario for rendering, returning the previous state and a lambda to apply it
     def restore_light_setup(initial_state):
-        if initial_state[0] == 0:
+        if initial_state[0] == 4: # World
+            vlm_collections.restore_all_col_links(initial_state[1])
+        elif initial_state[0] == 1: # Group lightmap, pre-colored
+            vlm_collections.restore_all_col_links(initial_state[1])
+        elif initial_state[0] == 2: # Split lightmap, pre-colored
+            vlm_collections.restore_col_links(initial_state[1])
+        elif initial_state[0] == 3: # Group lightmap, white
+            for obj, color in zip(initial_state[1], initial_state[2]): obj.data.color = color
+            vlm_collections.restore_all_col_links(initial_state[3])
+        elif initial_state[0] == 4: # Split lightmap, white
             initial_state[1].data.color = initial_state[2]
             vlm_collections.restore_col_links(initial_state[3])
-        elif initial_state[0] == 1:
-            vlm_collections.restore_col_links(initial_state[1])
-        elif initial_state[0] == 2:
-            vlm_collections.restore_all_col_links(initial_state[1])
-        elif initial_state[0] == 3:
-            for obj, color in zip(initial_state[1], initial_state[2]):
-                obj.data.color = color
-            vlm_collections.restore_all_col_links(initial_state[3])
     def setup_light_scenario(context, scenario):
-        if scenario[1] is None: # Base render
+        if scenario[1] is None: # Base render (world lighting from Blender's World and World light groups)
             context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
             context.scene.render.image_settings.color_mode = 'RGBA'
-            return 0, lambda a : a
-        else:
+            return (0, vlm_collections.move_all_to_col(scenario[2], tmp_col))
+        else: # Lightmap render (no world lighting)
             context.scene.world = bpy.data.worlds["VPX.Env.Black"]
             context.scene.render.image_settings.color_mode = 'RGB'
-            if scenario[2] is None: # Light group render
+            if scenario[2] is None: # Group of lights
                 if vlm_utils.is_same_light_color(scenario[1].objects, 0.1):
-                    colors = [o.data.color for o in scenario[1].objects if o.type=='LIGHT']
-                    for o in scenario[1].objects:
-                        o.data.color = (1.0, 1.0, 1.0)
-                    initial_state = (3, scenario[1].objects, colors, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
+                    prev_colors = [o.data.color for o in scenario[1].objects if o.type=='LIGHT']
+                    for o in scenario[1].objects: o.data.color = (1.0, 1.0, 1.0)
+                    initial_state = (3, scenario[1].objects, prev_colors, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
                 else:
                     print(f". light scenario '{scenario[0]}' contains lights with different colors or colored emitters. Lightmap will baked with these colors instead of full white.")
-                    initial_state = (2, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
-            else: # single light render (rendered as full white since they are colored when rendered)
+                    initial_state = (1, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
+            else: # Single light
                 if scenario[2].type == 'LIGHT':
                     prev_color = scenario[2].data.color
                     scenario[2].data.color = (1.0, 1.0, 1.0)
-                    initial_state = (0, scenario[2], prev_color, vlm_collections.move_to_col(scenario[2], tmp_col))
+                    initial_state = (4, scenario[2], prev_color, vlm_collections.move_to_col(scenario[2], tmp_col))
                 else:
                     print(f". light scenario '{scenario[0]}' is a colored emitters. Lightmap will baked with these colors instead of full white.")
-                    initial_state = (1, vlm_collections.move_to_col(scenario[2], tmp_col))
+                    initial_state = (2, vlm_collections.move_to_col(scenario[2], tmp_col))
             return initial_state, lambda initial_state : restore_light_setup(initial_state)
 
     # Render overlay collection and save it, activate composer accordingly to overlay it on object group renders (z masked)
@@ -451,12 +457,12 @@ def create_bake_meshes(context):
         light_merge_groups[name] = []
         mats = []
         packmat = bpy.data.materials["VPX.Core.Mat.PackMap"]
-        is_light = light_scenario[1] is not None
+        is_lightmap = light_scenario[1] is not None
         for index in range(n_render_groups):
             mat = packmat.copy()
             mat.name = f"VPX.PM.{name}.RG{index}"
             mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
-            if is_light:
+            if is_lightmap:
                 mat.blend_method = 'BLEND'
                 mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
             else:
@@ -653,8 +659,8 @@ def create_bake_meshes(context):
         # Build bake object for each lighting situation
         for i, (name, light_scenario) in enumerate(light_scenarios.items(), start = 1):
             print(f"[{bake_col.name} {i:>3}/{len(light_scenarios)}] Creating bake model for {name}")
-            is_light = light_scenario[1] is not None
-            if is_light:
+            is_lightmap = light_scenario[1] is not None
+            if is_lightmap:
                 bake_instance = bpy.data.objects.new(f"LM.{name}", light_mesh.copy())
             else:
                 bake_instance = bpy.data.objects.new(f"BM.{bake_group_name}", bake_mesh.copy())
@@ -666,7 +672,7 @@ def create_bake_meshes(context):
             context.view_layer.objects.active = bake_instance
             for index in range(n_render_groups):
                 bake_instance_mesh.materials[index] = light_scenario[3][index]
-            if is_light: # Remove unlit faces of lightmaps (lighting < threshold)
+            if is_lightmap: # Remove unlit faces of lightmaps (lighting < threshold)
                 #prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size)
                 #prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, opt_lightmap_prune_res)
                 prune_lightmap_by_visibility_map(bake_instance_mesh, vlm_utils.get_bakepath(context, type='RENDERS'), name, n_render_groups, vmaps, opt_lightmap_prune_res)
@@ -685,7 +691,7 @@ def create_bake_meshes(context):
             density = compute_uvmap_density(bake_instance_mesh, bake_instance_mesh.uv_layers["UVMap"])
 
             # Pack UV map (only if this bake mesh since it won't be merged afterward)
-            if not is_light:
+            if not is_lightmap:
                 bake_results.append(bake_instance)
                 if bake_mode == 'playfield':
                     uv_layer_packed = bake_instance_mesh.uv_layers["UVMap Packed"]
@@ -699,7 +705,7 @@ def create_bake_meshes(context):
             # Save in result collection
             bake_instance.vlmSettings.bake_name = name
             bake_instance.vlmSettings.bake_tex_factor = density
-            if is_light:
+            if is_lightmap:
                 bake_instance.vlmSettings.bake_type = 'lightmap'
                 bake_instance.vlmSettings.bake_light = light_scenario[2].name if light_scenario[2] is not None else light_scenario[1].name
                 light_merge_groups[name].append(bake_instance)
