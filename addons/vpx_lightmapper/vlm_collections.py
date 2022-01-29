@@ -79,7 +79,7 @@ def get_collection(name, create=True):
         n, c = create_collection(context, "Light Groups", get_collection('ROOT', create), create)
         return c
     if name == 'WORLD':
-        n, c = create_collection(context, "WORLD", get_collection('LIGHTS', create), create)
+        n, c = create_collection(context, "World", get_collection('LIGHTS', create), create)
         if n:
             c.vlmSettings.light_mode = 'world'
         return c
