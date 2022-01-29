@@ -114,15 +114,17 @@ def camera_inclination_update(self, context):
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
 
     # Update the layback lattice transform
+    lattice.location = (playfield_left + 0.5 * playfield_width, 2.0, 2.0) #playfield_top - 0.5 * playfield_height, 2.0)
     layback_factor = -math.tan(math.radians(camera_layback) / 2)
     for obj in root_col.all_objects:
         if obj.type == 'LIGHT':
-            new_lb = -obj.location.z * layback_factor
+            new_lb = (lattice.location.z - obj.location.z) * layback_factor
             obj.location.y = obj.location.y - obj.vlmSettings.layback_offset + new_lb
             obj.vlmSettings.layback_offset = new_lb
     setup_exclude = vlm_collections.find_layer_collection(context.view_layer.layer_collection, setup_col).exclude
     vlm_collections.find_layer_collection(context.view_layer.layer_collection, setup_col).exclude = False
     bpy.ops.object.select_all(action='DESELECT')
+    playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
     lattice.data = bpy.data.lattices.new('Layback')
     lattice.select_set(True)
     context.view_layer.objects.active = lattice
