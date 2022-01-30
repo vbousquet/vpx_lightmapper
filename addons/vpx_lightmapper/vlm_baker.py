@@ -35,6 +35,7 @@ global_scale = vlm_utils.global_scale
 #   . Light map are computed on the UV unwrapped model
 #   . VBS sync position of lightmap models to main
 # - FIXME Apply layback lattice transform when performing UV projection
+# - Support scene ambient occlusion as a compositor pass
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -114,14 +115,13 @@ def get_n_lightings(context):
     
     
 def get_n_render_groups(context):
-    i = 0
+    n = 0
     root_bake_col = vlm_collections.get_collection('BAKE', create=False)
     if root_bake_col is not None:
-        while True:
-            if next((obj for obj in root_bake_col.all_objects if obj.vlmSettings.render_group == i), None) is None:
-                break
-            i += 1
-    return i
+        for obj in root_bake_col.all_objects:
+            #print(f'{obj.vlmSettings.render_group:>2} - {obj.name}')
+            n = max(n, obj.vlmSettings.render_group + 1)
+    return n
     
 
 def compute_render_groups(context):
@@ -151,7 +151,7 @@ def compute_render_groups(context):
     context.scene.render.film_transparent = True
     context.scene.eevee.taa_render_samples = 1
     context.scene.render.resolution_y = opt_mask_size
-    context.scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
+    context.scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio / context.scene.render.pixel_aspect_x)
     context.scene.render.image_settings.file_format = "PNG"
     context.scene.render.image_settings.color_mode = 'RGBA'
     context.scene.render.image_settings.color_depth = '8'
@@ -190,7 +190,6 @@ def compute_render_groups(context):
     vlm_collections.pop_state(col_state)
     print(f"\n{len(object_groups)} render groups defined in {int(time.time() - start_time)}s.")
 
-
 def render_all_groups(context):
     """Render all render groups for all lighting situations
     """
@@ -200,12 +199,11 @@ def render_all_groups(context):
     start_time = time.time()
     bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
-    vlmProps = context.scene.vlmSettings
-    opt_tex_size = int(vlmProps.tex_size)
+    opt_tex_size = int(context.scene.vlmSettings.tex_size)
     opt_force_render = False # Force rendering even if cache is available
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     context.scene.render.resolution_y = opt_tex_size
-    context.scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio)
+    context.scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio / context.scene.render.pixel_aspect_x)
     context.scene.render.image_settings.file_format = 'OPEN_EXR'
     context.scene.render.image_settings.color_mode = 'RGBA'
     context.scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
@@ -520,15 +518,13 @@ def create_bake_meshes(context):
                 print(f". Warning '{name}' does not have split normals. Final mesh will be flat shaded.")
             to_join.append(obj)
         
-        # No mesh in this bake group
+        # Join the meshed into a single bake mesh (or skip if there is no mesh in this bake group)
         if not to_join:
             continue
-            
         bpy.ops.object.select_all(action='DESELECT')
         context.view_layer.objects.active = to_join[0]
-        for obj in to_join:
-            obj.select_set(True)
-        bpy.ops.object.join()
+        for obj in to_join: obj.select_set(True)
+        if len(to_join) > 1: bpy.ops.object.join()
         bake_target = context.view_layer.objects.active
         bake_mesh = bake_target.data
         bake_mesh.name = "VLM.Bake Target"
@@ -541,7 +537,7 @@ def create_bake_meshes(context):
             print(f". {n_faces - len(bake_target.data.polygons)} backfacing faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
 
         # Simplify mesh
-        if opt_optimize_mesh:
+        if opt_optimize_mesh and not bake_mode == 'playfield':
             n_faces = len(bake_target.data.polygons)
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
@@ -575,11 +571,14 @@ def create_bake_meshes(context):
                     continue
                 ua, va = edge.verts[0].link_loops[0][bme.loops.layers.uv.active].uv
                 ub, vb = edge.verts[1].link_loops[0][bme.loops.layers.uv.active].uv
-                l = math.sqrt(0.25*(ub-ua)*(ub-ua)+(vb-va)*(vb-va))
-                if l > 0.1: # 0.2 is sufficient for distortion, lower value is needed for lightmap face pruning
+                l = math.sqrt((ub-ua)*(ub-ua)+(vb-va)*(vb-va))
+                if bake_col.name == 'Playfield':
+                    print(f'edge length: {l}')
+                if l >= 0.1 or (False and bake_mode == 'playfield' and l >= 0.01): # 0.2 is sufficient for distortion, lower value is needed for lightmap face pruning
                     edge.select = True
                     long_edges.append(edge)
             if not long_edges:
+                print(f'. Nb edges: {len(bme.edges)} / faces: {len(bme.faces)}')
                 bmesh.update_edit_mesh(bake_mesh)
                 break
             bmesh.ops.subdivide_edges(bme, edges=long_edges, cuts=1, use_grid_fill=True)
@@ -652,7 +651,7 @@ def create_bake_meshes(context):
         vmap_instance.select_set(True)
         context.view_layer.objects.active = vmap_instance
         render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
-        vmaps = build_visibility_map(vmap_instance.data, n_render_groups, int(opt_lightmap_prune_res * render_aspect_ratio), opt_lightmap_prune_res)
+        vmaps = build_visibility_map(vmap_instance.data, n_render_groups, int(opt_lightmap_prune_res * render_aspect_ratio / context.scene.render.pixel_aspect_x), opt_lightmap_prune_res)
         tmp_col.objects.unlink(vmap_instance)
         bpy.data.objects.remove(vmap_instance)
 
@@ -690,7 +689,7 @@ def create_bake_meshes(context):
             # Compute texture density (depends on the amount of remaining faces)
             density = compute_uvmap_density(bake_instance_mesh, bake_instance_mesh.uv_layers["UVMap"])
 
-            # Pack UV map (only if this bake mesh since it won't be merged afterward)
+            # Setup playfield UV Map
             if not is_lightmap:
                 bake_results.append(bake_instance)
                 if bake_mode == 'playfield':
@@ -810,7 +809,7 @@ def create_bake_meshes(context):
     print(f'. Bake/light maps merged into {len(packmaps)} packmaps:')
     for index, (bakes, density, w, h, is_playfield) in enumerate(packmaps):
         if is_playfield:
-            print(f'.   Packmap #{index}: {w:>4}x{h:>4} playfield render')
+            print(f'.  Packmap #{index}: {w:>4}x{h:>4} playfield render')
         else:
             bpy.ops.object.select_all(action='DESELECT')
             context.view_layer.objects.active = bakes[0]
@@ -853,6 +852,10 @@ def build_visibility_map(bake_instance_mesh, n_render_groups, width, height):
         group = face.material_index
         if len(face.loops) != 3: # This should not happen
             continue
+        if group >= n_render_groups:
+            # Bug: model use a bakemap outside of our render groups
+            print(f'Bug face {group}')
+            continue
         a = face.loops[0][uv_layer].uv
         b = face.loops[1][uv_layer].uv
         c = face.loops[2][uv_layer].uv
@@ -862,10 +865,10 @@ def build_visibility_map(bake_instance_mesh, n_render_groups, width, height):
         by = int(b.y * height)
         cx = int(c.x * width)
         cy = int(c.y * height)
-        min_x = min(ax, bx, cx)
-        min_y = min(ay, by, cy)
-        max_x = max(ax, bx, cx)
-        max_y = max(ay, by, cy)
+        min_x = max(0, min(ax, bx, cx))
+        min_y = max(0, min(ay, by, cy))
+        max_x = min(width - 1, max(ax, bx, cx))
+        max_y = min(height - 1, max(ay, by, cy))
         A01 = ay - by
         B01 = bx - ax
         A12 = by - cy
@@ -881,7 +884,7 @@ def build_visibility_map(bake_instance_mesh, n_render_groups, width, height):
             w2 = w2_row
             for x in range(min_x, max_x + 1):
                 if w0 >= 0 and w1 >= 0 and w2 >= 0:
-                    vmaps[face.material_index][x + y * width].append(face.index)
+                    vmaps[group][x + y * width].append(face.index)
                 w0 += A12
                 w1 += A20
                 w2 += A01

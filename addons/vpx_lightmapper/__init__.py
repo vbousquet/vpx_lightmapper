@@ -116,7 +116,7 @@ class VLM_Scene_props(PropertyGroup):
             ('camera', 'Camera', 'Apply layback to camera.', '', 2)
         ],
         name='Layback mode',
-        default='disable', 
+        default='camera', 
         update=vlm_camera.camera_inclination_update
     )
     # Baker options
@@ -620,7 +620,9 @@ class VLM_PT_Properties(bpy.types.Panel):
         row = layout.row()
         row.prop(vlmProps, "camera_layback")
         row.prop(vlmProps, "camera_inclination")
-        layout.prop(vlmProps, "layback_mode", expand=True)
+        row = layout.row()
+        row.label(text="Layback:") 
+        row.prop(vlmProps, "layback_mode", expand=True)
 
         layout.separator()
 

@@ -93,11 +93,11 @@ def uvpacker_pack(meshes, padding, width, height):
             if messageType == 0: # success
                 break
             elif messageType == 1: # progress
-                print(f'. UVPacker progress {struct.unpack_from("<d", message, readPtr)[0]}')
+                print(f'.   UVPacker progress {struct.unpack_from("<d", message, readPtr)[0]}')
             elif messageType == 2: # error
                 msgSize = struct.unpack_from("<I", message, readPtr)[0]
                 readPtr += 4
-                print(f'. UVPacker error: {message[readPtr:readPtr+msgSize].decode()}')
+                print(f'.   UVPacker error: {message[readPtr:readPtr+msgSize].decode()}')
                 return {"FINISHED"}
             else:
                 print("Error: unsupported message " + str(messageType))
@@ -127,7 +127,7 @@ def uvpacker_pack(meshes, padding, width, height):
                     loop[uv_layer].uv = [x, y]
             bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
         coverage = struct.unpack_from("<d", message, readPtr)[0]
-        print(f'. UVPacker packing complete {coverage}')
+        print(f'.   UVPacker packing complete {coverage}')
     except:
         return {"FINISHED"}
 

@@ -24,10 +24,13 @@ import functools
 from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
 
+from . import vlm_utils
 from . import vlm_collections
 
 
-# TODO Layback breaks the split normals: we should rotate them accordingly when this is toggled
+# TODO
+# - Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled
+
 
 def camera_inclination_update(self, context):
     """Update bake camera position based on its inclination, in order to fit the following constraints:
@@ -40,24 +43,25 @@ def camera_inclination_update(self, context):
     setup_col = vlm_collections.get_collection('SETUP', create=False)
     root_col = vlm_collections.get_collection('ROOT', create=False)
     bake_col = vlm_collections.get_collection('BAKE', create=False)
+    playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
     if not root_col or not lattice or not setup_col or not camera_object or not bake_col:
         return
     
     # Adjust the camera
-    camera_fov = camera_object.data.angle
     layback_mode = context.scene.vlmSettings.layback_mode
     if layback_mode == 'disable':
+        context.scene.render.pixel_aspect_x = 1
         camera_inclination = context.scene.vlmSettings.camera_inclination
         camera_layback = 0
         fit_camera(context, camera_inclination, camera_layback)
-        context.scene.render.pixel_aspect_x = 1
     elif layback_mode == 'deform':
+        context.scene.render.pixel_aspect_x = 1
         camera_inclination = context.scene.vlmSettings.camera_inclination
         camera_layback = context.scene.vlmSettings.camera_layback
         fit_camera(context, camera_inclination, camera_layback)
-        context.scene.render.pixel_aspect_x = 1
     elif layback_mode == 'camera':
-        camera_inclination = context.scene.vlmSettings.camera_inclination + context.scene.vlmSettings.camera_layback
+        context.scene.render.pixel_aspect_x = 1
+        camera_inclination = context.scene.vlmSettings.camera_inclination +  context.scene.vlmSettings.camera_layback / 2
         camera_layback = 0
         fit_camera(context, context.scene.vlmSettings.camera_inclination, context.scene.vlmSettings.camera_layback)
         target_ar = context.scene.vlmSettings.render_aspect_ratio
@@ -67,7 +71,6 @@ def camera_inclination_update(self, context):
         context.scene.render.resolution_x = target_x
        
     # Update the layback lattice transform
-    playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
     lattice.location = (playfield_left + 0.5 * playfield_width, 2.0, 2.0) #playfield_top - 0.5 * playfield_height, 2.0)
     layback_factor = -math.tan(math.radians(camera_layback) / 2)
     for obj in root_col.all_objects:
@@ -109,7 +112,7 @@ def fit_camera(context, camera_inclination, camera_layback):
     camera_object.data.shift_y = 0
     view_vector = mathutils.Vector((0, math.sin(camera_angle), -math.cos(camera_angle)))
     aspect_ratio = 1.0
-    for i in range(3): # iterations since it depenfds on the aspect ratio fitting which change after each computation
+    for i in range(3): # iterations since it depends on the aspect ratio fitting which change after each computation
         # Compute the camera distance with the current aspect ratio
         camera_object.location = (playfield_left + 0.5 * playfield_width, -playfield_top -0.5 * playfield_height, 0)
         modelview_matrix = camera_object.matrix_basis.inverted()
