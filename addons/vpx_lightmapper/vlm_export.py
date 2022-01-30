@@ -336,7 +336,7 @@ def export_vpx(context):
         
         writer.write_tagged_float(b'PIDB', -1000.0 if is_light else 1000.0)
         writer.write_tagged_bool(b'ADDB', is_light) # Additive blending VPX mod
-        writer.write_tagged_u32(b'FALP', 100) # Additive blending VPX mod
+        writer.write_tagged_float(b'FALP', 100) # Additive blending VPX mod
         writer.write_tagged_bool(b'LOCK', True)
         writer.write_tagged_bool(b'LVIS', True)
         writer.write_tagged_u32(b'LAYR', 0)
