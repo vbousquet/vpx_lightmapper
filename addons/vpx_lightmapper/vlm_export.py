@@ -32,6 +32,7 @@ from win32com import storagecon
 
 # TODO
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
+# - Take in account intensity scale in lamp sync
 
 
 def export_name(object_name):

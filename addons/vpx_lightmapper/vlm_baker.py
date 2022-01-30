@@ -36,6 +36,7 @@ global_scale = vlm_utils.global_scale
 #   . Light map are computed on the UV unwrapped model
 #   . VBS sync position of lightmap models to main
 # - Don't save the packmap EXR. They are not used and eat a huge lot of space
+# - FIXME Apply layback lattive transform when performing UV projection
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -249,7 +250,7 @@ def render_all_groups(context):
 
     # Apply a ligth scenario for rendering, returning the previous state and a lambda to apply it
     def restore_light_setup(initial_state):
-        if initial_state[0] == 4: # World
+        if initial_state[0] == 0: # World
             vlm_collections.restore_all_col_links(initial_state[1])
         elif initial_state[0] == 1: # Group lightmap, pre-colored
             vlm_collections.restore_all_col_links(initial_state[1])
@@ -265,7 +266,8 @@ def render_all_groups(context):
         if scenario[1] is None: # Base render (world lighting from Blender's World and World light groups)
             context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
             context.scene.render.image_settings.color_mode = 'RGBA'
-            return (0, vlm_collections.move_all_to_col(scenario[2], tmp_col))
+            initial_state = (0, vlm_collections.move_all_to_col(scenario[2], tmp_col))
+            return initial_state, lambda initial_state : restore_light_setup(initial_state)
         else: # Lightmap render (no world lighting)
             context.scene.world = bpy.data.worlds["VPX.Env.Black"]
             context.scene.render.image_settings.color_mode = 'RGB'
