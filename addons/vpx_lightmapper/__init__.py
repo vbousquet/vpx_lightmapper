@@ -64,6 +64,10 @@ if "vlm_occlusion" in locals():
     importlib.reload(vlm_occlusion)
 else:
     from . import vlm_occlusion
+if "vlm_camera" in locals():
+    importlib.reload(vlm_camera)
+else:
+    from . import vlm_camera
 
 # Only load submodules that have external dependencies if they are satisfied
 dependencies = (
@@ -103,9 +107,18 @@ class VLM_Scene_props(PropertyGroup):
     use_pf_translucency_map: BoolProperty(name="PF Translucency Map", description="Generate a translucency map for inserts", default = True)
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
-    camera_inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 15.0, update=vlm_utils.camera_inclination_update)
-    camera_layback: FloatProperty(name="Layback", description="Camera layback", default = 35.0, update=vlm_utils.camera_inclination_update)
-    enable_layback: BoolProperty(name="Enable Layback", description="Toggle layback to ease editing", default = True, update=vlm_utils.camera_inclination_update)
+    camera_inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 15.0, update=vlm_camera.camera_inclination_update)
+    camera_layback: FloatProperty(name="Layback", description="Camera layback", default = 35.0, update=vlm_camera.camera_inclination_update)
+    layback_mode: EnumProperty(
+        items=[
+            ('disable', 'Disable', 'Disable layback', '', 0),
+            ('deform', 'Deform', 'Apply layback to geometry. This breaks reflection/refraction', '', 1),
+            ('camera', 'Camera', 'Apply layback to camera.', '', 2)
+        ],
+        name='Layback mode',
+        default='disable', 
+        update=vlm_camera.camera_inclination_update
+    )
     # Baker options
     tex_size: EnumProperty(
         items=[
@@ -116,7 +129,7 @@ class VLM_Scene_props(PropertyGroup):
             ('4096', '4096', '4096x4096', '', 4096),
             ('8192', '8192', '8192x8192', '', 8192),
         ],
-        default='256', update=vlm_utils.camera_inclination_update
+        default='256', update=vlm_camera.camera_inclination_update
     )
     render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
     padding: IntProperty(name="Padding:", description="Padding between bakes", default = 2, min = 0)
@@ -602,11 +615,12 @@ class VLM_PT_Properties(bpy.types.Panel):
         row.prop(vlmProps, "light_size")
         row.prop(vlmProps, "light_intensity")
         row = layout.row()
-        row.prop(vlmProps, "enable_layback")
+        row.label(text="") 
         row.prop(vlmProps, "insert_intensity")
         row = layout.row()
         row.prop(vlmProps, "camera_layback")
         row.prop(vlmProps, "camera_inclination")
+        layout.prop(vlmProps, "layback_mode", expand=True)
 
         layout.separator()
 
@@ -754,6 +768,7 @@ class VLM_PT_3D(bpy.types.Panel):
         if show_info:
             layout.label(text="Select a baked object or a bake result") 
 
+        layout.separator()
         layout.operator(VLM_OT_select_occluded.bl_idname)
 
 

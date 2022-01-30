@@ -30,13 +30,11 @@ from PIL import Image # External dependency
 global_scale = vlm_utils.global_scale
 
 # TODO
-# - Save object masks as BW to save disk space
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
 #   . Object must be UV unwrapped, solid bake from base lighting
 #   . Light map are computed on the UV unwrapped model
 #   . VBS sync position of lightmap models to main
-# - Don't save the packmap EXR. They are not used and eat a huge lot of space
-# - FIXME Apply layback lattive transform when performing UV projection
+# - FIXME Apply layback lattice transform when performing UV projection
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -1318,92 +1316,6 @@ def render_packmaps_gpu(context):
     print(f"\n{packmap_index} packmaps rendered in {int(time.time() - start_time)}s.")
 
 
-def render_packmaps_bake(context):
-    """Render all packmaps corresponding for the available current bake results.
-    Implementation using Blender Cycle's builtin bake. This works perfectly but is rather slow.
-    """
-    start_time = time.time()
-    print(f"\nRendering packmaps")
-    vlmProps = context.scene.vlmSettings
-
-    opt_force_render = False # Force rendering even if cache is available
-    opt_padding = vlmProps.padding
-    
-    # Purge unlinked datas to avoid out of memory error
-    bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
-    
-    cg = vlm_utils.push_color_grading(True)
-    col_state = vlm_collections.push_state()
-    rlc = context.view_layer.layer_collection
-    result_col = vlm_collections.get_collection('BAKE RESULT')
-    vlm_collections.find_layer_collection(rlc, result_col).exclude = False
-    bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
-    vlm_utils.mkpath(bakepath)
-    packmap_index = 0
-    context.scene.cycles.samples = 1
-    context.scene.cycles.use_denoising = False
-    while True:
-        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
-        if not objects:
-            break
-
-        basepath = f"{bakepath}Packmap {packmap_index}"
-        path_exr = bpy.path.abspath(basepath + '.exr')
-        path_png = bpy.path.abspath(basepath + '.png')
-        path_webp = bpy.path.abspath(basepath + ".webp")
-        print(f". Rendering packmap #{packmap_index} containing {len(objects)} bake/light map")
-        
-        if opt_force_render or not os.path.exists(path_exr):
-            tex_width = objects[0].vlmSettings.bake_packmap_width
-            tex_height = objects[0].vlmSettings.bake_packmap_height
-            pack_image = bpy.data.images.new(f"PackMap{packmap_index}", tex_width, tex_height, alpha=True)
-            context.scene.render.bake.margin = opt_padding
-            context.scene.render.bake.use_clear = True
-            for obj in objects:
-                bpy.ops.object.select_all(action='DESELECT')
-                context.view_layer.objects.active = obj
-                obj.select_set(True)
-                is_light = obj.vlmSettings.bake_type == 'lightmap'
-                unloads = []
-                for i, mat in enumerate(obj.data.materials):
-                    path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr"
-                    render = vlm_utils.image_by_path(path)
-                    if render is None:
-                        render = bpy.data.images.load(path, check_existing=False)
-                        unloads.append(render)
-                    mat.node_tree.nodes["BakeTex"].image = render
-                    mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0 if is_light else 0.0
-                    mat.node_tree.nodes["PackMap"].inputs[3].default_value = 0.0 # Bake
-                    mat.node_tree.nodes["PackTex"].image = pack_image
-                    mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
-                    mat.blend_method = 'OPAQUE'
-                bpy.ops.object.bake(type='COMBINED', pass_filter={'EMIT', 'DIRECT'}, margin=opt_padding)
-                for mat in obj.data.materials:
-                    mat.node_tree.nodes["PackMap"].inputs[3].default_value = 1.0 # Preview
-                    mat.blend_method = 'BLEND' if is_light else 'OPAQUE'
-                for render in unloads:
-                    bpy.data.images.remove(render)
-                context.scene.render.bake.use_clear = False
-            pack_image.filepath_raw = path_exr
-            pack_image.file_format = 'OPEN_EXR'
-            pack_image.save()
-            pack_image.filepath_raw = path_png
-            pack_image.file_format = 'PNG'
-            pack_image.save()
-            bpy.data.images.remove(pack_image)
-
-        if opt_force_render or not os.path.exists(path_webp) or os.path.getmtime(path_webp) < os.path.getmtime(path_png):
-            Image.open(path_png).save(path_webp, 'WEBP')
-
-        packmap_index += 1
-
-    context.scene.cycles.samples = 64
-    context.scene.cycles.use_denoising = True
-    vlm_collections.pop_state(col_state)
-    vlm_utils.pop_color_grading(cg)
-    print(f"\n{packmap_index} packmaps rendered in {int(time.time() - start_time)}s.")
-
-
 def render_packmaps_eevee(context):
     """Render all packmaps corresponding for the available current bake results
     Implementation using Eevee render. Works fine. No padding support for the time being
@@ -1588,6 +1500,91 @@ def render_packmaps_eevee(context):
     print(f"\n{packmap_index} packmaps rendered in {int(time.time() - start_time)}s.")
     
  
+def render_packmaps_bake(context):
+    """Render all packmaps corresponding for the available current bake results.
+    Implementation using Blender Cycle's builtin bake. This works perfectly but is rather slow.
+    """
+    start_time = time.time()
+    print(f"\nRendering packmaps")
+    vlmProps = context.scene.vlmSettings
+
+    opt_force_render = False # Force rendering even if cache is available
+    opt_padding = vlmProps.padding
+    
+    # Purge unlinked datas to avoid out of memory error
+    bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
+    
+    cg = vlm_utils.push_color_grading(True)
+    col_state = vlm_collections.push_state()
+    rlc = context.view_layer.layer_collection
+    result_col = vlm_collections.get_collection('BAKE RESULT')
+    vlm_collections.find_layer_collection(rlc, result_col).exclude = False
+    bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
+    vlm_utils.mkpath(bakepath)
+    packmap_index = 0
+    context.scene.cycles.samples = 1
+    context.scene.cycles.use_denoising = False
+    while True:
+        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
+        if not objects:
+            break
+
+        basepath = f"{bakepath}Packmap {packmap_index}"
+        path_png = bpy.path.abspath(basepath + '.png')
+        path_webp = bpy.path.abspath(basepath + ".webp")
+        print(f". Rendering packmap #{packmap_index} containing {len(objects)} bake/light map")
+        
+        if opt_force_render or not os.path.exists(path_png):
+            tex_width = objects[0].vlmSettings.bake_packmap_width
+            tex_height = objects[0].vlmSettings.bake_packmap_height
+            pack_image = bpy.data.images.new(f"PackMap{packmap_index}", tex_width, tex_height, alpha=True)
+            context.scene.render.bake.margin = opt_padding
+            context.scene.render.bake.use_clear = True
+            for obj in objects:
+                bpy.ops.object.select_all(action='DESELECT')
+                context.view_layer.objects.active = obj
+                obj.select_set(True)
+                is_light = obj.vlmSettings.bake_type == 'lightmap'
+                unloads = []
+                for i, mat in enumerate(obj.data.materials):
+                    path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr"
+                    render = vlm_utils.image_by_path(path)
+                    if render is None:
+                        render = bpy.data.images.load(path, check_existing=False)
+                        unloads.append(render)
+                    mat.node_tree.nodes["BakeTex"].image = render
+                    mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0 if is_light else 0.0
+                    mat.node_tree.nodes["PackMap"].inputs[3].default_value = 0.0 # Bake
+                    mat.node_tree.nodes["PackTex"].image = pack_image
+                    mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
+                    mat.blend_method = 'OPAQUE'
+                bpy.ops.object.bake(type='COMBINED', pass_filter={'EMIT', 'DIRECT'}, margin=opt_padding)
+                for mat in obj.data.materials:
+                    mat.node_tree.nodes["PackMap"].inputs[3].default_value = 1.0 # Preview
+                    mat.blend_method = 'BLEND' if is_light else 'OPAQUE'
+                for render in unloads:
+                    bpy.data.images.remove(render)
+                context.scene.render.bake.use_clear = False
+            #pack_image.filepath_raw = bpy.path.abspath(basepath + '.exr')
+            #pack_image.file_format = 'OPEN_EXR'
+            #pack_image.save()
+            pack_image.filepath_raw = path_png
+            pack_image.file_format = 'PNG'
+            pack_image.save()
+            bpy.data.images.remove(pack_image)
+
+        if opt_force_render or not os.path.exists(path_webp) or os.path.getmtime(path_webp) < os.path.getmtime(path_png):
+            Image.open(path_png).save(path_webp, 'WEBP')
+
+        packmap_index += 1
+
+    context.scene.cycles.samples = 64
+    context.scene.cycles.use_denoising = True
+    vlm_collections.pop_state(col_state)
+    vlm_utils.pop_color_grading(cg)
+    print(f"\n{packmap_index} packmaps rendered in {int(time.time() - start_time)}s.")
+
+
 def render_packmaps(context):
     if context.blend_data.filepath == '':
         print('ERROR: you must save your project before baking')
