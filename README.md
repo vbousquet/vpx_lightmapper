@@ -128,7 +128,7 @@ In the collection property panel, each bake groups has a 'bake mode' which deter
 	- Solid bake outputs splitted mesh per bake group, with a texture projection corresponding to the playfield orthographic view (i.e. a texture that can be used as a playfield image in VPX)
 	- Light map behave exactly the same as in default mode and are merged together (including the ones from default mode groups)
 - *TODO* Movable
-	- Solid and light map bake outputs splitted mesh per object in the bake group, keeping each object origin
+	- Solid and light map bake outputs splitted mesh and image per object in the bake group, keeping each object origin
 
 Note that playfield bake mode is rendered from the camera point of view to have the right view dependent shading.
 

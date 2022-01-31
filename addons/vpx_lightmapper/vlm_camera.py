@@ -37,6 +37,13 @@ def camera_inclination_update(self, context):
     - look at the center of the playfield
     - view all baked objects
     - satisfy the target texture size on the vertical axis (height of the render)
+    
+    There are 3 way to take layback in account:
+    - disable: no layback, just normal fitting.
+    - deform: deform geometry (like in VPX) and perform normal fitting on the deformed geometry.
+    - camera: take layback in account in camera orientation (for correct shading and face visibility), 
+    and overscale image on the y axis (for bake texture density) corresponding to what it would have been
+    if we have deformed the geometry (like in VPX)
     """
     lattice = bpy.data.objects.get('Layback')
     camera_object = context.scene.objects.get('Bake Camera') 
@@ -66,15 +73,25 @@ def camera_inclination_update(self, context):
         fit_camera(context, context.scene.vlmSettings.camera_inclination, context.scene.vlmSettings.camera_layback)
         target_ar = context.scene.vlmSettings.render_aspect_ratio
         target_x = context.scene.render.resolution_x
-        fit_camera(context, camera_inclination, camera_layback)
+        fit_camera(context, camera_inclination, camera_layback) # compute x scaling that correspond to the aspect ratio with layback, but using an adjusted camera inclination instead
         context.scene.render.pixel_aspect_x = context.scene.vlmSettings.render_aspect_ratio / target_ar
+        context.scene.vlmSettings.render_aspect_ratio = target_ar
         context.scene.render.resolution_x = target_x
        
     # Update the layback lattice transform
     lattice.location = (playfield_left + 0.5 * playfield_width, 2.0, 2.0) #playfield_top - 0.5 * playfield_height, 2.0)
     layback_factor = -math.tan(math.radians(camera_layback) / 2)
     for obj in root_col.all_objects:
-        if obj.type == 'LIGHT':
+        if obj.type == 'MESH' or obj.type == 'CURVE':
+            if layback_mode == 'deform':
+                lattice_mod = obj.modifiers.get('Layback')
+                if not lattice_mod:
+                    lattice_mod = obj.modifiers.new('Layback', 'LATTICE')
+                    lattice_mod.object = lattice
+            else:
+                lattice_mod = obj.modifiers.get('Layback')
+                if lattice_mod: obj.modifiers.remove(lattice_mod)
+        elif obj.type == 'LIGHT':
             new_lb = (lattice.location.z - obj.location.z) * layback_factor
             obj.location.y = obj.location.y - obj.vlmSettings.layback_offset + new_lb
             obj.vlmSettings.layback_offset = new_lb

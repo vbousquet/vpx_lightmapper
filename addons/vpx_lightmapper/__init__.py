@@ -196,6 +196,15 @@ class VLM_Object_props(PropertyGroup):
     import_mesh: BoolProperty(name="Mesh", description="Update mesh on import", default = True)
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
+    # Movable objects bake settings
+    movable_lightmap_threshold: FloatProperty(name="Lightmap threshold", description="Light threshold for generating a lightmap (1 for no lightmaps)", default = 1.0)
+    movable_influence: EnumProperty(
+        items=[
+            ('indirect', 'Indirect', 'Allow indirect contribution of this object to other bakes', '', 0),
+            ('hide', 'Hide', 'Hide this object from the other bakes', '', 1),
+        ],
+        default='indirect'
+    )
     # Bake result properties
     bake_name: StringProperty(name="Bake Name", description="Lighting situation identifier", default="")
     bake_objects: StringProperty(name="Object Source", description="Object or collection of object used to create this bake/lightmap", default="")

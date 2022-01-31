@@ -20,7 +20,9 @@ import bmesh
 import os
 import time
 import gpu
+import datetime
 from math import radians
+from mathutils import Vector
 from gpu_extras.batch import batch_for_shader
 from . import vlm_utils
 from . import vlm_collections
@@ -31,11 +33,11 @@ global_scale = vlm_utils.global_scale
 
 # TODO
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
-#   . Object must be UV unwrapped, solid bake from base lighting
-#   . Light map are computed on the UV unwrapped model
+#   . Object must be UV unwrapped, and must have either a VLM.BakeTex node in its material (first slot) or has an imported VPX material, with an image (bake will be the same size as the image)
+#   . Light map are computed on the UV unwrapped model, filtered based on a custom threshold
 #   . VBS sync position of lightmap models to main
-# - FIXME Apply layback lattice transform when performing UV projection
-# - Support scene ambient occlusion as a compositor pass
+# - Apply layback lattice transform when performing UV projection
+
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -103,7 +105,7 @@ def get_lightings(context):
                     light_scenarios[name] = [name, light_col, None, None]
                 elif light_col.vlmSettings.light_mode == 'split':
                     for light in lights:
-                        name = f"{vlm_utils.strip_vlm(light_col.name)} - {light.name}"
+                        name = f"{vlm_utils.strip_vlm(light_col.name)}-{light.name}"
                         light_scenarios[name] = [name, light_col, light, None]
                 elif light_col.vlmSettings.light_mode == 'world':
                     world[2].extend(lights)
@@ -119,10 +121,56 @@ def get_n_render_groups(context):
     root_bake_col = vlm_collections.get_collection('BAKE', create=False)
     if root_bake_col is not None:
         for obj in root_bake_col.all_objects:
-            #print(f'{obj.vlmSettings.render_group:>2} - {obj.name}')
             n = max(n, obj.vlmSettings.render_group + 1)
     return n
+
+
+def format_time(length_in_seconds):
+    return str(datetime.timedelta(seconds=length_in_seconds)).split('.')[0]
     
+
+def render_group_masks(context):
+    """Render a set of group mask to disk
+    """
+    opt_mask_size = 1024 # Height used for the object masks
+    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
+    col_state = vlm_collections.push_state()
+    rlc = context.view_layer.layer_collection
+    root_col = vlm_collections.get_collection('ROOT')
+    tmp_col = vlm_collections.get_collection('BAKETMP')
+    root_bake_col = vlm_collections.get_collection('BAKE')
+    for col in root_col.children:
+        vlm_collections.find_layer_collection(rlc, col).exclude = True
+    vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
+    context.scene.render.engine = 'BLENDER_EEVEE'
+    context.scene.render.film_transparent = True
+    context.scene.eevee.taa_render_samples = 1
+    context.scene.render.resolution_y = opt_mask_size
+    context.scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
+    context.scene.render.image_settings.file_format = "PNG"
+    context.scene.render.image_settings.color_mode = 'RGBA'
+    context.scene.render.image_settings.color_depth = '8'
+    context.scene.world = bpy.data.worlds["VPX.Env.Black"]
+    context.scene.use_nodes = False
+
+    n_render_group = get_n_render_groups(context)
+    all_objects = [obj for obj in root_bake_col.all_objects]
+    bakepath = vlm_utils.get_bakepath(context, type='MASKS')
+    vlm_utils.mkpath(bakepath)
+    for i in range(n_render_groups):
+        group_objects = [obj for obj in all_objects if obj.vlmSettings.render_group == i and not is_object_in_movable(obj)]
+        initial_collection = vlm_collections.move_all_to_col(group_objects, tmp_col)
+        context.scene.render.filepath = f"{bakepath}Group {i}.png"
+        bpy.ops.render.render(write_still=True)
+        vlm_collections.restore_all_col_links(initial_collection)
+
+    context.scene.eevee.taa_render_samples = 64
+    context.scene.render.engine = 'CYCLES'
+    context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
+    vlm_collections.delete_collection(tmp_col)
+    vlm_collections.pop_state(col_state)
+
+
 
 def compute_render_groups(context):
     """Evaluate the set of bake groups (groups of objects that do not overlap when rendered 
@@ -151,7 +199,7 @@ def compute_render_groups(context):
     context.scene.render.film_transparent = True
     context.scene.eevee.taa_render_samples = 1
     context.scene.render.resolution_y = opt_mask_size
-    context.scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio / context.scene.render.pixel_aspect_x)
+    context.scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
     context.scene.render.image_settings.file_format = "PNG"
     context.scene.render.image_settings.color_mode = 'RGBA'
     context.scene.render.image_settings.color_depth = '8'
@@ -163,6 +211,10 @@ def compute_render_groups(context):
     vlm_utils.mkpath(bakepath)
     all_objects = [obj for obj in root_bake_col.all_objects]
     for i, obj in enumerate(all_objects, start=1):
+        if vlm_utils.is_object_in_movable(obj):
+            obj.vlmSettings.render_group = -1
+            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it is movable")
+            continue
         print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}'")
         # Render object visibility mask (basic low res render)
         context.scene.render.filepath = f"{bakepath}{obj.name}.png"
@@ -183,12 +235,19 @@ def compute_render_groups(context):
                 break
         if obj.vlmSettings.render_group == len(object_groups):
             object_groups.append({'objects': [obj], 'mask': alpha})
+    
+    # Save group masks for later use
+    for i, group in enumerate(object_groups):
+        im = Image.frombytes('L', (context.scene.render.resolution_x, context.scene.render.resolution_y), bytes(group['mask']), 'raw')
+        im.save(bpy.path.abspath(f"{bakepath}Group {i}.png"))
+
     context.scene.eevee.taa_render_samples = 64
     context.scene.render.engine = 'CYCLES'
     context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
     vlm_collections.delete_collection(tmp_col)
     vlm_collections.pop_state(col_state)
-    print(f"\n{len(object_groups)} render groups defined in {int(time.time() - start_time)}s.")
+    print(f"\n{len(object_groups)} render groups defined in {format_time(time.time() - start_time)}.")
+
 
 def render_all_groups(context):
     """Render all render groups for all lighting situations
@@ -203,7 +262,7 @@ def render_all_groups(context):
     opt_force_render = False # Force rendering even if cache is available
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     context.scene.render.resolution_y = opt_tex_size
-    context.scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio / context.scene.render.pixel_aspect_x)
+    context.scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio)
     context.scene.render.image_settings.file_format = 'OPEN_EXR'
     context.scene.render.image_settings.color_mode = 'RGBA'
     context.scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
@@ -244,7 +303,7 @@ def render_all_groups(context):
     light_scenarios = get_lightings(context)
     n_lighting_situations = len(light_scenarios)
 
-    # Apply a ligth scenario for rendering, returning the previous state and a lambda to apply it
+    # Restor state after setting up a light scenario for rendering
     def restore_light_setup(initial_state):
         if initial_state[0] == 0: # World
             vlm_collections.restore_all_col_links(initial_state[1])
@@ -258,7 +317,51 @@ def render_all_groups(context):
         elif initial_state[0] == 4: # Split lightmap, white
             initial_state[1].data.color = initial_state[2]
             vlm_collections.restore_col_links(initial_state[3])
-    def setup_light_scenario(context, scenario):
+    
+    camera = bpy.data.objects['Bake Camera']
+    camera_rotation = mathutils.Quaternion(camera.rotation_quaternion)
+    modelview_matrix = camera.matrix_world.inverted()
+    projection_matrix = camera.calc_matrix_camera(
+        context.view_layer.depsgraph,
+        x = context.scene.render.resolution_x,
+        y = context.scene.render.resolution_y,
+        scale_x = context.scene.render.pixel_aspect_x,
+        scale_y = context.scene.render.pixel_aspect_y,
+    )
+    def project_point(p, w, h):
+        p1 = projection_matrix @ modelview_matrix @ Vector((p.x, p.y, p.z, 1)) # projected coordinates
+        return Vector(((w - 1) * 0.5 * (1 + p1.x / p1.w), (h - 1) * 0.5 * (1 - p1.y / p1.w))) # pixel coordinates
+    
+    # Check if light is influencing with regard to the provided group mask using an ellipsoid influence bound
+    def is_light_influencing(light, group_mask):
+        w, h, mask = group_mask
+        if light.type != 'LIGHT':
+            return True
+        influence_radius = light.data.shadow_soft_size + math.log10(light.data.energy) * 250 * global_scale # empirically observed
+        light_center = project_point(Vector(light.location), w, h)
+        light_xr = (project_point(Vector(light.location) + Vector((influence_radius, 0, 0)), w, h) - light_center).x # projected radius on x axis
+        light_yr = (project_point(Vector(light.location) + camera_rotation @ Vector((0, influence_radius, 0)), w, h) - light_center).length # projected radius on y axis
+        min_x = max(  0, int(light_center.x - light_xr))
+        max_x = min(w-1, int(light_center.x + light_xr))
+        min_y = max(  0, int(light_center.y - light_yr))
+        max_y = min(h-1, int(light_center.y + light_yr))
+        alpha_y = light_yr / light_xr
+        max_r2 = light_xr * light_xr
+        #print(f'w={w} h={h} w.h={w*h} data={len(mask)}')
+        #print(f'test light {light.name}: center={light_center} xr={light_xr} yr={light_yr} influence radius={influence_radius}')
+        for y in range(min_y, max_y + 1):
+            py = (y - light_center.y) * alpha_y
+            py2 = py * py
+            for x in range(min_x, max_x + 1):
+                px = x - light_center.x
+                if px*px+py2 < max_r2 and mask[x + y * w] > 0: # inside the influence elipsoid, with an influenced object
+                    #print('. Influenced')
+                    return True
+        #print('. Not Influenced')
+        return False
+    
+    # Apply a ligth scenario for rendering, returning the previous state and a lambda to apply it
+    def setup_light_scenario(context, scenario, group_mask):
         if scenario[1] is None: # Base render (world lighting from Blender's World and World light groups)
             context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
             context.scene.render.image_settings.color_mode = 'RGBA'
@@ -268,6 +371,13 @@ def render_all_groups(context):
             context.scene.world = bpy.data.worlds["VPX.Env.Black"]
             context.scene.render.image_settings.color_mode = 'RGB'
             if scenario[2] is None: # Group of lights
+                is_influencing = False
+                for light in scenario[1].objects:
+                    if is_light_influencing(light, group_mask):
+                        is_influencing = True
+                        break
+                if not is_influencing:
+                    return None, None
                 if vlm_utils.is_same_light_color(scenario[1].objects, 0.1):
                     prev_colors = [o.data.color for o in scenario[1].objects if o.type=='LIGHT']
                     for o in scenario[1].objects: o.data.color = (1.0, 1.0, 1.0)
@@ -276,6 +386,8 @@ def render_all_groups(context):
                     print(f". light scenario '{scenario[0]}' contains lights with different colors or colored emitters. Lightmap will baked with these colors instead of full white.")
                     initial_state = (1, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
             else: # Single light
+                if not is_light_influencing(scenario[2], group_mask):
+                    return None, None
                 if scenario[2].type == 'LIGHT':
                     prev_color = scenario[2].data.color
                     scenario[2].data.color = (1.0, 1.0, 1.0)
@@ -351,29 +463,43 @@ def render_all_groups(context):
         links.new(zc.outputs[0], out.inputs[0])
         
         bpy.data.images.remove(overlay) 
+    
+    # Load the group masks to filter out the obviously non influenced scenarios
+    mask_path = vlm_utils.get_bakepath(context, type='MASKS')
+    group_masks = []
+    for i in range(n_render_groups):
+        im = Image.open(bpy.path.abspath(f"{mask_path}Group {i}.png"))
+        group_masks.append((im.size[0], im.size[1], im.tobytes("raw", "L")))
 
     print(f"\nRendering {n_render_groups} render groups for {n_lighting_situations} lighting situations")
     context.scene.use_nodes = False
-    for group_index in range(n_render_groups):
+    n_skipped = n_existing = 0
+    n_total_render = n_render_groups * n_lighting_situations
+    for group_index, group_mask in enumerate(group_masks):
         objects = [obj for obj in root_bake_col.all_objects if obj.vlmSettings.render_group == group_index]
         n_objects = len(objects)
-        print(f"\nRendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for {n_lighting_situations} lighting situations")
         initial_collections = vlm_collections.move_all_to_col(objects, tmp_col)
         for i, (name, scenario) in enumerate(light_scenarios.items(), start=1):
             context.scene.render.filepath = f"{bakepath}{scenario[0]} - Group {group_index}.exr"
             if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
-                print(f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]} ({i}/{n_lighting_situations})'")
-                state, restore_func = setup_light_scenario(context, scenario)
-                n_render_performed = n_render_performed + 1
-                if overlays:
-                    context.scene.use_nodes = True
-                    overlay = bpy.data.images.load(f"{bakepath}{scenario[0]} - Overlays.exr", check_existing=False)
-                    bpy.data.scenes["Scene"].node_tree.nodes["OverlayImage"].image = overlay
-                bpy.ops.render.render(write_still=True)
-                if overlays:
-                    bpy.data.images.remove(overlay)
-                    context.scene.use_nodes = False
-                restore_func(state)
+                state, restore_func = setup_light_scenario(context, scenario, group_mask)
+                if state:
+                    print(f". {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%} Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}' ({i}/{n_lighting_situations})")
+                    n_render_performed = n_render_performed + 1
+                    if overlays:
+                        context.scene.use_nodes = True
+                        overlay = bpy.data.images.load(f"{bakepath}{scenario[0]} - Overlays.exr", check_existing=False)
+                        bpy.data.scenes["Scene"].node_tree.nodes["OverlayImage"].image = overlay
+                    bpy.ops.render.render(write_still=True)
+                    if overlays:
+                        bpy.data.images.remove(overlay)
+                        context.scene.use_nodes = False
+                    restore_func(state)
+                else:
+                    print(f". {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%} Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}' ({i}/{n_lighting_situations}) - Skipped (no influence)")
+                    n_skipped += 1
+            else:
+                n_existing += 1
         vlm_collections.restore_all_col_links(initial_collections)
 
     context.scene.use_nodes = True
@@ -384,7 +510,11 @@ def render_all_groups(context):
     vlm_utils.pop_color_grading(cg)
     vlm_collections.delete_collection(tmp_col)
     vlm_collections.pop_state(col_state)
-    print(f"\n{n_render_performed} groups rendered in {int(time.time() - start_time)}s.")
+    length = time.time() - start_time
+    print(f"\nRendering finished in a total time of {format_time(length)}")
+    if n_existing > 0: print(f". {n_existing:>3} renders were skipped since they were already existing")
+    if n_skipped > 0: print(f". {n_skipped:>3} renders were skipped since objects were outside of lights influence")
+    if n_render_performed > 0: print(f". {n_render_performed:>3} renders were computed ({format_time(length/n_render_performed)} per render)")
 
 
 def create_bake_meshes(context):
@@ -447,6 +577,9 @@ def create_bake_meshes(context):
     for bake_col in root_bake_col.children:
         vlm_collections.find_layer_collection(rlc, bake_col).exclude = False
         vlm_collections.find_layer_collection(rlc, bake_col).indirect_only = True
+        # FIXME hide from render all objects marked as such
+        if bake_col.vlmSettings.bake_mode == 'movable':
+            pass
 
     # Prepare the list of lighting situation with a packmap material per render group, and a merge group per light situation
     light_merge_groups = {}
@@ -476,6 +609,10 @@ def create_bake_meshes(context):
         bake_group_name = vlm_utils.strip_vlm(bake_col.name)
         baked_objects = [obj for obj in bake_col.objects]
         bake_mode = bake_col.vlmSettings.bake_mode # either 'default' / 'movable' / 'playfield' see vlm_commons
+        
+        # FIXME implement movable baking
+        if bake_mode == 'movable':
+            continue
     
         # Join all objects to build baked objects (converting to mesh, and preserving split normals)
         print(f"\n[{bake_col.name}] Building base bake target model")
@@ -651,7 +788,7 @@ def create_bake_meshes(context):
         vmap_instance.select_set(True)
         context.view_layer.objects.active = vmap_instance
         render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
-        vmaps = build_visibility_map(vmap_instance.data, n_render_groups, int(opt_lightmap_prune_res * render_aspect_ratio / context.scene.render.pixel_aspect_x), opt_lightmap_prune_res)
+        vmaps = build_visibility_map(vmap_instance.data, n_render_groups, int(opt_lightmap_prune_res * render_aspect_ratio), opt_lightmap_prune_res)
         tmp_col.objects.unlink(vmap_instance)
         bpy.data.objects.remove(vmap_instance)
 
@@ -830,7 +967,7 @@ def create_bake_meshes(context):
 
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
-    print(f"\nbake meshes created in {int(time.time() - start_time)}s.")
+    print(f"\nbake meshes created in {str(datetime.timedelta(seconds=time.time() - start_time))}")
 
 
 def orient2d(ax, ay, bx, by, x, y):
@@ -1585,7 +1722,7 @@ def render_packmaps_bake(context):
     context.scene.cycles.use_denoising = True
     vlm_collections.pop_state(col_state)
     vlm_utils.pop_color_grading(cg)
-    print(f"\n{packmap_index} packmaps rendered in {int(time.time() - start_time)}s.")
+    print(f"\n{packmap_index} packmaps rendered in {format_time(time.time() - start_time)}s.")
 
 
 def render_packmaps(context):

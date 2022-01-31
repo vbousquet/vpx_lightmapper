@@ -16,9 +16,6 @@
 import bpy
 
 
-collection_ids = ['ROOT', 'SETUP', 'TRASH', 'HIDDEN', 'INDIRECT', 'OVERLAY', 'LIGHTS', 'WORLD', 'GI LIGHTS', 'BAKE', 'BAKE DEFAULT', 'BAKE ACTIVE', 'BAKE PLAYFIELD', 'BAKE RESULT']
-
-
 def find_layer_collection(root_layer_collection, col):
     found = None
     for sub in root_layer_collection.children:
@@ -83,13 +80,18 @@ def get_collection(name, create=True):
         if n:
             c.vlmSettings.light_mode = 'world'
         return c
-    if name == 'GI LIGHTS':
+    if name == 'GI':
         n, c = create_collection(context, "GI", get_collection('LIGHTS', create), create)
         if n:
             c.vlmSettings.light_mode = 'group'
         return c
-    if name == 'PLAYFIELD LIGHTS':
+    if name == 'INSERTS':
         n, c = create_collection(context, "Inserts", get_collection('LIGHTS', create), create)
+        if n:
+            c.vlmSettings.light_mode = 'split'
+        return c
+    if name == 'FLASHERS':
+        n, c = create_collection(context, "Flashers", get_collection('LIGHTS', create), create)
         if n:
             c.vlmSettings.light_mode = 'split'
         return c
@@ -120,26 +122,31 @@ def get_collection(name, create=True):
 
 
 def setup_collections():
-    for id in collection_ids:
+    default_col_ids = ['ROOT', 'SETUP', 'HIDDEN', 'INDIRECT', 'OVERLAY', 'LIGHTS', 'WORLD', 'GI', 'INSERTS', 'FLASHERS', 'BAKE', 'BAKE DEFAULT', 'BAKE ACTIVE', 'BAKE PLAYFIELD']
+    for id in default_col_ids:
         get_collection(id)
     get_collection('BAKE PLAYFIELD').vlmSettings.bake_mode = 'playfield'
 
 
-def push_state():
+def push_state(root_col=None):
     state = []
-    for id in collection_ids:
-        col = get_collection(id, False)
-        if col:
-            exclude = find_layer_collection(bpy.context.view_layer.layer_collection, col).exclude
-            state.append((col, exclude, col.hide_render, col.hide_viewport))
+    if not root_col: root_col = get_collection('ROOT', False)
+    if root_col:
+        for col in root_col.children:
+            lc = find_layer_collection(bpy.context.view_layer.layer_collection, col)
+            state.append((col.name, col, lc.exclude, lc.indirect_only, col.hide_render, col.hide_viewport))
+            state.extend(push_state(col))
     return state
 
 
 def pop_state(state):
-    for col, exclude, hide_render, hide_viewport in state:
-        find_layer_collection(bpy.context.view_layer.layer_collection, col).exclude = exclude
-        col.hide_render = hide_render
-        col.hide_viewport = hide_viewport
+    for name, col, exclude, indirect_only, hide_render, hide_viewport in state:
+        if name in bpy.data.collections:
+            lc = find_layer_collection(bpy.context.view_layer.layer_collection, col)
+            lc.exclude = exclude
+            lc.indirect_only = indirect_only
+            col.hide_render = hide_render
+            col.hide_viewport = hide_viewport
 
 
 def move_to_col(obj, target_col):

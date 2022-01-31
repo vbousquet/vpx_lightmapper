@@ -27,8 +27,6 @@ from gpu_extras.batch import batch_for_shader
 from . import vlm_collections
 
 
-# TODO Layback breaks the split normals: we should rotate them accordingly when this is toggled
-
 
 global_scale = 0.01
 
@@ -94,6 +92,14 @@ def is_same_light_color(objects, threshold):
     max_dif = max(map(lambda a: mathutils.Vector((a[0] - base_color[0], a[1] - base_color[1], a[2] - base_color[2])).length_squared, colors))
     # colors are similar enough to be considered as a single color situation
     return n_colors == len(objects) and max_dif < threshold * threshold
+
+
+def is_object_in_movable(obj):
+    is_movable = True
+    for col in obj.users_collection:
+        if col.vlmSettings.bake_mode != 'movable':
+            is_movable = False
+    return is_movable
 
 
 def render_mask(context, width, height, target_image, view_matrix, projection_matrix):

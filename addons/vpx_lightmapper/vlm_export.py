@@ -32,7 +32,6 @@ from win32com import storagecon
 
 # TODO
 # - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
-# - Take in account intensity scale in lamp sync
 
 
 def export_name(object_name):
@@ -135,7 +134,7 @@ def export_vpx(context):
             item_data.next()
             if item_data.tag == 'NAME':
                 name = item_data.get_wide_string()
-                is_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name), None) is not None
+                is_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and not vlm_utils.is_object_in_movable(o)), None) is not None
                 is_baked = is_baked or next((o for o in overlay_col.all_objects if o.vlmSettings.vpx_object == name), None) is not None
                 is_baked_light = next((o for o in light_col.all_objects if o.vlmSettings.vpx_object == name), None) is not None
                 break
@@ -485,8 +484,10 @@ def export_vpx(context):
                     def push_update(mode, vpx_ref, obj_ref, intensity, sync_color):
                         if mode == 0:
                             return f'	UpdateLightMapFromLight {vpx_ref}, {obj_ref}, {intensity}, {"True" if sync_color else "False"}\n'
-                        else:
+                        elif mode == 1:
                             return f'	UpdateLightMapFromFlasher {vpx_ref}, {obj_ref}, {intensity}, {"True" if sync_color else "False"}\n'
+                        elif mode == 2:
+                            return f'	{obj_ref}.Visible = False\n'
                     
                     for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap']:
                         sync_color = False
@@ -504,6 +505,7 @@ def export_vpx(context):
                             updates.append((elem_ref(vpx_name), 1, elem_ref(export_name(obj.name)), sync_color))
                         else:
                             print(f". {obj.name} is missing a vpx light/flasher object to be synchronized on")
+                            updates.append((None, 2, elem_ref(export_name(obj.name)), False))
 
                     in_block = 0 # Search and update existing block if any
                     for line in code.splitlines():
@@ -557,8 +559,7 @@ def export_vpx(context):
                         code += "End Sub\n\n"
                         code += "Sub UpdateLightMapFromLight(light, lightmap, intensity_scale, sync_color)\n"
                         code += "	If sync_color Then lightmap.Color = light.Colorfull\n"
-                        code += "	Dim percent: percent = light.GetCurrentIntensity() / light.Intensity\n"
-                        code += "	lightmap.Opacity = intensity_scale * percent\n"
+                        code += "	lightmap.Opacity = intensity_scale * light.IntensityScale * light.GetCurrentIntensity() / light.Intensity\n"
                         code += "	lightmap.Visible = lightmap.Opacity > 0.1\n"
                         code += "End Sub\n\n"
                     wr = biff_io.BIFF_writer()
