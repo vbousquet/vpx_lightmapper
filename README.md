@@ -38,7 +38,7 @@ This tool aims at helping with the process of creating VPX tables by:
 This toolkit offers the following features:
 - Import VPX table including lights & materials, easily update edited table
 - Setup camera according to VPX camera, including 'layback' support
-- Automatically detect occluded objects taht can be exclude from bake meshes
+- Automatically detect occluded objects that can be exclude from bake meshes
 - Automatically setup groups of non overlapping objects
 - Batch render bakemap/lightmap, automatically optimizing renders
 - Generate mesh for baked mesh and lightmaps, optimizing them (pruning of unneeded faces for lightmaps, limited dissolve, backface removal,...), generating optimized combined UV map accross the mesh set
