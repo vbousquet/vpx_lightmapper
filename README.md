@@ -11,6 +11,7 @@ This tool is just my attempt at building better tables. It is shared in the hope
 ## Table of contents
 
 * [What is it ?](#what-is-it)
+* [Features](#features)
 * [Installation](#installation)
 * [Overview](#overview)
 * [Import Tool](#import-tool)
@@ -23,15 +24,26 @@ This tool is just my attempt at building better tables. It is shared in the hope
 
 [Visual Pinball X](https://github.com/vpinball/vpinball) is a game engine dedicated to pinball game simulation. It is a great tool which has allowed a whole community to grow and produce incredible pinball tables ([VPForums](https://www.vpforums.com), [VPUniverse](https://www.vpuniverse.com), [Orbitalpin](https://www.orbitalpin.com), [Pinball Nirvana](https://www.pinballnirvana.com), [VPDB](https://www.vpdb.io), [PinSimDB](https://www.pinsimdb.org),...). For the graphic part, it includes a nice realtime rendering engine which allows great visual results. 
 
-To obtain the best visuals, table creators may choose to precompute part of the rendering of their table in a more advanced offline renderer like [Blender](www.blender.org), a.k.a. "baking" the lighting. This works especially nicely for pinball games since the game is played from a fixed point of view, allowing to efficently bake view dependent lighting effects.
+To obtain the best visuals, table creators may choose to precompute part of the rendering of their table in a more advanced offline renderer like [Blender](www.blender.org), a.k.a. "baking" the lighting. This works especially nicely for pinball games since the game is played from a fixed point of view, allowing to efficently bake view dependent lighting effects. 
 
 The visual quality of a pinball simulation is also tighlty linked to the rendering of the many (up to hundred) lights that are used in a pinball. The texture baking approach can be extended regarding precomputing the effect of lighting by using "light maps", that is to say models with precomputed textures storing the effect of lights. These models are a shell around the table objects, with texture storing the lighting. When playing the pinball table, they are renderered by adding the lights contribution to the base model.
 
-This tool aims at helping with the process of baking textures and additive lightmaps by:
-- allowing easier Blender import of VPX tables, especially regarding lights and materials,
-- automating and optimizing the baking process,
-- automating "light maps" generation,
-- allowing to easily export all these bakes to VPX.
+This tool aims at helping with the process of creating VPX tables by:
+- easing importing and table inspection,
+- easing camera setup,
+- automating the full bakemap/lightmap process, with a good level of optimization.
+
+## Features
+
+This toolkit offers the following features:
+- Import VPX table including lights & materials, easily update edited table
+- Setup camera according to VPX camera, including 'layback' support
+- Automatically detect occluded objects taht can be exclude from bake meshes
+- Automatically setup groups of non overlapping objects
+- Batch render bakemap/lightmap, automatically optimizing renders
+- Generate mesh for baked mesh and lightmaps, optimizing them (pruning of unneeded faces for lightmaps, limited dissolve, backface removal,...), generating optimized combined UV map accross the mesh set
+- Render packed texture combining all the bakemap/lightmap
+- Export directly playable VPX table file with updated geometry, textures and script
 
 ## Installation
 
@@ -195,10 +207,9 @@ As much as possible, you should avoid including occluded (not directly visible) 
 
 ### Plastics
 
-The importer has an option to detect plastic walls and process them accordingly. If set, all walls with a thickness from 2.5 to 3.5 VP units will be processed like this:
+The importer has an option to detect plastic walls and process them accordingly. If set, all thin walls will be processed like this:
 - place the top material at the bottom, and set it to be shaded as translucent instead of diffuse,
-- set side material to a predefined transparent plastic material,
-- set top material to a predefined transparent plastic material, with alpha blending support,
+- set side and top material to a predefined transparent plastic material,
 - bevel the edges of the resulting mesh (only for baking, the bevel is not exported).
 
 ### Inserts
@@ -207,3 +218,16 @@ The importer has an option to detect inserts (lights placed on the playfield, wi
 - move light slightly below playfield,
 - generate a cup mesh, opened on the top side, corresponding to the VPX light shape, with a core reflective material,
 - adjust the playfield material to be partly translucent for the inserts, using an automatically generated translucency map.
+
+Another way of baking inserts is to make them fully transparent in the playfield texture, then place a little, black shaded, cup corresponding to their shape to give them some depth. Then the plastic unlit detailled model is placed in the overlay collection, and a light or an emitter mesh is placed at the bottom of the cup.
+
+### Transparent objects (plastic ramps, bumper caps,...) and alpha blending
+
+Visual Pinball X performs alpha blending of transparent objects. This means that the object is rendered on top of objects behing it, blending the color between them according to the alpha channel of the used texture. This can be compared to the shading of a transparent glass with an indice of refraction of 1 (i.e. non refractive glass).
+
+Blender can render glass, outputing to the alpha channel the amount of escaping rays, that is to say rays that are transmitted through the glass and reaching the background. This is great since it gives full control on what is rendered to the user. To enable this, in 'Render Properties > Film > Transparent' check 'Transparent Glass' and increase 'Roughness Threshold'. In the case of a pinball table, transparent objects usually have other objects behind them, therefore rays are not escaping but reaching other elements. If we want to view a ball passing behind 2 elements, they have to be rendered as 2 layers: a background one, and an alpha blended one. To let Blender knows about this separation between the 2 layers, we need to place a mesh with an holdout shader.
+
+Separating the layers for rendering is mandatory for the baked mesh which are rendered as a solid (opaque or alpha blended). For lightmaps, which are rendered as additively blended (added to the rest), this is not needed. Therefore the holdout shaded mesh is not needed for lightmaps. The toolkit provided a shader node group named 'VLM.Bake Info' that provides this shading, along with other baking information taht can be used in a custom shader.
+
+Note that, with this setup, there won't be any shadowing, since there is no shadowing support inside VPX. So a ball passing under a transparent object will not occlude light coming from behind it.
+

@@ -30,10 +30,6 @@ import win32cryptcon
 from win32com import storagecon
 
 
-# TODO
-# - Try computing bakemap histogram, select the right format depending on the intensity span (EXR / brightness adjusted PNG or WEBP)
-
-
 def export_name(object_name):
     return object_name.replace(".", "_").replace(" ", "_").replace("-", "_")
 

@@ -38,9 +38,7 @@ global_scale = vlm_utils.global_scale
 # - Implement surface positionning relative to a ramp
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 # - JP's Star Trek has a wrong texture positionning (panel above ramp)
-# - Try importing inserts as transparent holes in PF, with an overlay flat face for better perf (smaller overdraw) and packing
 # - Identify static/active bake and export accordingly (done for opacity, missing for under playfield which, I think, need to be marked as active)
-# - Some core meshes seem to loose there smoothing data (light bulb for example, check and fix)
 
 
 
@@ -335,17 +333,8 @@ def read_vpx(context, filepath):
     vlm_collections.find_layer_collection(context.view_layer.layer_collection, movable_col).exclude = False
     vlm_collections.find_layer_collection(context.view_layer.layer_collection, indirect_col).exclude = False
     
-    # Append core meshes (without linking them in order to dispose the unused ones after import)
-    librarypath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VPXMeshes.blend")
-    if not os.path.isfile(librarypath):
-        self.report({'WARNING'},f"{librarypath} does not exist")
-        return {'CANCELLED'}
-    with bpy.data.libraries.load(librarypath, link=False) as (data_from, data_to):
-        data_to.objects = [name for name in data_from.objects if name.startswith("VPX.Core.")]
-        data_to.images = [name for name in data_from.images if name.startswith("VPX.Core.")]
-        data_to.materials = [name for name in data_from.materials if name.startswith("VPX.Core.Mat.")]
-        data_to.node_groups = data_from.node_groups
-
+    vlm_utils.load_library()
+    
     with olefile.OleFileIO(filepath) as ole:
         version = biff_io.BIFF_reader(ole.openstream('GameStg/Version').read()).get_32()
         if version <= 30:

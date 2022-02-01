@@ -31,6 +31,24 @@ from . import vlm_collections
 global_scale = 0.01
 
 
+def load_library():
+    """Append core meshes (without linking them in order to dispose the unused ones after import)
+    and core shader node groups (with fake user to avoid loosing them)
+    """
+    librarypath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VPXMeshes.blend")
+    if not os.path.isfile(librarypath):
+        print(f'{librarypath} does not exist')
+    with bpy.data.libraries.load(librarypath, link=False) as (data_from, data_to):
+        data_to.objects = [name for name in data_from.objects if name.startswith("VPX.Core.")]
+        data_to.images = [name for name in data_from.images if name.startswith("VPX.Core.")]
+        data_to.materials = [name for name in data_from.materials if name.startswith("VPX.Core.Mat.")]
+        data_to.node_groups = data_from.node_groups
+    bpy.data.node_groups.get('VLM.BakeInfo').use_fake_user = True
+    bpy.data.node_groups.get('VPX.Material').use_fake_user = True
+    bpy.data.node_groups.get('VPX.Flasher').use_fake_user = True
+    bpy.data.node_groups.get('Pack Map').use_fake_user = True
+
+
 def push_color_grading(set_neutral):
     state = (bpy.context.scene.view_settings.view_transform, bpy.context.scene.view_settings.look)
     if set_neutral:
@@ -77,6 +95,20 @@ def image_by_path(path):
         if image.filepath == path:
             return image
     return None
+
+
+def get_image_or_black(path):
+    existing = image_by_path(path)
+    if existing:
+        return ('existing', existing)
+    elif os.path.exists(bpy.path.abspath(path)):
+        return ('loaded', bpy.data.images.load(path, check_existing=False))
+    else:
+        black_image = bpy.data.images.get('VLM.NoTex')
+        if not black_image:
+            black_image = bpy.data.images.new('VLM.NoTex', 1, 1)
+            black_image.generated_type = 'BLANK'
+        return ('black', black_image)
 
 
 def mkpath(path):
