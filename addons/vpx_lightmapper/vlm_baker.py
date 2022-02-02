@@ -740,22 +740,21 @@ def create_bake_meshes(context):
             print(f". {n_faces - len(bake_target.data.polygons)} backfacing faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
 
         # Clean up and simplify mesh (except for playfield mesh)
+        n_faces = len(bake_target.data.polygons)
         if bake_mode == 'playfield':
-            n_faces = len(bake_target.data.polygons)
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.mesh.remove_doubles(threshold = 0.001 * global_scale)
             bpy.ops.mesh.delete_loose()
             bpy.ops.object.mode_set(mode='OBJECT')
         elif opt_optimize_mesh:
-            n_faces = len(bake_target.data.polygons)
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.mesh.remove_doubles(threshold = 0.001 * global_scale)
             bpy.ops.mesh.dissolve_limited(angle_limit = radians(0.1))
             bpy.ops.mesh.delete_loose()
             bpy.ops.object.mode_set(mode='OBJECT')
-            print(f". {n_faces - len(bake_target.data.polygons)} faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
+        print(f". {n_faces - len(bake_target.data.polygons)} faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
 
         # Compute base UV Map projection matching the render
         for uvl in bake_mesh.uv_layers:
@@ -769,36 +768,29 @@ def create_bake_meshes(context):
         bpy.ops.object.mode_set(mode='OBJECT')
         
         # Subdivide long edges to avoid visible projection distortion, and allow better lightmap face pruning (recursive subdivisions)
-        bpy.ops.object.mode_set(mode='EDIT')
-        opt_cut_threshold = 0.1
+        opt_cut_threshold = 0.1 # 0.2 seems sufficient for distortion, lower value is needed for lightmap face pruning
         while True:
+            bpy.ops.object.mode_set(mode='EDIT')
             bme = bmesh.from_edit_mesh(bake_mesh)
             long_edges = []
-            n_cuts = 0
             for edge in bme.edges:
                 if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
                     continue
                 ua, va = edge.verts[0].link_loops[0][bme.loops.layers.uv.active].uv
                 ub, vb = edge.verts[1].link_loops[0][bme.loops.layers.uv.active].uv
                 l = math.sqrt((ub-ua)*(ub-ua)*opt_ar*opt_ar+(vb-va)*(vb-va))
-                # 0.2 seems sufficient for distortion, lower value is needed for lightmap face pruning
-                if l >= opt_cut_threshold: 
-                    n_needed_cuts = math.floor(l / opt_cut_threshold)
-                    if n_needed_cuts > n_cuts:
-                        n_cuts = n_needed_cuts
-                        long_edges = [edge]
-                    elif n_needed_cuts == n_cuts:
-                        long_edges.append(edge)
+                if l >= opt_cut_threshold: long_edges.append(edge)
             if not long_edges:
                 print(f'. Nb edges: {len(bme.edges)} / faces: {len(bme.faces)}')
                 bmesh.update_edit_mesh(bake_mesh)
+                bpy.ops.object.mode_set(mode='OBJECT')
                 break
-            bmesh.ops.subdivide_edges(bme, edges=long_edges, cuts=n_cuts, use_grid_fill=True)
+            bmesh.ops.subdivide_edges(bme, edges=long_edges, cuts=1, use_grid_fill=True)
             bmesh.update_edit_mesh(bake_mesh)
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.uv.project_from_view(override)
-            print(f". {len(long_edges)} long edges subdivided {n_cuts} times to avoid projection distortion.")
-        bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.mode_set(mode='OBJECT')
+            print(f". {len(long_edges)} long edges subdivided to avoid projection distortion.")
         
         # Separate big polys (out of there natural island) for better packing
         uv_layer_packed = bake_mesh.uv_layers.new(name="UVMap Packed")
@@ -887,10 +879,6 @@ def create_bake_meshes(context):
                 #prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size)
                 #prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, opt_lightmap_prune_res)
                 prune_lightmap_by_visibility_map(bake_instance_mesh, vlm_utils.get_bakepath(context, type='RENDERS'), name, n_render_groups, vmaps, opt_lightmap_prune_res)
-                bpy.ops.object.mode_set(mode='EDIT')
-                bpy.ops.mesh.select_all(action='SELECT')
-                bpy.ops.mesh.sort_elements(type='CURSOR_DISTANCE', elements={'VERT', 'FACE'}, reverse=True) # Farthest to nearest
-                bpy.ops.object.mode_set(mode='OBJECT')
 
             # Skip mesh if we do not have any polygons left
             if not bake_instance.data.polygons:
@@ -1138,10 +1126,10 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
             vec4 t = vec4(0.0); //texture(image, uvInterp).rgba;
             for (int y=0; y<ny; y++) {
                 for (int x=0; x<nx; x++) {
-                    t = max(t, texture(image, uvInterp + vec2(x * deltaU, y * deltaV)).rgba);
+                    t = max(t, clamp(texture(image, uvInterp + vec2(x * deltaU, y * deltaV)).rgba, 0.0, 1.0));
                 }
             }
-            float v = step(2.0/255.0, t.a * dot(t.rgb, vec3(0.2989, 0.5870, 0.1140)));
+            float v = t.a * dot(t.rgb, vec3(0.2989, 0.5870, 0.1140));
             FragColor = vec4(v, v, v, 1.0);
         }
     '''
@@ -1150,23 +1138,17 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
         path_exr = f"{render_path}{name} - Group {i}.exr"
         path_png = f"{render_path}{name} - Group {i}.png"
         if os.path.exists(bpy.path.abspath(path_exr)):
-            # Convert image from HDR to LDR (slow but works, without it overbright area in flashers are clipped out)
             image = bpy.data.images.load(path_exr, check_existing=False)
-            image.scale(image.size[0], image.size[1]) # Force loading the image from disk and unlink it
-            image.filepath_raw = path_png
-            image.file_format = 'PNG'
-            image.save()
-            bpy.data.images.remove(image)
-            image = bpy.data.images.load(path_png, check_existing=False)
             im_width, im_height = image.size
             h = min(map_height, im_height)
             w = int(im_width * h / im_height)
-            # Rescale, convert to black and white, apply alpha, in a single pass on the GPU
+            # Rescale with a max filter, convert to black and white, apply alpha, in a single pass on the GPU
             offscreen = gpu.types.GPUOffScreen(w, h)
             with offscreen.bind():
                 bw_shader.bind()
                 nx = int(im_width / w)
                 ny = int(im_height / h)
+                gpu_texture = gpu.texture.from_image(image)
                 bw_shader.uniform_sampler("image", gpu.texture.from_image(image))
                 bw_shader.uniform_float("deltaU", 1.0 / im_width)
                 bw_shader.uniform_float("deltaV", 1.0 / im_height)
@@ -1176,6 +1158,7 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
                     bw_shader, 'TRI_FAN',
                     {
                         "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
+                        #"uv": ((0, 0), (1, 0), (1, 1), (0, 1)),
                         "uv": ((0, 0), (1 - nx/im_width, 0), (1 - nx/im_width, 1 - ny/im_height), (0, 1 - ny/im_height)),
                     },
                 ).draw(bw_shader)
@@ -1183,7 +1166,6 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
                 bw.dimensions = w * h * 4
             offscreen.free()
             bpy.data.images.remove(image)
-            os.remove(bpy.path.abspath(path_png))
             for xy in range(w * h):
                 if bw[4 * xy] > 2:
                     for face_index in vmaps[i][xy]:
