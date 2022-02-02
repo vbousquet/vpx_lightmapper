@@ -100,11 +100,12 @@ if dependencies_installed:
 
 class VLM_Scene_props(PropertyGroup):
     # Importer options
-    light_size: FloatProperty(name="Light Size", description="Light size factor from VPX to Blender", default = 0.0)
+    light_size: FloatProperty(name="Light Size", description="Light size factor from VPX to Blender", default = 5.0)
     light_intensity: FloatProperty(name="Light Intensity", description="Light intensity factor from VPX to Blender", default = 250.0)
+    insert_size: FloatProperty(name="Insert Size", description="Inserts light size factor from VPX to Blender", default = 0.0)
     insert_intensity: FloatProperty(name="Insert Intensity", description="Insert intensity factor from VPX to Blender", default = 25.0)
     process_inserts: BoolProperty(name="Convert inserts", description="Detect inserts and converts them", default = True)
-    use_pf_translucency_map: BoolProperty(name="PF Translucency Map", description="Generate a translucency map for inserts", default = True)
+    use_pf_translucency_map: BoolProperty(name="Translucency Map", description="Generate a translucency map for inserts", default = True)
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
     camera_inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 15.0, update=vlm_camera.camera_inclination_update)
@@ -226,6 +227,7 @@ class VLM_Object_props(PropertyGroup):
         name="Type",
         default='default'
     )
+    bake_hdr_scale: FloatProperty(name="HDR Scale", description="Light intensity factor to be applied for HDR correction", default=1)
     bake_tex_factor: FloatProperty(name="Tex Ratio", description="Texture size factor", default=1)
     bake_packmap: IntProperty(name="Packmap", description="ID of output packmap (multiple bakes may share a packmap)", default = -1)
     bake_packmap_width: IntProperty(name="Width", description="Packmap Texture width", default=1)
@@ -595,6 +597,7 @@ class VLM_OT_load_render_images(Operator):
                 paths = [f"{bakepath}{obj.vlmSettings.bake_name} - Group {i}.exr" for i,_ in enumerate(obj.data.materials)]
                 images = [vlm_utils.image_by_path(path) for path in paths]
                 all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
+                print(images)
                 if all_loaded:
                     for im in images:
                         if im.name != 'VLM.NoTex': bpy.data.images.remove(im)
@@ -623,11 +626,14 @@ class VLM_PT_Importer(bpy.types.Panel):
         layout.prop(vlmProps, "table_file")
         layout.prop(vlmProps, "light_size")
         layout.prop(vlmProps, "light_intensity")
+        layout.separator()
         layout.prop(vlmProps, "process_plastics")
         layout.prop(vlmProps, "bevel_plastics")
+        layout.separator()
         layout.prop(vlmProps, "process_inserts")
-        layout.prop(vlmProps, "use_pf_translucency_map")
+        layout.prop(vlmProps, "insert_size")
         layout.prop(vlmProps, "insert_intensity")
+        layout.prop(vlmProps, "use_pf_translucency_map")
 
 
 class VLM_PT_Camera(bpy.types.Panel):

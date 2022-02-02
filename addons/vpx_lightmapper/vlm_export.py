@@ -496,12 +496,12 @@ def export_vpx(context):
                             sync_color = baked_light.type == 'LIGHT'
                             vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object
                         if vpx_name in table_lights:
-                            updates.append((elem_ref(vpx_name), 0, elem_ref(export_name(obj.name)), sync_color))
+                            updates.append((elem_ref(vpx_name), 0, elem_ref(export_name(obj.name)), sync_color, obj.vlmSettings.bake_hdr_scale))
                         elif vpx_name in table_flashers:
-                            updates.append((elem_ref(vpx_name), 1, elem_ref(export_name(obj.name)), sync_color))
+                            updates.append((elem_ref(vpx_name), 1, elem_ref(export_name(obj.name)), sync_color, obj.vlmSettings.bake_hdr_scale))
                         else:
                             print(f". {obj.name} is missing a vpx light/flasher object to be synchronized on")
-                            updates.append((None, 2, elem_ref(export_name(obj.name)), False))
+                            updates.append((None, 2, elem_ref(export_name(obj.name)), False, 1))
 
                     in_block = 0 # Search and update existing block if any
                     for line in code.splitlines():
@@ -510,7 +510,7 @@ def export_vpx(context):
                             if line_stripped.startswith('End Sub'):
                                 in_block = 2
                                 for upd in updates:
-                                    code += push_update(upd[1], upd[0], upd[2], 100, upd[3])
+                                    code += push_update(upd[1], upd[0], upd[2], 100 * upd[4], upd[3])
                                 code += "End Sub\n"
                             else:
                                 updl = re.match("UpdateLightMapFromLight\s*([^,]*),\s*([^,]*),\s*(\d*),\s*(True|False)\s*", line_stripped)
@@ -526,6 +526,7 @@ def export_vpx(context):
                                     if upd:
                                         updates.remove(upd)
                                         if upd[2] != obj_ref: print(f'. Warning: for {vpx_ref}, lightmap changed from {obj_ref} to {upd[2]}')
+                                        if math.abs(intensity - 100 * upd[4]) > 0.1: print(f'. Custom intensity for {vpx_ref} is {intensity}. It does not match the computed one of {100*upd[4]}')
                                         code += push_update(upd[1], upd[0], upd[2], intensity, upd[3])
                                     else:
                                         code += f"  ' {line_stripped}\n"
@@ -541,7 +542,7 @@ def export_vpx(context):
                         code += "' Warning: Only intensity will be preserved if edited and re-exported\n"
                         code += "Sub VLMTimer_Timer\n"
                         for upd in updates:
-                            code += push_update(upd[1], upd[0], upd[2], 100, upd[3])
+                            code += push_update(upd[1], upd[0], upd[2], 100 * upd[4], upd[3])
                         code += "End Sub\n\n"
                         code += "Sub UpdateLightMapFromFlasher(flasher, lightmap, intensity_scale, sync_color)\n"
                         code += "	If flasher.Visible Then\n"

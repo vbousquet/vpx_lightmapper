@@ -39,6 +39,7 @@ global_scale = vlm_utils.global_scale
 # - Apply layback lattice transform when performing UV projection
 
 
+
 def remove_backfacing(context, obj, eye_position, limit):
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(True)
@@ -220,7 +221,7 @@ def compute_render_groups(context):
         need_render = opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath))
         if not need_render:
             im = Image.open(bpy.path.abspath(context.scene.render.filepath))
-            need_render = im.size[0] != context.scene.render.resolution_x or im.size[1] != context.scene.render.resolution_x
+            need_render = im.size[0] != context.scene.render.resolution_x or im.size[1] != context.scene.render.resolution_y
         if need_render:
             initial_collection = vlm_collections.move_to_col(obj, tmp_col)
             bpy.ops.render.render(write_still=True)
@@ -348,7 +349,12 @@ def render_all_groups(context):
     
     # Check if light is influencing with regard to the provided group mask using an ellipsoid influence bound
     def get_light_influence(light, group_mask):
-        w, h, mask = group_mask
+        if not group_mask:
+            w = context.scene.render.resolution_x
+            h = context.scene.render.resolution_y
+            mask = None
+        else:
+            w, h, mask = group_mask
         if light.type != 'LIGHT':
             return (0, 1, 0, 1)
         influence_radius = light.data.shadow_soft_size + math.log10(light.data.energy) * 250 * global_scale # empirically observed
@@ -359,6 +365,9 @@ def render_all_groups(context):
         max_x = min(w-1, int(light_center.x + light_xr))
         min_y = max(  0, int(light_center.y - light_yr))
         max_y = min(h-1, int(light_center.y + light_yr))
+        if not mask: # No mask, return the area of influence of the light
+            return (max(0, (light_center.x - light_xr) / w), min(1, (light_center.x + light_xr) / w),
+                max(  0, (light_center.y - light_yr) / h), min(1, (light_center.y + light_yr) / h))
         alpha_y = light_yr / light_xr
         max_r2 = light_xr * light_xr
         for y in range(min_y, max_y + 1):
@@ -367,7 +376,7 @@ def render_all_groups(context):
             for x in range(min_x, max_x + 1):
                 px = x - light_center.x
                 if px*px+py2 < max_r2 and mask[x + y * w] > 0: # inside the influence elipsoid, with an influenced object
-                    return (max(0, (light_center.x - light_xr) / w), min(1, (light_center.x + light_xr)/w),
+                    return (max(0, (light_center.x - light_xr) / w), min(1, (light_center.x + light_xr) / w),
                         max(  0, (light_center.y - light_yr) / h), min(1, (light_center.y + light_yr) / h))
         return None
     
@@ -458,7 +467,7 @@ def render_all_groups(context):
             context.scene.render.filepath = f"{bakepath}{scenario[0]} - Overlays.exr"
             if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
                 print(f". Rendering overlay ({len(overlays)} objects) for '{scenario[0]}' ({i}/{n_lighting_situations})")
-                state, restore_func = setup_light_scenario(context, scenario)
+                state, restore_func = setup_light_scenario(context, scenario, None)
                 n_render_performed = n_render_performed + 1
                 context.scene.render.image_settings.color_mode = 'RGBA' # Force alpha channel, even for lightmaps
                 bpy.ops.render.render(write_still=True)
@@ -593,6 +602,7 @@ def create_bake_meshes(context):
     # Texture packing
     opt_padding = vlmProps.padding
     opt_tex_size = int(vlmProps.tex_size)
+    opt_ar = vlmProps.render_aspect_ratio
 
     # Bake mesh generation settings
     opt_backface_limit_angle = vlmProps.remove_backface
@@ -729,8 +739,15 @@ def create_bake_meshes(context):
             remove_backfacing(context, bake_target, camera.location, opt_backface_limit_angle)
             print(f". {n_faces - len(bake_target.data.polygons)} backfacing faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
 
-        # Simplify mesh
-        if opt_optimize_mesh and not bake_mode == 'playfield':
+        # Clean up and simplify mesh (except for playfield mesh)
+        if bake_mode == 'playfield':
+            n_faces = len(bake_target.data.polygons)
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.mesh.remove_doubles(threshold = 0.001 * global_scale)
+            bpy.ops.mesh.delete_loose()
+            bpy.ops.object.mode_set(mode='OBJECT')
+        elif opt_optimize_mesh:
             n_faces = len(bake_target.data.polygons)
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
@@ -753,30 +770,34 @@ def create_bake_meshes(context):
         
         # Subdivide long edges to avoid visible projection distortion, and allow better lightmap face pruning (recursive subdivisions)
         bpy.ops.object.mode_set(mode='EDIT')
+        opt_cut_threshold = 0.1
         while True:
             bme = bmesh.from_edit_mesh(bake_mesh)
             long_edges = []
-            for face in bme.faces:
-                face.select = False
+            n_cuts = 0
             for edge in bme.edges:
-                edge.select = False
                 if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
                     continue
                 ua, va = edge.verts[0].link_loops[0][bme.loops.layers.uv.active].uv
                 ub, vb = edge.verts[1].link_loops[0][bme.loops.layers.uv.active].uv
-                l = math.sqrt((ub-ua)*(ub-ua)+(vb-va)*(vb-va))
-                if l >= 0.1: # 0.2 is sufficient for distortion, lower value is needed for lightmap face pruning
-                    edge.select = True
-                    long_edges.append(edge)
+                l = math.sqrt((ub-ua)*(ub-ua)*opt_ar*opt_ar+(vb-va)*(vb-va))
+                # 0.2 seems sufficient for distortion, lower value is needed for lightmap face pruning
+                if l >= opt_cut_threshold: 
+                    n_needed_cuts = math.floor(l / opt_cut_threshold)
+                    if n_needed_cuts > n_cuts:
+                        n_cuts = n_needed_cuts
+                        long_edges = [edge]
+                    elif n_needed_cuts == n_cuts:
+                        long_edges.append(edge)
             if not long_edges:
                 print(f'. Nb edges: {len(bme.edges)} / faces: {len(bme.faces)}')
                 bmesh.update_edit_mesh(bake_mesh)
                 break
-            bmesh.ops.subdivide_edges(bme, edges=long_edges, cuts=1, use_grid_fill=True)
+            bmesh.ops.subdivide_edges(bme, edges=long_edges, cuts=n_cuts, use_grid_fill=True)
             bmesh.update_edit_mesh(bake_mesh)
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.uv.project_from_view(override)
-            print(f". {len(long_edges)} long edges subdivided to avoid projection distortion.")
+            print(f". {len(long_edges)} long edges subdivided {n_cuts} times to avoid projection distortion.")
         bpy.ops.object.mode_set(mode='OBJECT')
         
         # Separate big polys (out of there natural island) for better packing
@@ -865,7 +886,6 @@ def create_bake_meshes(context):
             if is_lightmap: # Remove unlit faces of lightmaps (lighting < threshold)
                 #prune_lightmap_by_heatmap(bake_instance_mesh, bakepath, name, n_render_groups, opt_tex_size)
                 #prune_lightmap_by_rasterization(bake_instance_mesh, bakepath, name, n_render_groups, opt_lightmap_prune_res)
-
                 prune_lightmap_by_visibility_map(bake_instance_mesh, vlm_utils.get_bakepath(context, type='RENDERS'), name, n_render_groups, vmaps, opt_lightmap_prune_res)
                 bpy.ops.object.mode_set(mode='EDIT')
                 bpy.ops.mesh.select_all(action='SELECT')
@@ -1018,7 +1038,7 @@ def create_bake_meshes(context):
             packed_density = 0
             for obj in bakes:
                 packed_density += compute_uvmap_density(obj.data, obj.data.uv_layers["UVMap Packed"])
-            print(f'.   Packmap #{index}: {density:>6.2%} density for {len(bakes)} objects => {w:>4}x{h:>4} texture size with {packed_density:>6.2%} packed density')
+            print(f'.  Packmap #{index}: {density:>6.2%} density for {len(bakes)} objects => {w:>4}x{h:>4} texture size with {packed_density:>6.2%} packed density')
 
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -1086,7 +1106,6 @@ def build_visibility_map(bake_instance_mesh, n_render_groups, width, height):
     bpy.ops.object.mode_set(mode='OBJECT')
     return vmaps
 
-
 def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_render_groups, vmaps, map_height):
     """Prune faces based on there visibility in the precomputed visibility maps
     """
@@ -1109,19 +1128,36 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
     '''
     bw_fragment_shader = '''
         uniform sampler2D image;
+        uniform float deltaU;
+        uniform float deltaV;
+        uniform int nx;
+        uniform int ny;
         in vec2 uvInterp;
         out vec4 FragColor;
         void main() {
-            vec4 t = texture(image, uvInterp).rgba;
-            float v = t.a * dot(t.rgb, vec3(0.2989, 0.5870, 0.1140));
+            vec4 t = vec4(0.0); //texture(image, uvInterp).rgba;
+            for (int y=0; y<ny; y++) {
+                for (int x=0; x<nx; x++) {
+                    t = max(t, texture(image, uvInterp + vec2(x * deltaU, y * deltaV)).rgba);
+                }
+            }
+            float v = step(2.0/255.0, t.a * dot(t.rgb, vec3(0.2989, 0.5870, 0.1140)));
             FragColor = vec4(v, v, v, 1.0);
         }
     '''
     bw_shader = gpu.types.GPUShader(vertex_shader, bw_fragment_shader)
     for i in range(n_render_groups):
-        path = f"{render_path}{name} - Group {i}.exr"
-        if os.path.exists(bpy.path.abspath(path)):
-            image = bpy.data.images.load(path, check_existing=False)
+        path_exr = f"{render_path}{name} - Group {i}.exr"
+        path_png = f"{render_path}{name} - Group {i}.png"
+        if os.path.exists(bpy.path.abspath(path_exr)):
+            # Convert image from HDR to LDR (slow but works, without it overbright area in flashers are clipped out)
+            image = bpy.data.images.load(path_exr, check_existing=False)
+            image.scale(image.size[0], image.size[1]) # Force loading the image from disk and unlink it
+            image.filepath_raw = path_png
+            image.file_format = 'PNG'
+            image.save()
+            bpy.data.images.remove(image)
+            image = bpy.data.images.load(path_png, check_existing=False)
             im_width, im_height = image.size
             h = min(map_height, im_height)
             w = int(im_width * h / im_height)
@@ -1129,22 +1165,39 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
             offscreen = gpu.types.GPUOffScreen(w, h)
             with offscreen.bind():
                 bw_shader.bind()
+                nx = int(im_width / w)
+                ny = int(im_height / h)
                 bw_shader.uniform_sampler("image", gpu.texture.from_image(image))
+                bw_shader.uniform_float("deltaU", 1.0 / im_width)
+                bw_shader.uniform_float("deltaV", 1.0 / im_height)
+                bw_shader.uniform_int("nx", nx)
+                bw_shader.uniform_int("ny", ny)
                 batch_for_shader(
                     bw_shader, 'TRI_FAN',
                     {
                         "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
-                        "uv": ((0, 0), (1, 0), (1, 1), (0, 1)),
+                        "uv": ((0, 0), (1 - nx/im_width, 0), (1 - nx/im_width, 1 - ny/im_height), (0, 1 - ny/im_height)),
                     },
                 ).draw(bw_shader)
                 bw = gpu.state.active_framebuffer_get().read_color(0, 0, w, h, 4, 0, 'UBYTE')
                 bw.dimensions = w * h * 4
             offscreen.free()
             bpy.data.images.remove(image)
+            os.remove(bpy.path.abspath(path_png))
             for xy in range(w * h):
                 if bw[4 * xy] > 2:
                     for face_index in vmaps[i][xy]:
                         bm.faces[face_index].tag = True
+            if False and name.startswith('Flashers'): # Debug save to adjust thresold in shader
+                print(f"Saving lighhtmap prune map: {render_path}debug/{name} - Group {i}.png")
+                vlm_utils.mkpath(f'{render_path}debug/')
+                image = bpy.data.images.new("debug", w, h)
+                image.pixels = [v / 255 for v in bw]
+                image.filepath_raw = f'{render_path}debug/{name} - Group {i}.png'
+                image.file_format = 'PNG'
+                image.save()
+                bpy.data.images.remove(image)
+            
     n_delete = 0
     for face in bm.faces:
         if not face.tag:
@@ -1706,7 +1759,7 @@ def render_packmaps(context):
         return
 
     start_time = time.time()
-    print(f"\nRendering packmaps")
+    print(f'\nRendering packmaps')
     vlmProps = context.scene.vlmSettings
 
     opt_force_render = False # Force rendering even if cache is available
@@ -1733,7 +1786,7 @@ def render_packmaps(context):
         basepath = f"{bakepath}Packmap {packmap_index}"
         path_png = bpy.path.abspath(basepath + '.png')
         path_webp = bpy.path.abspath(basepath + ".webp")
-        print(f". Rendering packmap #{packmap_index} containing {len(objects)} bake/light map")
+        print(f'. Rendering packmap #{packmap_index} containing {len(objects)} bake/light map')
         
         if opt_force_render or not os.path.exists(path_png):
             tex_width = objects[0].vlmSettings.bake_packmap_width
@@ -1747,17 +1800,24 @@ def render_packmaps(context):
                 obj.select_set(True)
                 is_light = obj.vlmSettings.bake_type == 'lightmap'
                 unloads = []
+                hdr_range = 255
                 for i, mat in enumerate(obj.data.materials):
                     path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr"
                     loaded, render = vlm_utils.get_image_or_black(path)
                     if loaded == 'loaded':
                         unloads.append(render)
+                    extremas = Image.open(os.path.abspath(path)).getextrema()
+                    hdr_range = max(hdr_range, extremas[0][1], extremas[1][1], extremas[2][1])
                     mat.node_tree.nodes["BakeTex"].image = render
                     mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0 if is_light else 0.0
                     mat.node_tree.nodes["PackMap"].inputs[3].default_value = 0.0 # Bake
                     mat.node_tree.nodes["PackTex"].image = pack_image
                     mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
                     mat.blend_method = 'OPAQUE'
+                print(f'. {obj.vlmSettings.bake_name} has an HDR range of {hdr_range:>5.2} (lightmap: {is_light})')
+                obj.vlmSettings.bake_hdr_range = hdr_range
+                for mat in obj.data.materials:
+                    mat.node_tree.nodes["PackMap"].inputs[4].default_value = (1 / hdr_range) if hdr_range > 0 and is_light else 1.0
                 bpy.ops.object.bake(type='COMBINED', pass_filter={'EMIT', 'DIRECT'}, margin=opt_padding)
                 for mat in obj.data.materials:
                     mat.node_tree.nodes["PackMap"].inputs[3].default_value = 1.0 # Preview
@@ -1765,9 +1825,9 @@ def render_packmaps(context):
                 for render in unloads:
                     bpy.data.images.remove(render)
                 context.scene.render.bake.use_clear = False
-            #pack_image.filepath_raw = bpy.path.abspath(basepath + '.exr')
-            #pack_image.file_format = 'OPEN_EXR'
-            #pack_image.save()
+            pack_image.filepath_raw = bpy.path.abspath(basepath + '.hdr')
+            pack_image.file_format = 'HDR'
+            pack_image.save()
             pack_image.filepath_raw = path_png
             pack_image.file_format = 'PNG'
             pack_image.save()
@@ -1782,4 +1842,4 @@ def render_packmaps(context):
     context.scene.cycles.use_denoising = True
     vlm_collections.pop_state(col_state)
     vlm_utils.pop_color_grading(cg)
-    print(f"\n{packmap_index} packmaps rendered in {format_time(time.time() - start_time)}s.")
+    print(f'\n{packmap_index} packmaps rendered in {format_time(time.time() - start_time)}s.')

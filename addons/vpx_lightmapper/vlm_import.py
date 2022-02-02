@@ -300,6 +300,7 @@ def read_vpx(context, filepath):
 
     opt_light_size = context.scene.vlmSettings.light_size
     opt_light_intensity = context.scene.vlmSettings.light_intensity
+    opt_insert_size = context.scene.vlmSettings.insert_size
     opt_insert_intensity = context.scene.vlmSettings.insert_intensity
     opt_process_inserts = context.scene.vlmSettings.process_inserts
     opt_process_plastics = context.scene.vlmSettings.process_plastics
@@ -916,7 +917,7 @@ def read_vpx(context, filepath):
                         halo_height = 0
 
                     curve.fill_mode = 'BACK'
-                    curve.extrude = max(opt_light_size + 1, 5) * global_scale
+                    curve.extrude = max(opt_insert_size + 1, 5) * global_scale
                     curve.transform(mathutils.Matrix.Translation((-x * global_scale, y * global_scale, 0.0)))
                     curve.materials.append(bpy.data.materials["VPX.Core.Mat.Inserts.Back"])
                     _, obj = update_object(context, name, 'InsertCup', curve, True, indirect_col, hidden_col)
@@ -928,10 +929,11 @@ def read_vpx(context, filepath):
                     light = bpy.data.lights.new(name=f'{name}.Light', type='POINT')
                     light.color = (color[0], color[1], color[2])
                     light.energy = opt_insert_intensity * intensity * global_scale
-                    light.shadow_soft_size = opt_light_size * global_scale
+                    light.shadow_soft_size = opt_insert_size * global_scale
                     _, obj = update_object(context, name, '', light, True, default_light, hidden_col)
                     # Move below playfield to light through the translucency of the playfield material
-                    update_location(obj, x * global_scale, -y * global_scale, -(opt_light_size + 1) * global_scale, layback_factor)
+                    obj.data.color = (color[0], color[1], color[2]) # Force color update
+                    update_location(obj, x * global_scale, -y * global_scale, -(opt_insert_size + 1) * global_scale, layback_factor)
                     shifted_objects.append((obj, surface))
                     created_objects.append(obj)
                 elif bulb:
@@ -941,6 +943,7 @@ def read_vpx(context, filepath):
                     light.energy = opt_light_intensity * intensity * global_scale
                     light.shadow_soft_size = opt_light_size * global_scale
                     _, obj = update_object(context, name, '', light, True, default_light, hidden_col)
+                    obj.data.color = (color[0], color[1], color[2]) # Force color update
                     update_location(obj, x * global_scale, -y * global_scale, z * global_scale, layback_factor)
                     created_objects.append(obj)
                 else:
@@ -1593,7 +1596,7 @@ def read_vpx(context, filepath):
                     light.color = (color[0], color[1], color[2])
                     light.energy = opt_light_intensity * alpha * global_scale / 100.0
                     light.shadow_soft_size = opt_light_size * global_scale
-                    _, obj = update_object(context,lattice, name, '', light, True, flahers_col, hidden_col)
+                    _, obj = update_object(context, name, '', light, True, flahers_col, hidden_col)
                     update_location(obj, half_x, half_y, global_scale * height)
                     created_objects.append(obj)
 
