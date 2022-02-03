@@ -149,6 +149,10 @@ def pop_state(state):
             col.hide_viewport = hide_viewport
 
 
+def unlink(obj):
+    [col.objects.unlink(obj) for col in obj.users_collection]
+
+
 def move_to_col(obj, target_col):
     initial_collections = [col for col in obj.users_collection]
     [col.objects.unlink(obj) for col in initial_collections]

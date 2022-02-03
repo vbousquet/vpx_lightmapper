@@ -121,6 +121,17 @@ class VLM_Scene_props(PropertyGroup):
         update=vlm_camera.camera_inclination_update
     )
     # Baker options
+    last_bake_step: EnumProperty(
+        items=[
+            ('unstarted', 'Unstarted', '', '', 0),
+            ('groups', 'Groups', '', '', 1),
+            ('renders', 'Rendered', '', '', 2),
+            ('meshes', 'Meshes', '', '', 3),
+            ('packmaps', 'Packmaps', '', '', 4),
+        ],
+        name='Last Bake Step',
+        default='unstarted'
+    )
     tex_size: EnumProperty(
         items=[
             ('256', '256', '256x256', '', 256),
@@ -145,12 +156,22 @@ class VLM_Scene_props(PropertyGroup):
         description='UV Packer to use',
         default='blender'
     )
+    bake_packmap_mode: EnumProperty(
+        items=[
+            ('gpu', 'GPU', 'Render packmap on GPU, fast, low memory requirements, no HDR/padding support', '', 0),
+            ('eevee', 'Eevee', 'Render packmap with eevee ortho, speed is ok, HDR but no padding support', '', 1),
+            ('cycle_seq', 'Cycle Seq', 'Render packmap with Cycle bakes, one render at a time, utterly slow, HDR & padding support', '', 1),
+            ('cycle', 'Cycle', 'Render packmap with Cycle bakes, one bake at a time, rather slow, very high memory requirmeents, HDR & padding support', '', 1),
+        ],
+        name="Packmap mode",
+        default='gpu'
+    )
     # Exporter options
     export_image_type: EnumProperty(
         items=[
             ('png', 'PNG', 'Use PNG images', '', 0),
             ('webp', 'WEBP', 'Use WebP images', '', 1),
-            #('hdr', 'HDR', 'Use HDR images', '', 2),
+            ('hdr', 'HDR', 'Use HDR images', '', 2),
         ],
         name='Image format',
         description='Image format used in exported table',
@@ -164,7 +185,7 @@ class VLM_Scene_props(PropertyGroup):
             ('remove_all', 'Remove All', 'Delete items and images that have been baked', '', 3),
         ],
         name='Export mode',
-        default='default'
+        default='remove_all'
     )
     # Active table informations
     table_file: StringProperty(name="Table", description="Table filename", default="")
@@ -246,6 +267,7 @@ class VLM_OT_new(Operator):
         context.scene.render.film_transparent = True
         context.scene.cycles.use_preview_denoising = True
         context.scene.vlmSettings.table_file = ""
+        context.scene.vlmSettings.last_bake_step = "unstarted"
         vlm_collections.delete_collection(vlm_collections.get_collection('ROOT'))
         vlm_collections.setup_collections()
         vlm_utils.load_library()
@@ -267,6 +289,7 @@ class VLM_OT_new_from_vpx(Operator, ImportHelper):
         context.scene.cycles.use_preview_denoising = True
         context.scene.vlmSettings.table_file = ""
         vlm_collections.delete_collection(vlm_collections.get_collection('ROOT'))
+        context.scene.vlmSettings.last_bake_step = "unstarted"
         return vlm_import.read_vpx(context, self.filepath)
 
 
@@ -282,6 +305,7 @@ class VLM_OT_update(Operator):
 
     def execute(self, context):
         vlmProps = context.scene.vlmSettings
+        context.scene.vlmSettings.last_bake_step = "unstarted"
         return vlm_import.read_vpx(context, bpy.path.abspath(context.scene.vlmSettings.table_file))
 
 
@@ -302,8 +326,7 @@ class VLM_OT_compute_render_groups(Operator):
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
-        vlm_baker.compute_render_groups(context)
-        return {"FINISHED"}
+        return vlm_baker.compute_render_groups(self, context)
 
 
 class VLM_OT_render_all_groups(Operator):
@@ -313,8 +336,7 @@ class VLM_OT_render_all_groups(Operator):
     bl_options = {"REGISTER"}
     
     def execute(self, context):
-        vlm_baker.render_all_groups(context)
-        return {"FINISHED"}
+        return vlm_baker.render_all_groups(self, context)
 
 
 class VLM_OT_create_bake_meshes(Operator):
@@ -324,8 +346,7 @@ class VLM_OT_create_bake_meshes(Operator):
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
-        vlm_baker.create_bake_meshes(context)
-        return {"FINISHED"}
+        return vlm_baker.create_bake_meshes(self, context)
 
 
 class VLM_OT_render_packmaps(Operator):
@@ -335,8 +356,7 @@ class VLM_OT_render_packmaps(Operator):
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
-        vlm_baker.render_packmaps(context)
-        return {"FINISHED"}
+        return vlm_baker.render_packmaps(self, context)
 
 
 class VLM_OT_export_vpx(Operator):
@@ -346,7 +366,7 @@ class VLM_OT_export_vpx(Operator):
     bl_options = {"REGISTER"}
     
     def execute(self, context):
-        return vlm_export.export_vpx(context)
+        return vlm_export.export_vpx(self, context)
 
 
 class VLM_OT_batch_bake(Operator):
@@ -548,31 +568,6 @@ class VLM_OT_select_packmap_group(Operator):
         return {"FINISHED"}
 
 
-class VLM_OT_export_packmap(Operator):
-    bl_idname = "vlm.export_packmap_operator"
-    bl_label = "Bake PackMap"
-    bl_description = "Compute and save the packed bake map for the selected bake meshes"
-    bl_options = {"REGISTER"}
-    
-    @classmethod
-    def poll(cls, context):
-        object_col = vlm_collections.get_collection('BAKE RESULT', create=False)
-        if object_col is not None:
-            for obj in context.selected_objects:
-                if obj.name in object_col.all_objects and "vlm.name" in obj and "vlm.is_light" in obj and "vlm.tex_width" in obj and "vlm.tex_height" in obj:
-                    return True
-        return False
-
-    def execute(self, context):
-        vlmProps = context.scene.vlmSettings
-        result_col = vlm_collections.get_collection('BAKE RESULT')
-        bakepath = f"//{bpy.path.basename(context.blend_data.filepath)} - Bakes/"
-        for obj in context.selected_objects:
-            if obj.name in result_col.all_objects:
-                vlm_export.export_packmap(obj, obj["vlm.name"], obj["vlm.is_light"] != 0, obj["vlm.tex_width"], obj["vlm.tex_height"], vlmProps.export_webp, vlmProps.padding, False, f"{bakepath}{obj['vlm.name']}.png")
-        return {"FINISHED"}
-
-
 class VLM_OT_load_render_images(Operator):
     bl_idname = "vlm.load_render_images_operator"
     bl_label = "Load/Unload Renders"
@@ -661,21 +656,27 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
         vlmProps = context.scene.vlmSettings
+        step = 0
+        if vlmProps.last_bake_step == 'groups': step = 1
+        if vlmProps.last_bake_step == 'renders': step = 2
+        if vlmProps.last_bake_step == 'meshes': step = 3
+        if vlmProps.last_bake_step == 'packmaps': step = 4
         layout.prop(vlmProps, "tex_size")
         layout.prop(vlmProps, "padding")
         layout.prop(vlmProps, "remove_backface", text='Backface')
         layout.prop(vlmProps, "uv_packer")
+        layout.prop(vlmProps, "bake_packmap_mode")
         layout.prop(vlmProps, "export_image_type")
         layout.prop(vlmProps, "export_mode")
         row = layout.row()
         row.scale_y = 1.5
-        row.operator(VLM_OT_compute_render_groups.bl_idname)
-        row.operator(VLM_OT_render_all_groups.bl_idname)
-        row.operator(VLM_OT_create_bake_meshes.bl_idname)
+        row.operator(VLM_OT_compute_render_groups.bl_idname, icon='GROUP_VERTEX', text='Groups')
+        row.operator(VLM_OT_render_all_groups.bl_idname, icon='RENDER_RESULT', text='Renders', emboss=step>0)
+        row.operator(VLM_OT_create_bake_meshes.bl_idname, icon='MESH_MONKEY', text='Meshes', emboss=step>1)
         row = layout.row()
         row.scale_y = 1.5
-        row.operator(VLM_OT_render_packmaps.bl_idname)
-        row.operator(VLM_OT_export_vpx.bl_idname)
+        row.operator(VLM_OT_render_packmaps.bl_idname, icon='TEXTURE_DATA', text='Packmaps', emboss=step>2)
+        row.operator(VLM_OT_export_vpx.bl_idname, icon='EXPORT', text='Export', emboss=step>3)
         row.operator(VLM_OT_batch_bake.bl_idname)
 
 
@@ -771,18 +772,18 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
         result_objects = [obj for obj in context.selected_objects if result_col is not None and obj.name in result_col.all_objects]
         if result_objects:
             if len(result_objects) == 1:
-                layout.prop(result_objects[0].vlmSettings, 'bake_name')
-                layout.prop(result_objects[0].vlmSettings, 'bake_objects')
-                layout.prop(result_objects[0].vlmSettings, 'bake_light')
-                layout.prop(result_objects[0].vlmSettings, 'bake_type')
-                layout.prop(result_objects[0].vlmSettings, 'bake_tex_factor')
+                props = result_objects[0].vlmSettings
+                layout.prop(props, 'bake_name')
+                layout.prop(props, 'bake_objects')
+                layout.prop(props, 'bake_light')
+                layout.prop(props, 'bake_type')
+                layout.prop(props, 'bake_hdr_scale')
+                layout.prop(props, 'bake_tex_factor')
                 layout.separator()
-                layout.prop(result_objects[0].vlmSettings, 'bake_packmap')
-                layout.prop(result_objects[0].vlmSettings, 'bake_packmap_width')
-                layout.prop(result_objects[0].vlmSettings, 'bake_packmap_height')
+                layout.prop(props, 'bake_packmap')
+                layout.prop(props, 'bake_packmap_width')
+                layout.prop(props, 'bake_packmap_height')
                 layout.operator(VLM_OT_select_packmap_group.bl_idname)
-            #layout.separator()
-            #layout.operator(VLM_OT_export_packmap.bl_idname)
             layout.separator()
             layout.operator(VLM_OT_load_render_images.bl_idname)
 
@@ -908,7 +909,6 @@ classes = (
     VLM_OT_clear_render_group_cache,
     VLM_OT_select_render_group,
     VLM_OT_select_packmap_group,
-    VLM_OT_export_packmap,
     VLM_OT_select_occluded,
     VLM_OT_load_render_images,
     VLM_OT_export_vpx,

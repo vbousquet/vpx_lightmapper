@@ -34,7 +34,7 @@ def export_name(object_name):
     return object_name.replace(".", "_").replace(" ", "_").replace("-", "_")
 
 
-def export_vpx(context):
+def export_vpx(op, context):
     """Export bakes by updating the reference VPX file
     . Remove all 'VLM.' prefixed objects from the source file
     . Disable rendering for all baked objects
@@ -44,7 +44,7 @@ def export_vpx(context):
     . Update the table script with the needed light/lightmap sync code
     """
     if context.blend_data.filepath == '':
-        print('ERROR: you must save your project before baking')
+        op.report({'ERROR'}, 'You must save your project before exporting')
         return {'CANCELLED'}
     vlmProps = context.scene.vlmSettings
     result_col = vlm_collections.get_collection('BAKE RESULT')
@@ -57,7 +57,7 @@ def export_vpx(context):
     overlay_col = vlm_collections.get_collection('OVERLAY')
     light_col = vlm_collections.get_collection('LIGHTS')
     if not os.path.isfile(input_path):
-        print(f"{input_path} does not exist")
+        op.report({'ERROR'}, f'{input_path} does not exist')
         return {'CANCELLED'}
     
     output_path = bpy.path.abspath(f"//{os.path.splitext(bpy.path.basename(input_path))[0]} - VLM.vpx")
@@ -388,6 +388,9 @@ def export_vpx(context):
             packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.hdr")
         else:
             packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.png")
+        if not os.path.exists(packmap_path):
+            op.report({"ERROR"}, f'Error missing pack file {packmap_path}. Create packmaps before exporting')
+            return {'CANCELLED'}
         img_writer = biff_io.BIFF_writer()
         img_writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
         img_writer.write_tagged_string(b'PATH', packmap_path)
@@ -501,7 +504,7 @@ def export_vpx(context):
                             updates.append((elem_ref(vpx_name), 1, elem_ref(export_name(obj.name)), sync_color, obj.vlmSettings.bake_hdr_scale))
                         else:
                             print(f". {obj.name} is missing a vpx light/flasher object to be synchronized on")
-                            updates.append((None, 2, elem_ref(export_name(obj.name)), False, 1))
+                            updates.append((None, 2, elem_ref(export_name(obj.name)), False, obj.vlmSettings.bake_hdr_scale))
 
                     in_block = 0 # Search and update existing block if any
                     for line in code.splitlines():

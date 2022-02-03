@@ -93,7 +93,7 @@ def uvpacker_pack(meshes, padding, width, height):
             if messageType == 0: # success
                 break
             elif messageType == 1: # progress
-                print(f'.   UVPacker progress {struct.unpack_from("<d", message, readPtr)[0]}')
+                print(f'.   UVPacker progress {struct.unpack_from("<d", message, readPtr)[0]:>5.2%}')
             elif messageType == 2: # error
                 msgSize = struct.unpack_from("<I", message, readPtr)[0]
                 readPtr += 4

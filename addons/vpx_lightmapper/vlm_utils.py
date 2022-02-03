@@ -27,7 +27,6 @@ from gpu_extras.batch import batch_for_shader
 from . import vlm_collections
 
 
-
 global_scale = 0.01
 
 
