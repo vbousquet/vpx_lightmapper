@@ -164,7 +164,7 @@ class VLM_Scene_props(PropertyGroup):
             ('cycle', 'Cycle', 'Render packmap with Cycle bakes, one bake at a time, rather slow, very high memory requirmeents, HDR & padding support', '', 1),
         ],
         name="Packmap mode",
-        default='gpu'
+        default='eevee'
     )
     # Exporter options
     export_image_type: EnumProperty(
