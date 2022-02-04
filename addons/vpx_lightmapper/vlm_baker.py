@@ -21,6 +21,7 @@ import os
 import time
 import gpu
 import datetime
+import numpy as np
 from math import radians
 from mathutils import Vector
 from gpu_extras.batch import batch_for_shader
@@ -125,10 +126,6 @@ def get_n_render_groups(context):
     return n
 
 
-def format_time(length_in_seconds):
-    return str(datetime.timedelta(seconds=length_in_seconds)).split('.')[0]
-    
-
 def compute_render_groups(op, context):
     """Evaluate the set of bake groups (groups of objects that do not overlap when rendered 
     from the camera point of view) and store the result in the object properties.
@@ -208,7 +205,7 @@ def compute_render_groups(op, context):
     context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
     vlm_collections.delete_collection(tmp_col)
     vlm_collections.pop_state(col_state)
-    print(f"\n{len(object_groups)} render groups defined in {format_time(time.time() - start_time)}.")
+    print(f"\n{len(object_groups)} render groups defined in {vlm_utils.format_time(time.time() - start_time)}.")
     context.scene.vlmSettings.last_bake_step = 'groups'
     return {'FINISHED'}
 
@@ -535,10 +532,10 @@ def render_all_groups(op, context):
     vlm_collections.delete_collection(tmp_col)
     vlm_collections.pop_state(col_state)
     length = time.time() - start_time
-    print(f"\nRendering finished in a total time of {format_time(length)}")
+    print(f"\nRendering finished in a total time of {vlm_utils.format_time(length)}")
     if n_existing > 0: print(f". {n_existing:>3} renders were skipped since they were already existing")
     if n_skipped > 0: print(f". {n_skipped:>3} renders were skipped since objects were outside of lights influence")
-    if n_render_performed > 0: print(f". {n_render_performed:>3} renders were computed ({format_time(length/n_render_performed)} per render)")
+    if n_render_performed > 0: print(f". {n_render_performed:>3} renders were computed ({vlm_utils.format_time(length/n_render_performed)} per render)")
 
     context.scene.vlmSettings.last_bake_step = 'renders'
     return {'FINISHED'}
@@ -738,17 +735,19 @@ def create_bake_meshes(op, context):
         bpy.ops.object.mode_set(mode='OBJECT')
 
         # Subdivide long edges to avoid visible projection distortion, and allow better lightmap face pruning (recursive subdivisions)
-        opt_cut_threshold = 0.1 # 0.2 seems sufficient for distortion, lower value is needed for lightmap face pruning
+        opt_cut_threshold = 0.02 if bake_mode == 'playfield' else 0.1 # 0.2 seems sufficient for distortion, lower value is needed for lightmap face pruning especially on playfield for inserts
         while True:
             bpy.ops.object.mode_set(mode='EDIT')
             bme = bmesh.from_edit_mesh(bake_mesh)
             long_edges = []
+            longest_edge = 0
             for edge in bme.edges:
                 if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
                     continue
                 ua, va = edge.verts[0].link_loops[0][bme.loops.layers.uv.active].uv
                 ub, vb = edge.verts[1].link_loops[0][bme.loops.layers.uv.active].uv
                 l = math.sqrt((ub-ua)*(ub-ua)*opt_ar*opt_ar+(vb-va)*(vb-va))
+                longest_edge = max(longest_edge, l)
                 if l >= opt_cut_threshold: long_edges.append(edge)
             if not long_edges:
                 bmesh.update_edit_mesh(bake_mesh)
@@ -760,7 +759,7 @@ def create_bake_meshes(op, context):
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.uv.project_from_view(override)
             bpy.ops.object.mode_set(mode='OBJECT')
-            print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning.")
+            print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
         
         # Separate big polys (out of there natural island) for better packing
         uv_layer_packed = bake_mesh.uv_layers.new(name="UVMap Packed")
@@ -844,11 +843,12 @@ def create_bake_meshes(op, context):
             bpy.ops.object.select_all(action='DESELECT')
             context.view_layer.objects.active = bake_instance
             bake_instance.select_set(True)
-            prune_lightmap_by_visibility_map(bake_instance.data, vlm_utils.get_bakepath(context, type='RENDERS'), name, n_render_groups, lightmap_vmap, prunemap_width, prunemap_height)
+            hdr_range = prune_lightmap_by_visibility_map(bake_instance.data, vlm_utils.get_bakepath(context, type='RENDERS'), name, n_render_groups, lightmap_vmap, prunemap_width, prunemap_height)
             if not bake_instance.data.polygons:
                 result_col.objects.unlink(bake_instance)
                 print(f". Mesh {name} has no more faces after optimization")
                 continue
+            bake_instance.vlmSettings.bake_hdr_scale = hdr_range
             bake_instance.vlmSettings.bake_name = name
             bake_instance.vlmSettings.bake_type = 'lightmap'
             bake_instance.vlmSettings.bake_light = light_scenario[2].name if light_scenario[2] is not None else light_scenario[1].name
@@ -1051,25 +1051,27 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
     '''
     bw_fragment_shader = '''
         uniform sampler2D image;
-        uniform float deltaU;
-        uniform float deltaV;
-        uniform int nx;
-        uniform int ny;
+        //uniform float deltaU;
+        //uniform float deltaV;
+        //uniform int nx;
+        //uniform int ny;
         in vec2 uvInterp;
         out vec4 FragColor;
         void main() {
-            vec4 t = vec4(0.0);
-            for (int y=0; y<ny; y++) {
-                for (int x=0; x<nx; x++) {
-                    t = max(t, clamp(texture(image, uvInterp + vec2(x * deltaU, y * deltaV)).rgba, 0.0, 1.0));
-                }
-            }
+            //vec4 t = vec4(0.0);
+            //for (int y=0; y<ny; y++) {
+            //    for (int x=0; x<nx; x++) {
+            //        t = max(t, clamp(texture(image, uvInterp + vec2(x * deltaU, y * deltaV)).rgba, 0.0, 1.0));
+            //    }
+            //}
+            vec4 t = clamp(texture(image, uvInterp).rgba, 0.0, 1.0);
             float v = t.a * dot(t.rgb, vec3(0.2989, 0.5870, 0.1140));
             FragColor = vec4(1.0, 1.0, 1.0, v);
         }
     '''
     # Rescale with a max filter, convert to black and white, apply alpha, in a single pass per image on the GPU
     offscreen = gpu.types.GPUOffScreen(w, h)
+    hdr_range = 1.0
     with offscreen.bind():
         fb = gpu.state.active_framebuffer_get()
         fb.clear(color=(0.0, 0.0, 0.0, 0.0))
@@ -1080,20 +1082,26 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
             path_exr = f"{render_path}{name} - Group {i}.exr"
             if os.path.exists(bpy.path.abspath(path_exr)):
                 image = bpy.data.images.load(path_exr, check_existing=False)
+                image.scale(w, h)
                 im_width, im_height = image.size
+                pixel_data = np.zeros((im_width * im_height * 4), 'f') # use numpy since hdr_range = max(hdr_range, max(image.pixels)) adds 1 minute per 8k image (hours with all of them)
+                image.pixels.foreach_get(pixel_data)
+                pixel_data = np.minimum(pixel_data, 1000) # clamp out infinity values and excessively bright points (when a light is directly seen from the camera)
+                hdr_range = np.amax(pixel_data, initial=hdr_range)
                 nx = int(im_width / w)
                 ny = int(im_height / h)
                 gpu_texture = gpu.texture.from_image(image)
                 bw_shader.uniform_sampler("image", gpu.texture.from_image(image))
-                bw_shader.uniform_float("deltaU", 1.0 / im_width)
-                bw_shader.uniform_float("deltaV", 1.0 / im_height)
-                bw_shader.uniform_int("nx", nx)
-                bw_shader.uniform_int("ny", ny)
+                # bw_shader.uniform_float("deltaU", 1.0 / im_width)
+                # bw_shader.uniform_float("deltaV", 1.0 / im_height)
+                # bw_shader.uniform_int("nx", nx)
+                # bw_shader.uniform_int("ny", ny)
                 batch_for_shader(
                     bw_shader, 'TRI_FAN',
                     {
                         "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
-                        "uv": ((0, 0), (1 - nx/im_width, 0), (1 - nx/im_width, 1 - ny/im_height), (0, 1 - ny/im_height)),
+                        "uv": ((0, 0), (1, 0), (1, 1), (0, 1)),
+                        #"uv": ((0, 0), (1 - nx/im_width, 0), (1 - nx/im_width, 1 - ny/im_height), (0, 1 - ny/im_height)),
                     },
                 ).draw(bw_shader)
                 bpy.data.images.remove(image)
@@ -1101,13 +1109,14 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
         bw.dimensions = w * h * 4
     offscreen.free()
 
-    print(f'. Saving light influence map to {render_path}{name} - Influence Map.png')
-    image = bpy.data.images.new("debug", w, h)
-    image.pixels = [v / 255 for v in bw]
-    image.filepath_raw = f'{render_path}{name} - Influence Map.png'
-    image.file_format = 'PNG'
-    image.save()
-    bpy.data.images.remove(image)
+    if False: # For debug purpose, save generated influence map
+        print(f'. Saving light influence map to {render_path}{name} - Influence Map.png')
+        image = bpy.data.images.new("debug", w, h)
+        image.pixels = [v / 255 for v in bw]
+        image.filepath_raw = f'{render_path}{name} - Influence Map.png'
+        image.file_format = 'PNG'
+        image.save()
+        bpy.data.images.remove(image)
 
     bpy.ops.object.mode_set(mode='EDIT')
     bm = bmesh.from_edit_mesh(bake_instance_mesh)
@@ -1125,9 +1134,10 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
             faces.append(face)
     if faces:
         bmesh.ops.delete(bm, geom=faces, context='FACES')
-        print(f'. Mesh optimized to {n_faces - len(faces):>5} faces out of {n_faces} for {name}')
+        print(f'. Mesh optimized to {n_faces - len(faces):>5} faces out of {n_faces} for {name:15} (HDR range: {hdr_range:>7.1f})')
     bmesh.update_edit_mesh(bake_instance_mesh)
     bpy.ops.object.mode_set(mode='OBJECT')
+    return hdr_range
 
 
 def render_packmaps_gpu(context):
@@ -1249,195 +1259,6 @@ def render_packmaps_gpu(context):
     vlm_utils.pop_color_grading(cg)
 
 
-def render_packmaps_eevee(context):
-    """Render all packmaps corresponding for the available current bake results
-    Implementation using Eevee render. Works fine. No padding support for the time being
-    """
-    opt_force_render = True # Force rendering even if cache is available
-    opt_padding = context.scene.vlmSettings.padding
-    
-    col_state = vlm_collections.push_state()
-    rlc = context.view_layer.layer_collection
-    root_col = vlm_collections.get_collection('ROOT')
-    tmp_col = vlm_collections.get_collection('BAKETMP')
-    result_col = vlm_collections.get_collection('BAKE RESULT')
-    for col in root_col.children:
-        vlm_collections.find_layer_collection(rlc, col).exclude = True
-    vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
-
-    render_state = (context.scene.render.pixel_aspect_x, context.scene.render.pixel_aspect_y)
-    context.scene.render.engine = 'BLENDER_EEVEE'
-    context.scene.render.film_transparent = True
-    context.scene.eevee.taa_render_samples = 1
-    context.scene.render.image_settings.file_format = 'OPEN_EXR'
-    context.scene.render.image_settings.color_mode = 'RGBA'
-    context.scene.render.image_settings.color_depth = '16'
-    context.scene.render.pixel_aspect_x = 1.0
-    context.scene.render.pixel_aspect_y = 1.0
-    cg = vlm_utils.push_color_grading(True)
-
-    prev_camera = context.scene.camera
-    camera = bpy.data.objects.new('Tmp.Camera', bpy.data.cameras.new(name='Camera'))
-    camera.data.type = 'ORTHO'
-    camera.data.ortho_scale = 1
-    tmp_col.objects.link(camera)
-    context.scene.camera = camera
-
-    # Setup a ompositor for our needs
-    nodes = context.scene.node_tree.nodes
-    links = context.scene.node_tree.links
-    nodes.clear()
-    dy = 0 #1200
-    rl = nodes.new("CompositorNodeRLayers")
-    rl.location.x = -400
-    rl.location.y = dy+ 100
-    il = nodes.new("CompositorNodeImage")
-    il.name = 'PackmapImage'
-    il.location.x = -400
-    il.location.y = dy-400
-    malpha = nodes.new("CompositorNodeAlphaOver")
-    malpha.location.x = 0
-    malpha.location.y = dy-200
-    links.new(rl.outputs[0], malpha.inputs[1])
-    links.new(il.outputs[0], malpha.inputs[2])
-    out = nodes.new("CompositorNodeComposite")
-    out.name = 'PackmapComposite'
-    out.location.x = 400
-    out.location.y = dy
-    links.new(malpha.outputs[0], out.inputs[0])
-   
-    bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
-    vlm_utils.mkpath(bakepath)
-    packmap_index = 0
-    while True:
-        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
-        if not objects:
-            break
-
-        # Purge unlinked datas to avoid out of memory error
-        bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
-    
-        basepath = f"{bakepath}Packmap {packmap_index}"
-        path_hdr = bpy.path.abspath(basepath + '.hdr')
-        path_png = bpy.path.abspath(basepath + '.png')
-        path_webp = bpy.path.abspath(basepath + ".webp")
-        pass_path = ''
-        print(f". Rendering packmap #{packmap_index} containing {len(objects)} bake/light map")
-        
-        if not opt_force_render and os.path.exists(path_png):
-            packmap_index += 1
-            continue
-        
-        tex_width = objects[0].vlmSettings.bake_packmap_width
-        tex_height = objects[0].vlmSettings.bake_packmap_height
-        context.scene.render.resolution_x = tex_width
-        context.scene.render.resolution_y = tex_height
-        context.scene.use_nodes = False
-        x_scale = tex_width / tex_height
-        camera.location = (0.5 * x_scale, 0.5, 1.0)
-        for obj_index, obj in enumerate(objects):
-            # Create a mesh corresponding to the wanted UV projection
-            verts = []
-            faces = []
-            uvs = []
-            materials = []
-            used_materials = {}
-            uv_layer = obj.data.uv_layers["UVMap"]
-            uv_layer_packed = obj.data.uv_layers["UVMap Packed"]
-            for poly in obj.data.polygons:
-                face = []
-                used_materials[poly.material_index] = True
-                materials.append(poly.material_index)
-                for loop_index in poly.loop_indices:
-                    u, v = uv_layer.data[loop_index].uv
-                    x, y = uv_layer_packed.data[loop_index].uv
-                    face.append(len(verts))
-                    verts.append((x * x_scale, y, 0))
-                    uvs.append((u, v))
-                faces.append(face)
-            mesh = bpy.data.meshes.new(f'Tmp.Mesh.{obj_index}')
-            mesh.from_pydata(verts, [], faces)
-            uv_layer = mesh.uv_layers.new()
-            for i in range(len(mesh.loops)):
-                uv_layer.data[i].uv = uvs[i]
-            mesh.materials.clear()
-            unloads = []
-            mats = []
-            for mat_index,_ in enumerate(obj.data.materials):
-                path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {mat_index}.exr"
-                loaded, render = vlm_utils.get_image_or_black(path)
-                if loaded == 'loaded': unloads.append(render)
-                mat = bpy.data.materials.new(f'Tmp.Pack.{obj_index}.{mat_index}')
-                mat.blend_method = 'BLEND'
-                mat.shadow_method = 'NONE'
-                mat.use_nodes = True
-                nodes = mat.node_tree.nodes
-                links = mat.node_tree.links
-                nodes.clear()
-                node_tex = nodes.new(type='ShaderNodeTexImage')
-                node_tex.image = render
-                node_premul = nodes.new("ShaderNodeMixRGB")
-                node_emit = nodes.new("ShaderNodeEmission")
-                node_transp = nodes.new("ShaderNodeHoldout")
-                node_mix = nodes.new("ShaderNodeMixShader")
-                node_output = nodes.new(type='ShaderNodeOutputMaterial')   
-                node_premul.blend_type = 'MULTIPLY'
-                node_premul.inputs[0].default_value = 1.0
-                links.new(node_tex.outputs[0], node_premul.inputs[1])
-                links.new(node_tex.outputs[1], node_premul.inputs[2])
-                links.new(node_premul.outputs[0], node_emit.inputs[0])
-                links.new(node_tex.outputs[1], node_mix.inputs[0])
-                links.new(node_emit.outputs[0], node_mix.inputs[2])
-                links.new(node_transp.outputs[0], node_mix.inputs[1])
-                links.new(node_mix.outputs[0], node_output.inputs[0])
-                mesh.materials.append(mat)
-                mats.append(mat)
-            pack_obj = bpy.data.objects.new(f'PM.{packmap_index}.{obj_index}', mesh)
-            tmp_col.objects.link(pack_obj)
-            for poly in mesh.polygons:
-                poly.material_index = materials[poly.index]
-
-            # Render it from an ortho projection with Eevee, and combine with previous render with the an AlphaOver in the compositor
-            prev_pass_path = pass_path
-            pass_path = bpy.path.abspath(f'{bakepath}Packmap {packmap_index} - Pass {obj_index}.exr')
-            context.scene.render.filepath = pass_path
-            bpy.ops.render.render(write_still=True)
-
-            tmp_col.objects.unlink(pack_obj)
-            for render in unloads:
-                bpy.data.images.remove(render)
-            for mat in mats:
-                bpy.data.materials.remove(mat)
-                
-            # Prepare compositor to combine bake/light maps (we can not render all at once, since this will crash by out of memory on large renders)
-            if prev_pass_path != '' and os.path.exists(prev_pass_path):
-                bpy.data.images.remove(context.scene.node_tree.nodes['PackmapImage'].image)
-                os.remove(prev_pass_path)
-            context.scene.use_nodes = True
-            context.scene.node_tree.nodes['PackmapImage'].image = bpy.data.images.load(pass_path)
-
-        if pass_path != '' and os.path.exists(pass_path):
-            img = bpy.data.images.load(pass_path, check_existing=True)
-            img.filepath_raw = path_png
-            img.file_format = 'PNG'
-            img.save()
-            img.filepath_raw = path_hdr
-            img.file_format = 'HDR'
-            img.save()
-            bpy.data.images.remove(img)
-            Image.open(path_png).save(path_webp, 'WEBP')
-            os.remove(pass_path)
-        
-        packmap_index += 1
-        
-    context.scene.render.pixel_aspect_x = render_state[0]
-    context.scene.render.pixel_aspect_y = render_state[1]
-    context.scene.camera = prev_camera
-    tmp_col.objects.unlink(camera)
-    context.scene.eevee.taa_render_samples = 64
-    context.scene.render.engine = 'CYCLES'
-    vlm_collections.pop_state(col_state)
-    vlm_utils.pop_color_grading(cg)
     
  
 def render_packmaps_bake(op, context, sequential_baking):
@@ -1548,6 +1369,201 @@ def render_packmaps_bake(op, context, sequential_baking):
     vlm_utils.pop_color_grading(cg)
 
 
+def render_packmaps_eevee(context):
+    """Render all packmaps corresponding for the available current bake results
+    Implementation using Eevee render. Works fine. No padding support for the time being
+    """
+    opt_force_render = True # Force rendering even if cache is available
+    opt_padding = context.scene.vlmSettings.padding
+    
+    col_state = vlm_collections.push_state()
+    rlc = context.view_layer.layer_collection
+    root_col = vlm_collections.get_collection('ROOT')
+    tmp_col = vlm_collections.get_collection('BAKETMP')
+    result_col = vlm_collections.get_collection('BAKE RESULT')
+    for col in root_col.children:
+        vlm_collections.find_layer_collection(rlc, col).exclude = True
+    vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
+
+    render_state = (context.scene.render.pixel_aspect_x, context.scene.render.pixel_aspect_y)
+    context.scene.render.engine = 'BLENDER_EEVEE'
+    context.scene.render.film_transparent = True
+    context.scene.eevee.taa_render_samples = 1
+    context.scene.render.image_settings.file_format = 'OPEN_EXR'
+    context.scene.render.image_settings.color_mode = 'RGBA'
+    context.scene.render.image_settings.color_depth = '16'
+    context.scene.render.pixel_aspect_x = 1.0
+    context.scene.render.pixel_aspect_y = 1.0
+    cg = vlm_utils.push_color_grading(True)
+
+    prev_camera = context.scene.camera
+    camera = bpy.data.objects.new('Tmp.Camera', bpy.data.cameras.new(name='Camera'))
+    camera.data.type = 'ORTHO'
+    camera.data.ortho_scale = 1
+    tmp_col.objects.link(camera)
+    context.scene.camera = camera
+
+    # Setup a ompositor for our needs
+    nodes = context.scene.node_tree.nodes
+    links = context.scene.node_tree.links
+    nodes.clear()
+    dy = 0 #1200
+    rl = nodes.new("CompositorNodeRLayers")
+    rl.location.x = -400
+    rl.location.y = dy+ 100
+    il = nodes.new("CompositorNodeImage")
+    il.name = 'PackmapImage'
+    il.location.x = -400
+    il.location.y = dy-400
+    malpha = nodes.new("CompositorNodeAlphaOver")
+    malpha.location.x = 0
+    malpha.location.y = dy-200
+    links.new(rl.outputs[0], malpha.inputs[1])
+    links.new(il.outputs[0], malpha.inputs[2])
+    out = nodes.new("CompositorNodeComposite")
+    out.name = 'PackmapComposite'
+    out.location.x = 400
+    out.location.y = dy
+    links.new(malpha.outputs[0], out.inputs[0])
+   
+    bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
+    vlm_utils.mkpath(bakepath)
+    packmap_index = 0
+    while True:
+        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
+        if not objects:
+            break
+
+        # Purge unlinked datas to avoid out of memory error
+        bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
+    
+        basepath = f"{bakepath}Packmap {packmap_index}"
+        path_hdr = bpy.path.abspath(basepath + '.hdr')
+        path_png = bpy.path.abspath(basepath + '.png')
+        path_webp = bpy.path.abspath(basepath + ".webp")
+        pass_path = ''
+        print(f". Rendering packmap #{packmap_index} containing {len(objects)} bake/light map")
+        
+        if not opt_force_render and os.path.exists(path_png):
+            packmap_index += 1
+            continue
+        
+        tex_width = objects[0].vlmSettings.bake_packmap_width
+        tex_height = objects[0].vlmSettings.bake_packmap_height
+        # FIXME half texture output regarding the render size => this should be an option
+        context.scene.render.resolution_x = tex_width / 2
+        context.scene.render.resolution_y = tex_height / 2
+        context.scene.use_nodes = False
+        x_scale = tex_width / tex_height
+        camera.location = (0.5 * x_scale, 0.5, 1.0)
+        for obj_index, obj in enumerate(objects):
+            # Create a mesh corresponding to the wanted UV projection
+            verts = []
+            faces = []
+            uvs = []
+            materials = []
+            used_materials = {}
+            uv_layer = obj.data.uv_layers["UVMap"]
+            uv_layer_packed = obj.data.uv_layers["UVMap Packed"]
+            for poly in obj.data.polygons:
+                face = []
+                used_materials[poly.material_index] = True
+                materials.append(poly.material_index)
+                for loop_index in poly.loop_indices:
+                    u, v = uv_layer.data[loop_index].uv
+                    x, y = uv_layer_packed.data[loop_index].uv
+                    face.append(len(verts))
+                    verts.append((x * x_scale, y, 0))
+                    uvs.append((u, v))
+                faces.append(face)
+            mesh = bpy.data.meshes.new(f'Tmp.Mesh.{obj_index}')
+            mesh.from_pydata(verts, [], faces)
+            uv_layer = mesh.uv_layers.new()
+            for i in range(len(mesh.loops)):
+                uv_layer.data[i].uv = uvs[i]
+            mesh.materials.clear()
+            unloads = []
+            mats = []
+            brightness = 1.0 / min(1+(obj.vlmSettings.bake_hdr_scale-1) / 10, 10) # emission strength => hdr compensation
+            print(f'. {obj.name} => HDR Scale: {obj.vlmSettings.bake_hdr_scale:>7.2f} => Brightness factor: {brightness:>7.2f}')
+            for mat_index,_ in enumerate(obj.data.materials):
+                path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {mat_index}.exr"
+                loaded, render = vlm_utils.get_image_or_black(path)
+                if loaded == 'loaded': unloads.append(render)
+                mat = bpy.data.materials.new(f'Tmp.Pack.{obj_index}.{mat_index}')
+                mat.blend_method = 'BLEND'
+                mat.shadow_method = 'NONE'
+                mat.use_nodes = True
+                nodes = mat.node_tree.nodes
+                links = mat.node_tree.links
+                nodes.clear()
+                node_tex = nodes.new(type='ShaderNodeTexImage')
+                node_tex.image = render
+                node_premul = nodes.new("ShaderNodeMixRGB")
+                node_emit = nodes.new("ShaderNodeEmission")
+                node_emit.inputs[1].default_value = brightness
+                node_transp = nodes.new("ShaderNodeHoldout")
+                node_mix = nodes.new("ShaderNodeMixShader")
+                node_output = nodes.new(type='ShaderNodeOutputMaterial')   
+                node_premul.blend_type = 'MULTIPLY'
+                node_premul.inputs[0].default_value = 1.0
+                links.new(node_tex.outputs[0], node_premul.inputs[1])
+                links.new(node_tex.outputs[1], node_premul.inputs[2])
+                links.new(node_premul.outputs[0], node_emit.inputs[0])
+                links.new(node_tex.outputs[1], node_mix.inputs[0])
+                links.new(node_emit.outputs[0], node_mix.inputs[2])
+                links.new(node_transp.outputs[0], node_mix.inputs[1])
+                links.new(node_mix.outputs[0], node_output.inputs[0])
+                mesh.materials.append(mat)
+                mats.append(mat)
+            pack_obj = bpy.data.objects.new(f'PM.{packmap_index}.{obj_index}', mesh)
+            tmp_col.objects.link(pack_obj)
+            for poly in mesh.polygons:
+                poly.material_index = materials[poly.index]
+
+            # Render it from an ortho projection with Eevee, and combine with previous render with the an AlphaOver in the compositor
+            prev_pass_path = pass_path
+            pass_path = bpy.path.abspath(f'{bakepath}Packmap {packmap_index} - Pass {obj_index}.exr')
+            context.scene.render.filepath = pass_path
+            bpy.ops.render.render(write_still=True)
+
+            tmp_col.objects.unlink(pack_obj)
+            for render in unloads:
+                bpy.data.images.remove(render)
+            for mat in mats:
+                bpy.data.materials.remove(mat)
+                
+            # Prepare compositor to combine bake/light maps (we can not render all at once, since this will crash by out of memory on large renders)
+            if prev_pass_path != '' and os.path.exists(prev_pass_path):
+                bpy.data.images.remove(context.scene.node_tree.nodes['PackmapImage'].image)
+                os.remove(prev_pass_path)
+            context.scene.use_nodes = True
+            context.scene.node_tree.nodes['PackmapImage'].image = bpy.data.images.load(pass_path)
+
+        if pass_path != '' and os.path.exists(pass_path):
+            img = bpy.data.images.load(pass_path, check_existing=True)
+            img.filepath_raw = path_png
+            img.file_format = 'PNG'
+            img.save()
+            #img.filepath_raw = path_hdr # It's not really usable so just skip it
+            #img.file_format = 'HDR'
+            #img.save()
+            bpy.data.images.remove(img)
+            Image.open(path_png).save(path_webp, 'WEBP')
+            os.remove(pass_path)
+        
+        packmap_index += 1
+        
+    context.scene.render.pixel_aspect_x = render_state[0]
+    context.scene.render.pixel_aspect_y = render_state[1]
+    context.scene.camera = prev_camera
+    tmp_col.objects.unlink(camera)
+    context.scene.eevee.taa_render_samples = 64
+    context.scene.render.engine = 'CYCLES'
+    vlm_collections.pop_state(col_state)
+    vlm_utils.pop_color_grading(cg)
+
+
 def render_packmaps(op, context):
     if context.blend_data.filepath == '':
         op.report({'ERROR'}, 'You must save your project before rendering packmaps')
@@ -1562,6 +1578,6 @@ def render_packmaps(op, context):
         render_packmaps_sequential_bake(op, context, True)
     elif context.scene.vlmSettings.bake_packmap_mode == 'cycle':
         render_packmaps_sequential_bake(op, context, False)
-    print(f'\nPackmaps rendered in {format_time(time.time() - start_time)}s.')
+    print(f'\nPackmaps rendered in {vlm_utils.format_time(time.time() - start_time)}.')
     context.scene.vlmSettings.last_bake_step = 'packmaps'
     return {'FINISHED'}

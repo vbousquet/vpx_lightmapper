@@ -402,8 +402,8 @@ def export_vpx(op, context):
         writer = biff_io.BIFF_writer()
         writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
         writer.write_tagged_string(b'PATH', packmap_path)
-        writer.write_tagged_u32(b'WDTH', objects[0].vlmSettings.bake_packmap_width)
-        writer.write_tagged_u32(b'HGHT', objects[0].vlmSettings.bake_packmap_height)
+        writer.write_tagged_u32(b'WDTH', int(objects[0].vlmSettings.bake_packmap_width / 2)) #FIXME
+        writer.write_tagged_u32(b'HGHT', int(objects[0].vlmSettings.bake_packmap_height / 2))
         writer.write_tagged_empty(b'JPEG') # Strangely, raw data are pushed outside of the JPEG tag (breaking the BIFF structure of the file)
         writer.write_data(img_writer.get_data())
         writer.write_tagged_float(b'ALTV', 1.0)
@@ -498,13 +498,14 @@ def export_vpx(op, context):
                             baked_light = context.scene.objects[obj.vlmSettings.bake_light]
                             sync_color = baked_light.type == 'LIGHT'
                             vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object
-                        if vpx_name in table_lights:
-                            updates.append((elem_ref(vpx_name), 0, elem_ref(export_name(obj.name)), sync_color, obj.vlmSettings.bake_hdr_scale))
+                        brightness = min(1+(obj.vlmSettings.bake_hdr_scale-1) / 10, 10) # hdr compensation (packmap has been scaled down by this)
+                        if vpx_name in table_lights: #FIXME
+                            updates.append((elem_ref(vpx_name), 0, elem_ref(export_name(obj.name)), sync_color, brightness))
                         elif vpx_name in table_flashers:
-                            updates.append((elem_ref(vpx_name), 1, elem_ref(export_name(obj.name)), sync_color, obj.vlmSettings.bake_hdr_scale))
+                            updates.append((elem_ref(vpx_name), 1, elem_ref(export_name(obj.name)), sync_color, brightness))
                         else:
                             print(f". {obj.name} is missing a vpx light/flasher object to be synchronized on")
-                            updates.append((None, 2, elem_ref(export_name(obj.name)), False, obj.vlmSettings.bake_hdr_scale))
+                            updates.append((None, 2, elem_ref(export_name(obj.name)), False, brightness))
 
                     in_block = 0 # Search and update existing block if any
                     for line in code.splitlines():

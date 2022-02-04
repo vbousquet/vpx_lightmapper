@@ -21,6 +21,7 @@ import gpu
 import math
 import mathutils
 import functools
+import datetime
 from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
 
@@ -88,6 +89,10 @@ def strip_vlm(name):
         return name[4:]
     return name
     
+
+def format_time(length_in_seconds):
+    return str(datetime.timedelta(seconds=length_in_seconds)).split('.')[0]
+
 
 def image_by_path(path):
     for image in bpy.data.images:

@@ -141,7 +141,7 @@ class VLM_Scene_props(PropertyGroup):
             ('4096', '4096', '4096x4096', '', 4096),
             ('8192', '8192', '8192x8192', '', 8192),
         ],
-        name='Texture size',
+        name='Render size',
         default='256', update=vlm_camera.camera_inclination_update
     )
     render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
@@ -171,7 +171,7 @@ class VLM_Scene_props(PropertyGroup):
         items=[
             ('png', 'PNG', 'Use PNG images', '', 0),
             ('webp', 'WEBP', 'Use WebP images', '', 1),
-            ('hdr', 'HDR', 'Use HDR images', '', 2),
+            #('hdr', 'HDR', 'Use HDR images', '', 2),
         ],
         name='Image format',
         description='Image format used in exported table',
@@ -378,12 +378,12 @@ class VLM_OT_batch_bake(Operator):
     def execute(self, context):
         start_time = time.time()
         print(f"\nStarting complete bake batch...")
-        vlm_baker.compute_render_groups(context)
-        vlm_baker.render_all_groups(context)
-        vlm_baker.create_bake_meshes(context)
-        vlm_baker.render_packmaps(context)
-        vlm_export.export_vpx(context)
-        print(f"\nBatch baking performed in a total time of {int(time.time() - start_time)}s.")
+        vlm_baker.compute_render_groups(self, context)
+        vlm_baker.render_all_groups(self, context)
+        vlm_baker.create_bake_meshes(self, context)
+        vlm_baker.render_packmaps(self, context)
+        vlm_export.export_vpx(self, context)
+        print(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}")
         return {"FINISHED"}
 
 
