@@ -261,3 +261,13 @@ Perspective projection baking is only suitable for fixed view point (the one the
 - At 'Meshes' step, their original mesh is copied untouched to the result collection. For each of the lighting situation with an influence level above the choosen threshold, a lightmap shell mesh is also generated.
 - At 'Packmap' step, they are just skipped.
 - At 'Export' step, they are included (replacing the initial object) and the script to sync their position/lighting is generated
+
+### Managing the cache
+
+Each step of the bake/lightmap process is saved in a cache located along the blend file (that's the reason why you need to save your blend before starting the bake process). 
+For the moment, this cache is manually managed. Inside it, you will find 3 folders:
+- Object Masks: contains the mask computed for each object during the 'Group' step. You need to manually delete elements (or the whole folder) when objects are moved
+- Renders: contains the actual renders. This needs to be manually cleared for render to actually happen (or if you know what you do, clear the only the elements you want to rerender)
+- Export: contains the packmaps in Png and WebP format. As for the other folders, this needs to be manually cleared for packmaps to be regenerated
+
+
