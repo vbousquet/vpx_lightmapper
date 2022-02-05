@@ -39,8 +39,8 @@ global_scale = vlm_utils.global_scale
 #   . Implementation progress:
 #     x At group step, just hide them
 #     . At render step, set them to hide/indirect for others, then adapt material (create VLM.BakeTex if missing, same size as VPX Texture) perform a bake for each movable/light scenarios, also compute light threshold of the bake and allow to access it from the UI (for easy adjustment of the lighmap bake threshold)
-#     . At mesh step, just copy the movables to bake result
-#     . At packmap step, copy bakes to export
+#     . At mesh step, copy the movables to bake result and generate a light mesh for each on the lightmap above threshold
+#     . At packmap step, copy bakes to export (with exr to png/webp conversion)
 #     . At export step, include them in the VPX and produce sync code
 # - Apply layback lattice transform when performing UV projection
 
@@ -1152,7 +1152,7 @@ def render_packmaps_gpu(context):
     """
     vlmProps = context.scene.vlmSettings
 
-    opt_force_render = True # Force rendering even if cache is available
+    opt_force_render = False # Force rendering even if cache is available
     opt_padding = vlmProps.padding
     
     # Purge unlinked datas to avoid out of memory error
@@ -1378,7 +1378,7 @@ def render_packmaps_eevee(context):
     """Render all packmaps corresponding for the available current bake results
     Implementation using Eevee render. Works fine. No padding support for the time being
     """
-    opt_force_render = True # Force rendering even if cache is available
+    opt_force_render = False # Force rendering even if cache is available
     opt_padding = context.scene.vlmSettings.padding
     
     col_state = vlm_collections.push_state()

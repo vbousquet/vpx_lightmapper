@@ -123,6 +123,6 @@ def import_dependencies(dependencies):
         try:
             import_module(module_name=dependency.module, global_name=dependency.name)
         except ModuleNotFoundError as err:
-            print(f"Missing dependency '{dependency.module}'")
+            print(f"Missing dependency '{dependency.module}' (either it is not installed or you need to restart Blender)")
             missing_deps = True
     return not missing_deps

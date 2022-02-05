@@ -40,7 +40,7 @@ from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, C
 from rna_prop_ui import PropertyPanel
 
 # TODO
-# - Add an option for double render size (or split render / texture size option)
+# - Add an option for size factor between render and texture (or split render / texture size option)
 
 
 # Use import.reload for all submodule to allow iterative development using bpy.ops.script.reload()
@@ -819,7 +819,7 @@ class VLM_PT_3D_warning_panel(bpy.types.Panel):
                  f"4. Click on the \"{VLM_OT_install_dependencies.bl_label}\" button.",
                  f"   This will download and install the missing",
                  f"   Python packages, if Blender has the required",
-                 f"   permissions."]
+                 f"   permissions. You will need to restart Blender."]
         for line in lines:
             layout.label(text=line)
 
@@ -844,7 +844,7 @@ class VLM_PT_Props_warning_panel(bpy.types.Panel):
                  f"4. Click on the \"{VLM_OT_install_dependencies.bl_label}\" button.",
                  f"   This will download and install the missing",
                  f"   Python packages, if Blender has the required",
-                 f"   permissions."]
+                 f"   permissions. You will need to restart Blender."]
         for line in lines:
             layout.label(text=line)
 
