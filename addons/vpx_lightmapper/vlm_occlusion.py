@@ -41,7 +41,7 @@ def select_occluded(context):
     for col in root_col.children:
         vlm_collections.find_layer_collection(rlc, col).exclude = True
     for col in root_bake_col.children:
-        if not col.vlmSettings.is_active_mat:
+        if not col.vlmSettings.is_active_mat and col.vlmSettings.bake_mode == 'default': # playfield and movable are not considered as occluder
             vlm_collections.find_layer_collection(rlc, col).exclude = False
             bake_objects.extend(col.all_objects)
     initial_pass_ids = [o.pass_index for o in bake_objects]
