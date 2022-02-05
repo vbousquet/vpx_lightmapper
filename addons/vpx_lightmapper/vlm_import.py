@@ -39,6 +39,7 @@ global_scale = vlm_utils.global_scale
 # - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 # - JP's Star Trek has a wrong texture positionning (panel above ramp)
 # - Identify static/active bake and export accordingly (done for opacity, missing for under playfield which, I think, need to be marked as active)
+# - Recreate the base VPX Material, using only Principled BSDF, with gamma corrected plastic translucency
 
 
 
@@ -103,15 +104,15 @@ def update_material(mesh, slot, materials, mat_name, image, translucency=-1):
         nodes = mat.node_tree.nodes
         nodes.clear()
         links = mat.node_tree.links
-        group = nodes.new("ShaderNodeGroup")
-        group.name = f"{mat_name}.Mat"
+        group = nodes.new('ShaderNodeGroup')
+        group.name = 'VPX.Mat'
         group.width = 300
         group.node_tree = bpy.data.node_groups['VPX.Material']
         node_output = nodes.new(type='ShaderNodeOutputMaterial')   
         node_output.location.x = 400
         links.new(group.outputs[0], node_output.inputs[0])
         node_tex = nodes.new(type='ShaderNodeTexImage')
-        node_tex.name = f"{mat_name}.Tex"
+        node_tex.name = 'VPX.Tex'
         node_tex.location.x = -400
         links.new(node_tex.outputs[0], group.inputs[0])
         links.new(node_tex.outputs[1], group.inputs[1])
@@ -131,8 +132,8 @@ def update_material(mesh, slot, materials, mat_name, image, translucency=-1):
     # update VPX material
     mat = mesh.materials[slot]
     use_image = 0
-    if f"{mat_name}.Tex" in mat.node_tree.nodes:
-        node_tex = mat.node_tree.nodes[f"{mat_name}.Tex"]
+    if f"VPX.Tex" in mat.node_tree.nodes:
+        node_tex = mat.node_tree.nodes[f"VPX.Tex"]
         if not image.startswith("VPX.Core."):
             image = f"VPX.Tex.{image.casefold()}"
         if image in bpy.data.images:
@@ -142,8 +143,8 @@ def update_material(mesh, slot, materials, mat_name, image, translucency=-1):
             if image != "VPX.Tex.":
                 print(f"Missing texture {image}")
             node_tex.image = None
-    if f"{mat_name}.Mat" in mat.node_tree.nodes:
-        group = mat.node_tree.nodes[f"{mat_name}.Mat"]
+    if f"VPX.Mat" in mat.node_tree.nodes:
+        group = mat.node_tree.nodes[f"VPX.Mat"]
         if mat_name in materials:
             materials[mat_name].apply(group)
         elif mat_name != "":
@@ -157,33 +158,35 @@ def update_material(mesh, slot, materials, mat_name, image, translucency=-1):
 
 
 def get_vpx_item(context, vpx_name, vpx_subpart):
-    return next((o for o in context.scene.objects if o.vlmSettings.vpx_object == vpx_name and o.vlmSettings.vpx_subpart == vpx_subpart), None)
+    trash_col = vlm_collections.get_collection('TRASH')
+    return next((o for o in context.scene.objects if o.vlmSettings.vpx_object == vpx_name and o.vlmSettings.vpx_subpart == vpx_subpart and o.name not in trash_col.all_objects), None)
 
 
 def update_object(context, vpx_name, vpx_subpart, data, visible, bake_col, hidden_col):
     obj_name = vpx_name if vpx_subpart == '' else f'{vpx_name}.{vpx_subpart}'
-    existing = get_vpx_item(context, vpx_name, vpx_subpart)
-    if existing:
-        existing.name = obj_name
-        if not existing.vlmSettings.import_mesh:
-            return False, existing
-        if hasattr(existing, 'materials') and hasattr(data, 'materials'):
-            while len(data.materials) < len(existing.data.materials):
-                data.materials.append(None)
-            for i in range(len(existing.data.materials), len(data.materials)):
-                data.materials.pop()
-            for i, m in enumerate(existing.data.materials):
-                data.materials[i] = m
-        if type(existing.data) == type(data):
-            existing.data = data
-            return False, existing
+    while True: # We may find more than one
+        existing = get_vpx_item(context, vpx_name, vpx_subpart)
+        if existing:
+            existing.name = obj_name
+            if not existing.vlmSettings.import_mesh:
+                return False, existing
+            if hasattr(existing, 'materials') and hasattr(data, 'materials'):
+                while len(data.materials) < len(existing.data.materials):
+                    data.materials.append(None)
+                for i in range(len(existing.data.materials), len(data.materials)):
+                    data.materials.pop()
+                for i, m in enumerate(existing.data.materials):
+                    data.materials[i] = m
+            if type(existing.data) == type(data):
+                existing.data = data
+                return False, existing
+            else:
+                print(f'. WARNING: incompatible data type between existing {obj_name} and created one, trashing the old one and recreating (existing={type(existing.data)} new={type(data)})')
+                if obj_name == existing.name: existing.name = f'{existing.name}.Old'
+                trash_col = vlm_collections.get_collection('TRASH')
+                vlm_collections.move_to_col(existing, trash_col)
         else:
-            print(f'. WARNING: incompatible data type between existing {obj_name} and created one, trashing the old one and recreating')
-            if obj_name == existing.name:
-                existing.name = f'{existing.name}.Old'
-            trash_col = vlm_collections.get_collection('TRASH')
-            vlm_collections.move_to_col(existing, trash_col)
-        # FIXME we need to delete the previous object that we failed to reuse
+            break
     print(f'. Creating {obj_name}')
     obj = bpy.data.objects.new(obj_name, data)
     obj.vlmSettings.vpx_object = vpx_name
