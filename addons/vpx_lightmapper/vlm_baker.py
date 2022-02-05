@@ -34,9 +34,14 @@ global_scale = vlm_utils.global_scale
 
 # TODO
 # - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
-#   . Object must be UV unwrapped, and must have either a VLM.BakeTex node in its material (first slot) or has an imported VPX material, with an image (bake will be the same size as the image)
+#   . Object must be UV unwrapped, and must have either a VLM.BakeTex node in its material (first slot) or has an imported VPX image (bake will be the same size as the image)
 #   . Light map are computed on the UV unwrapped model, filtered based on a custom threshold
-#   . VBS sync position of lightmap models to main
+#   . Implementation progress:
+#     x At group step, just hide them
+#     . At render step, set them to hide/indirect for others, then adapt material (create VLM.BakeTex if missing, same size as VPX Texture) perform a bake for each movable/light scenarios, also compute light threshold of the bake and allow to access it from the UI (for easy adjustment of the lighmap bake threshold)
+#     . At mesh step, just copy the movables to bake result
+#     . At packmap step, copy bakes to export
+#     . At export step, include them in the VPX and produce sync code
 # - Apply layback lattice transform when performing UV projection
 
 
