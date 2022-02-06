@@ -44,8 +44,8 @@ def uvpacker_pack(meshes, padding, width, height):
     binaryData += bytearray(struct.pack("<d", padding)) # Padding
     binaryData += bytearray(struct.pack("<?", True)) # Combine
     binaryData += bytearray(struct.pack("<?", False)) # Rescale
-    binaryData += bytearray(struct.pack("<?", True)) # Pre rotate
-    binaryData += bytearray(struct.pack("<?", True)) # Use full rotation
+    binaryData += bytearray(struct.pack("<?", False)) # Pre rotate (this rotates all island to be more axis aligned)
+    binaryData += bytearray(struct.pack("<?", False)) # Use full rotation
     binaryData += (1).to_bytes(4, byteorder="little") # Rotate string "0" None / "1" 90, "2" 45, "3" 23
     binaryData += (1).to_bytes(4, byteorder="little") # Tiles X
     binaryData += (1).to_bytes(4, byteorder="little") # Tiles Y
