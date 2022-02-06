@@ -40,7 +40,6 @@ from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, C
 from rna_prop_ui import PropertyPanel
 
 # TODO
-# - Add an option for size factor between render and texture (or split render / texture size option)
 
 
 # Use import.reload for all submodule to allow iterative development using bpy.ops.script.reload()

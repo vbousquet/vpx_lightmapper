@@ -43,7 +43,10 @@ global_scale = vlm_utils.global_scale
 #     . At packmap step, copy bakes to export (with exr to png/webp conversion)
 #     . At export step, include them in the VPX and produce sync code
 # - Apply layback lattice transform when performing UV projection
-# - When baking lights, we bake them to white (for later coloring) then apply overlay, therefore overlay are colored...
+# - Packmap should be more constrained for higher quality:
+#   x Constrain rotation to 0/90/180/270
+#   . Guarantee a scale of 1 (by iterative packing, disabling all scaling)
+#   . Build packmap by data transfer (RGBA pixel data copy with padding), not rendering which may cause bluriness (unaligned pixels and loose precision on borders)
 
 
 def remove_backfacing(context, obj, eye_position, limit):
@@ -412,7 +415,6 @@ def render_all_groups(op, context):
                     scenario[2].data.color = (1.0, 1.0, 1.0)
                     initial_state = (4, scenario[2], prev_color, vlm_collections.move_to_col(scenario[2], tmp_col))
                 else:
-                    print(f". light scenario '{scenario[0]}' is a colored emitters. Lightmap will baked with these colors instead of full white.")
                     initial_state = (2, vlm_collections.move_to_col(scenario[2], tmp_col))
             return initial_state, lambda initial_state : restore_light_setup(initial_state)
 

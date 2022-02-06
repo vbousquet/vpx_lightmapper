@@ -29,6 +29,8 @@ import win32crypt
 import win32cryptcon
 from win32com import storagecon
 
+# TODO
+
 
 def export_name(object_name):
     return object_name.replace(".", "_").replace(" ", "_").replace("-", "_")
@@ -164,16 +166,16 @@ def export_vpx(op, context):
             elif item_type == 20 and item_data.tag == 'FVIS': # for flashers (20)
                 visibility_field = True
             elif item_type == 5 and item_data.tag == 'CAVI': # for bumper caps (5)
-                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.name.startswith('VPX.Bumper.Cap.')), None) is not None
+                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.vlmSettings.vpx_subpart == 'Cap'), None) is not None
                 visibility_field = True
             elif item_type == 5 and item_data.tag == 'BSVS': # for bumper base & ring & skirt (5), recent files also have separate fields for ring & skirt
-                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.name.startswith('VPX.Bumper.Base.')), None) is not None
+                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.vlmSettings.vpx_subpart == 'Base'), None) is not None
                 visibility_field = True
             elif item_type == 5 and item_data.tag == 'RIVS': # for bumper ring (5)
-                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.name.startswith('VPX.Ring.Base.')), None) is not None
+                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.vlmSettings.vpx_subpart == 'Ring'), None) is not None
                 visibility_field = True
             elif item_type == 5 and item_data.tag == 'SKVS': # for bumper skirt (5)
-                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.name.startswith('VPX.Bumper.Socket.')), None) is not None
+                is_part_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and o.vlmSettings.vpx_subpart == 'Socket'), None) is not None
                 visibility_field = True
             elif item_type == 8 and item_data.tag == 'TYPE': # for kicker (8), type 0 is invisible
                 pass # FIXME implement
