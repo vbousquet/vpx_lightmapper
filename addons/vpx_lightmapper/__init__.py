@@ -154,7 +154,7 @@ class VLM_Scene_props(PropertyGroup):
         ],
         name='UV Packer',
         description='UV Packer to use',
-        default='blender'
+        default='uvpacker'
     )
     packmap_tex_factor: EnumProperty(
         items=[
@@ -173,7 +173,7 @@ class VLM_Scene_props(PropertyGroup):
             ('cycle', 'Cycle', 'Render packmap with Cycle bakes, one bake at a time, rather slow, very high memory requirmeents, HDR & padding support', '', 3),
         ],
         name="Packmap mode",
-        default='eevee'
+        default='cycle'
     )
     # Exporter options
     export_image_type: EnumProperty(
@@ -232,6 +232,7 @@ class VLM_Object_props(PropertyGroup):
     import_mesh: BoolProperty(name="Mesh", description="Update mesh on import", default = True)
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
+    is_rgb_led: BoolProperty(name="RGB Led", description="RGB Led (lightmapped to white for dynamic colors)", default = False)
     # Movable objects bake settings
     movable_lightmap_threshold: FloatProperty(name="Lightmap threshold", description="Light threshold for generating a lightmap (1 for no lightmaps)", default = 1.0)
     movable_influence: EnumProperty(
@@ -603,7 +604,7 @@ class VLM_OT_load_render_images(Operator):
                 print(images)
                 if all_loaded:
                     for im in images:
-                        if im.name != 'VLM.NoTex': bpy.data.images.remove(im)
+                        if im != None and im.name != 'VLM.NoTex': bpy.data.images.remove(im)
                 else:
                     for path, mat in zip(paths, obj.data.materials):
                         _, im = vlm_utils.get_image_or_black(path)
@@ -720,14 +721,18 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
         root_col = vlm_collections.get_collection('ROOT', create=False)
+        light_col = vlm_collections.get_collection('LIGHTS', create=False)
         result_col = vlm_collections.get_collection('BAKE RESULT', create=False)
         
         bake_objects = [obj for obj in context.selected_objects if (root_col is not None and obj.name in root_col.all_objects) and (result_col is None or obj.name not in result_col.all_objects)]
         if bake_objects:
             if len(bake_objects) == 1:
+                obj = bake_objects[0]
                 layout.label(text="Link to VPX object:")
-                layout.prop(bake_objects[0].vlmSettings, 'vpx_object', text='VPX', expand=True)
-                layout.prop(bake_objects[0].vlmSettings, 'vpx_subpart', text='Subpart', expand=True)
+                layout.prop(obj.vlmSettings, 'vpx_object', text='VPX', expand=True)
+                layout.prop(obj.vlmSettings, 'vpx_subpart', text='Subpart', expand=True)
+                if light_col and obj.name in light_col.all_objects:
+                    layout.prop(obj.vlmSettings, 'is_rgb_led', text='RGB Led', expand=True)
                 layout.separator()
             layout.label(text="Import options:")
             row = layout.row(align=True)
