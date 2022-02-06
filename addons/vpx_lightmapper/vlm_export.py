@@ -498,7 +498,7 @@ def export_vpx(op, context):
                             baked_light = context.scene.objects[obj.vlmSettings.bake_light]
                             sync_color = baked_light.type == 'LIGHT'
                             vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object
-                        brightness = min(1+(obj.vlmSettings.bake_hdr_scale-1) / 10, 10) # hdr compensation (packmap has been scaled down by this)
+                        brightness = 1.0 / vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
                         if vpx_name in table_lights: #FIXME
                             updates.append((elem_ref(vpx_name), 0, elem_ref(export_name(obj.name)), sync_color, brightness))
                         elif vpx_name in table_flashers:

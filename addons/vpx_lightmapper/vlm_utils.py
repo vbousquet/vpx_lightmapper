@@ -138,6 +138,11 @@ def is_object_in_movable(obj):
     return is_movable
 
 
+def brightness_from_hdr(hdr_range):
+    return 1.0 / max(0.1, min(2, hdr_range))
+    #return 1.0 / min( 1 + (hdr_range - 1) / 10, 10)
+
+
 def render_mask(context, width, height, target_image, view_matrix, projection_matrix):
     """Uses Blender's internal renderer to render the active scene as an opacity mask
     to the given image (not saved)

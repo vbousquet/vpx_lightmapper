@@ -156,12 +156,21 @@ class VLM_Scene_props(PropertyGroup):
         description='UV Packer to use',
         default='blender'
     )
+    packmap_tex_factor: EnumProperty(
+        items=[
+            ('0.25', '1:4', 'Create packmap at a quarter of the render size', '', 0),
+            ('0.5', '1:2', 'Create packmap at half the render size', '', 1),
+            ('1.0', '1:1', 'Create packmap at the render size', '', 2),
+        ],
+        name="Packmap Tex Ratio",
+        default='1.0'
+    )
     bake_packmap_mode: EnumProperty(
         items=[
             ('gpu', 'GPU', 'Render packmap on GPU, fast, low memory requirements, no HDR/padding support', '', 0),
             ('eevee', 'Eevee', 'Render packmap with eevee ortho, speed is ok, HDR but no padding support', '', 1),
-            ('cycle_seq', 'Cycle Seq', 'Render packmap with Cycle bakes, one render at a time, utterly slow, HDR & padding support', '', 1),
-            ('cycle', 'Cycle', 'Render packmap with Cycle bakes, one bake at a time, rather slow, very high memory requirmeents, HDR & padding support', '', 1),
+            ('cycle_seq', 'Cycle Seq', 'Render packmap with Cycle bakes, one render at a time, utterly slow, HDR & padding support', '', 2),
+            ('cycle', 'Cycle', 'Render packmap with Cycle bakes, one bake at a time, rather slow, very high memory requirmeents, HDR & padding support', '', 3),
         ],
         name="Packmap mode",
         default='eevee'
@@ -171,7 +180,6 @@ class VLM_Scene_props(PropertyGroup):
         items=[
             ('png', 'PNG', 'Use PNG images', '', 0),
             ('webp', 'WEBP', 'Use WebP images', '', 1),
-            #('hdr', 'HDR', 'Use HDR images', '', 2),
         ],
         name='Image format',
         description='Image format used in exported table',
@@ -665,6 +673,7 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         layout.prop(vlmProps, "padding")
         layout.prop(vlmProps, "remove_backface", text='Backface')
         layout.prop(vlmProps, "uv_packer")
+        layout.prop(vlmProps, "packmap_tex_factor")
         layout.prop(vlmProps, "bake_packmap_mode")
         layout.prop(vlmProps, "export_image_type")
         layout.prop(vlmProps, "export_mode")
