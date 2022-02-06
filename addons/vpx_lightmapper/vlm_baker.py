@@ -376,7 +376,7 @@ def render_all_groups(op, context):
                         if influence:
                             min_x, max_x, min_y, max_y = influence
                             min_x2, max_x2, min_y2, max_y2 = light_influence
-                            influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_x, max_x2))
+                            influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
                         else:
                             influence = light_influence
                 if not influence:
