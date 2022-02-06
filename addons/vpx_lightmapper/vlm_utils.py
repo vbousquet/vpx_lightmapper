@@ -49,17 +49,49 @@ def load_library():
     bpy.data.node_groups.get('Pack Map').use_fake_user = True
 
 
-def push_color_grading(set_neutral):
-    state = (bpy.context.scene.view_settings.view_transform, bpy.context.scene.view_settings.look)
-    if set_neutral:
-        bpy.context.scene.view_settings.view_transform = 'Standard'
+def push_render_settings(set_raw):
+    state = (bpy.context.scene.render.use_border, bpy.context.scene.render.use_crop_to_border,
+                bpy.context.scene.render.border_min_x, bpy.context.scene.render.border_max_x,
+                bpy.context.scene.render.border_min_y, bpy.context.scene.render.border_max_y,
+                bpy.context.scene.view_settings.view_transform,
+                bpy.context.scene.view_settings.look,
+                bpy.context.scene.render.pixel_aspect_x, bpy.context.scene.render.pixel_aspect_y,
+                bpy.context.scene.render.engine,
+                bpy.context.scene.render.film_transparent,
+                bpy.context.scene.eevee.taa_render_samples,
+                bpy.context.scene.render.image_settings.file_format,
+                bpy.context.scene.render.image_settings.color_mode,
+                bpy.context.scene.render.image_settings.color_depth,
+                bpy.context.scene.cycles.samples,
+                bpy.context.scene.cycles.use_denoising,
+                bpy.context.scene.render.image_settings.exr_codec,
+                )
+    if set_raw:
+        bpy.context.scene.view_settings.view_transform = 'Raw'
         bpy.context.scene.view_settings.look = 'None'
     return state
 
 
-def pop_color_grading(state):
-    bpy.context.scene.view_settings.view_transform = state[0]
-    bpy.context.scene.view_settings.look = state[1]
+def pop_render_settings(state):
+    bpy.context.scene.render.use_border = state[0]
+    bpy.context.scene.render.use_crop_to_border = state[1]
+    bpy.context.scene.render.border_min_x = state[2]
+    bpy.context.scene.render.border_max_x = state[3]
+    bpy.context.scene.render.border_min_y = state[4]
+    bpy.context.scene.render.border_max_y = state[5]
+    bpy.context.scene.view_settings.view_transform = state[6]
+    bpy.context.scene.view_settings.look = state[7]
+    bpy.context.scene.render.pixel_aspect_x = state[8]
+    bpy.context.scene.render.pixel_aspect_y = state[9]
+    bpy.context.scene.render.engine = state[10]
+    bpy.context.scene.render.film_transparent = state[11]
+    bpy.context.scene.eevee.taa_render_samples = state[12]
+    bpy.context.scene.render.image_settings.file_format = state[13]
+    bpy.context.scene.render.image_settings.color_mode = state[14]
+    bpy.context.scene.render.image_settings.color_depth = state[15]
+    bpy.context.scene.cycles.samples = state[16]
+    bpy.context.scene.cycles.use_denoising = state[17]
+    bpy.context.scene.render.image_settings.exr_codec = state[18]
 
 
 def apply_split_normals(me):
@@ -119,16 +151,25 @@ def mkpath(path):
     pathlib.Path(bpy.path.abspath(path)).mkdir(parents=True, exist_ok=True)
 
 
-def is_same_light_color(objects, threshold):
+def is_rgb_led(objects):
+    n_objects = len(objects)
+    if n_objects == 0 or not objects[0].vlmSettings.is_rgb_led:
+        return False
     colors = [o.data.color for o in objects if o.type=='LIGHT']
     n_colors = len(colors)
+    if n_colors != n_objects:
+        print(f". Lights are marked as RGB Led but use colored emitter. Colored emitters will baked with their colors instead of full white (Lights: {[o.name for o in objects]}).")
+        return True
+    if n_objects == 1:
+        return True
     base_color = functools.reduce(lambda a, b: (a[0]+b[0], a[1]+b[1], a[2]+b[2]), colors)
     base_color = (base_color[0] / n_colors, base_color[1] / n_colors, base_color[2] / n_colors)
-    # maybe use intensity distance instead of raw RGB distance ?
     max_dif = max(map(lambda a: mathutils.Vector((a[0] - base_color[0], a[1] - base_color[1], a[2] - base_color[2])).length_squared, colors))
-    # colors are similar enough to be considered as a single color situation
-    return n_colors == len(objects) and max_dif < threshold * threshold
-
+    threshold = 0.1
+    if max_dif >= threshold * threshold:
+        print(f". Lights are marked as RGB Led but use different colors (Lights: {[o.name for o in objects]}).")
+    return True
+        
 
 def is_object_in_movable(obj):
     is_movable = True

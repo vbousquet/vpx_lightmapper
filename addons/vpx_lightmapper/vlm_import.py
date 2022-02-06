@@ -1824,7 +1824,7 @@ def read_vpx(context, filepath):
         node_math.operation = 'MULTIPLY'
         node_math.location.x = 100
         node_math.location.y = -400
-        group_name = f"{playfield_material.casefold()}.Mat"
+        group_name = "VPX.Mat"
         if group_name in mat.node_tree.nodes:
             mat.node_tree.links.new(node_tex.outputs[1], node_math.inputs[0])
             mat.node_tree.links.new(node_math.outputs[0], mat.node_tree.nodes[group_name].inputs[14])

@@ -226,9 +226,7 @@ def render_all_groups(op, context):
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
     opt_force_render = False # Force rendering even if cache is available
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
-    render_border_state = (context.scene.render.use_border, context.scene.render.use_crop_to_border,
-                context.scene.render.border_min_x,context.scene.render.border_max_x,
-                context.scene.render.border_min_y,context.scene.render.border_max_y)
+    cg = vlm_utils.push_render_settings(True)
     context.scene.render.use_border = False
     context.scene.render.use_crop_to_border = False
     context.scene.render.resolution_y = opt_tex_size
@@ -241,9 +239,7 @@ def render_all_groups(op, context):
     context.scene.render.image_settings.color_depth = '16'
     context.scene.view_layers["ViewLayer"].use_pass_z = True
     context.scene.render.film_transparent = True
-    context.scene.cycles.film_transparent_glass = True
     context.scene.use_nodes = False
-    cg = vlm_utils.push_color_grading(True)
     n_render_performed = 0
 
     col_state = vlm_collections.push_state()
@@ -393,12 +389,11 @@ def render_all_groups(op, context):
                 if not check_min_render_size():
                     print(f". light scenario '{scenario[0]}' has no render region, skipping (influence area: {influence})")
                     return None, None
-                if vlm_utils.is_same_light_color(scenario[1].objects, 0.1):
+                if vlm_utils.is_rgb_led(scenario[1].objects):
                     prev_colors = [o.data.color for o in scenario[1].objects if o.type=='LIGHT']
                     for o in scenario[1].objects: o.data.color = (1.0, 1.0, 1.0)
                     initial_state = (3, scenario[1].objects, prev_colors, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
                 else:
-                    print(f". light scenario '{scenario[0]}' contains lights with different colors or colored emitters. Lightmap will baked with these colors instead of full white.")
                     initial_state = (1, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
             else: # Single light
                 influence = get_light_influence(scenario[2], group_mask)
@@ -412,7 +407,7 @@ def render_all_groups(op, context):
                 if not check_min_render_size():
                     print(f". light scenario '{scenario[0]}' has no render region, skipping (influence area: {influence})")
                     return None, None
-                if scenario[2].type == 'LIGHT':
+                if vlm_utils.is_rgb_led([scenario[2]]):
                     prev_color = scenario[2].data.color
                     scenario[2].data.color = (1.0, 1.0, 1.0)
                     initial_state = (4, scenario[2], prev_color, vlm_collections.move_to_col(scenario[2], tmp_col))
@@ -529,15 +524,8 @@ def render_all_groups(op, context):
     context.scene.node_tree.nodes.clear()
     context.scene.use_nodes = False
 
-    context.scene.render.use_border = render_border_state[0]
-    context.scene.render.use_crop_to_border = render_border_state[1]
-    context.scene.render.border_min_x = render_border_state[2]
-    context.scene.render.border_max_x = render_border_state[3]
-    context.scene.render.border_min_y = render_border_state[4]
-    context.scene.render.border_max_y = render_border_state[5]
-
     context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
-    vlm_utils.pop_color_grading(cg)
+    vlm_utils.pop_render_settings(cg)
     vlm_collections.delete_collection(tmp_col)
     vlm_collections.pop_state(col_state)
     length = time.time() - start_time
@@ -594,12 +582,14 @@ def create_bake_meshes(op, context):
             data_to.node_groups = data_from.node_groups
     
     # Create temp collection and setup for rendering (exclude all baked/indirect objects as indirect and temp col as render target)
+    col_state = vlm_collections.push_state()
     rlc = context.view_layer.layer_collection
     tmp_col = vlm_collections.get_collection('BAKETMP')
     indirect_col = vlm_collections.get_collection('INDIRECT')
     result_col = vlm_collections.get_collection('BAKE RESULT')
     lights_col = vlm_collections.get_collection('LIGHTS')
     root_bake_col = vlm_collections.get_collection('BAKE')
+    overlay_col = vlm_collections.get_collection('OVERLAY')
     vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('HIDDEN')).exclude = True
     vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('TRASH')).exclude = True
     vlm_collections.find_layer_collection(rlc, result_col).exclude = False
@@ -901,13 +891,6 @@ def create_bake_meshes(op, context):
                 result_col.objects.link(bake_instance)
                 bake_results.append(bake_instance)
 
-    # Final view setup (hide bake groups and lights to preview the result)
-    context.scene.cursor.location = cursor_loc
-    vlm_collections.delete_collection(tmp_col)
-    vlm_collections.find_layer_collection(rlc, result_col).exclude = False
-    vlm_collections.find_layer_collection(rlc, lights_col).exclude = True
-    vlm_collections.find_layer_collection(rlc, root_bake_col).exclude = True
-
     # Sort from higher texture fill factor to lowest, then fillup packmap buckets
     print(f"\nMerging and packing UV maps")
     bake_results.sort(key=lambda obj: obj.vlmSettings.bake_tex_factor, reverse=True)
@@ -979,6 +962,16 @@ def create_bake_meshes(op, context):
             for obj in bakes:
                 packed_density += compute_uvmap_density(obj.data, obj.data.uv_layers["UVMap Packed"])
             print(f'.  Packmap #{index}: {density:>6.2%} target density for {len(bakes)} objects => {w:>4}x{h:>4} texture size with {packed_density:>6.2%} effective packed density')
+
+    # Final view setup (hide bake groups and lights to preview the result)
+    context.scene.cursor.location = cursor_loc
+    vlm_collections.pop_state(col_state)
+    vlm_collections.delete_collection(tmp_col)
+    vlm_collections.find_layer_collection(rlc, result_col).exclude = False
+    vlm_collections.find_layer_collection(rlc, lights_col).exclude = True
+    vlm_collections.find_layer_collection(rlc, root_bake_col).exclude = True
+    vlm_collections.find_layer_collection(rlc, overlay_col).exclude = True
+    vlm_collections.find_layer_collection(rlc, indirect_col).exclude = True
 
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -1296,13 +1289,8 @@ def render_packmaps_gpu(context):
                                 poly_uvs[start_pos + i] = (u + n.x, v + n.y)
                                 u, v = poly_pts[start_pos + i] 
                                 poly_pts[start_pos + i] = (u + np.x, v + np.y)
-
-                    if obj.vlmSettings.bake_type == 'lightmap':
-                        brightness = vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
-                    else:
-                        brightness = 1.0
+                    brightness = vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale) if obj.vlmSettings.bake_type == 'lightmap' else  1.0
                     print(f'  . {obj.name:>15} => HDR Scale: {obj.vlmSettings.bake_hdr_scale:>7.2f} => Brightness factor: {brightness:>7.2f}')
-
                     for i,_ in enumerate(mesh.materials):
                         if pts[i]:
                             path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr"
@@ -1331,13 +1319,13 @@ def render_packmaps_bake(op, context, sequential_baking):
     Implementation using Blender Cycle's builtin bake. This works perfectly but is rather slow.
     """
     opt_force_render = False # Force rendering even if cache is available
-    opt_tex_factor = float(vlmProps.packmap_tex_factor)
+    opt_tex_factor = float(context.scene.vlmSettings.packmap_tex_factor)
     opt_padding = context.scene.vlmSettings.padding
     
     # Purge unlinked datas to avoid out of memory error
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
     
-    cg = vlm_utils.push_color_grading(True)
+    cg = vlm_utils.push_render_settings(True)
     col_state = vlm_collections.push_state()
     rlc = context.view_layer.layer_collection
     result_col = vlm_collections.get_collection('BAKE RESULT')
@@ -1345,9 +1333,6 @@ def render_packmaps_bake(op, context, sequential_baking):
     bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
     vlm_utils.mkpath(bakepath)
     packmap_index = 0
-    render_state = (context.scene.cycles.samples, context.scene.cycles.use_denoising)
-    context.scene.cycles.samples = 1
-    context.scene.cycles.use_denoising = False
     while True:
         objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
         if not objects:
@@ -1370,10 +1355,7 @@ def render_packmaps_bake(op, context, sequential_baking):
                 obj.select_set(True)
                 is_light = obj.vlmSettings.bake_type == 'lightmap'
                 n_materials = len(obj.data.materials)
-                if obj.vlmSettings.bake_type == 'lightmap':
-                    brightness = vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
-                else:
-                    brightness = 1.0
+                brightness = vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale) if obj.vlmSettings.bake_type == 'lightmap' else  1.0
                 print(f'  . {obj.name} => HDR Scale: {obj.vlmSettings.bake_hdr_scale:>7.2f} => Brightness factor: {brightness:>7.2f}')
                 if sequential_baking: # Bake each render gorup separately. Slow but nneded by low memory system
                     for i in range(n_materials):
@@ -1415,9 +1397,6 @@ def render_packmaps_bake(op, context, sequential_baking):
                 for mat in obj.data.materials:
                     mat.node_tree.nodes["PackMap"].inputs[3].default_value = 1.0 # Preview
                     mat.blend_method = 'BLEND' if is_light else 'OPAQUE'
-            pack_image.filepath_raw = bpy.path.abspath(basepath + '.hdr')
-            pack_image.file_format = 'HDR'
-            pack_image.save()
             pack_image.filepath_raw = path_png
             pack_image.file_format = 'PNG'
             pack_image.save()
@@ -1426,10 +1405,8 @@ def render_packmaps_bake(op, context, sequential_baking):
 
         packmap_index += 1
 
-    context.scene.cycles.samples = render_state[0]
-    context.scene.cycles.use_denoising = render_state[1]
     vlm_collections.pop_state(col_state)
-    vlm_utils.pop_color_grading(cg)
+    vlm_utils.pop_render_settings(cg)
 
 
 def render_packmaps_eevee(context):
@@ -1437,7 +1414,7 @@ def render_packmaps_eevee(context):
     Implementation using Eevee render. Works fine. No padding support for the time being
     """
     opt_force_render = False # Force rendering even if cache is available
-    opt_tex_factor = float(vlmProps.packmap_tex_factor)
+    opt_tex_factor = float(context.scene.vlmSettings.packmap_tex_factor)
     opt_padding = context.scene.vlmSettings.padding
     
     col_state = vlm_collections.push_state()
@@ -1449,7 +1426,7 @@ def render_packmaps_eevee(context):
         vlm_collections.find_layer_collection(rlc, col).exclude = True
     vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
 
-    render_state = (context.scene.render.pixel_aspect_x, context.scene.render.pixel_aspect_y)
+    cg = vlm_utils.push_render_settings(True)
     context.scene.render.engine = 'BLENDER_EEVEE'
     context.scene.render.film_transparent = True
     context.scene.eevee.taa_render_samples = 1
@@ -1458,7 +1435,6 @@ def render_packmaps_eevee(context):
     context.scene.render.image_settings.color_depth = '16'
     context.scene.render.pixel_aspect_x = 1.0
     context.scene.render.pixel_aspect_y = 1.0
-    cg = vlm_utils.push_color_grading(True)
 
     prev_camera = context.scene.camera
     camera = bpy.data.objects.new('Tmp.Camera', bpy.data.cameras.new(name='Camera'))
@@ -1502,7 +1478,6 @@ def render_packmaps_eevee(context):
         bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
     
         basepath = f"{bakepath}Packmap {packmap_index}"
-        path_hdr = bpy.path.abspath(basepath + '.hdr')
         path_png = bpy.path.abspath(basepath + '.png')
         path_webp = bpy.path.abspath(basepath + ".webp")
         pass_path = ''
@@ -1547,7 +1522,7 @@ def render_packmaps_eevee(context):
             mesh.materials.clear()
             unloads = []
             mats = []
-            brightness = vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
+            brightness = vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale) if obj.vlmSettings.bake_type == 'lightmap' else  1.0
             print(f'. {obj.name} => HDR Scale: {obj.vlmSettings.bake_hdr_scale:>7.2f} => Brightness factor: {brightness:>7.2f}')
             for mat_index,_ in enumerate(obj.data.materials):
                 path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {mat_index}.exr"
@@ -1608,9 +1583,6 @@ def render_packmaps_eevee(context):
             img.filepath_raw = path_png
             img.file_format = 'PNG'
             img.save()
-            #img.filepath_raw = path_hdr # It's not really usable so just skip it
-            #img.file_format = 'HDR'
-            #img.save()
             bpy.data.images.remove(img)
             Image.open(path_png).save(path_webp, 'WEBP')
             os.remove(pass_path)
@@ -1624,7 +1596,7 @@ def render_packmaps_eevee(context):
     context.scene.eevee.taa_render_samples = 64
     context.scene.render.engine = 'CYCLES'
     vlm_collections.pop_state(col_state)
-    vlm_utils.pop_color_grading(cg)
+    vlm_utils.pop_render_settings(cg)
 
 
 def render_packmaps(op, context):
@@ -1638,9 +1610,9 @@ def render_packmaps(op, context):
     elif context.scene.vlmSettings.bake_packmap_mode == 'eevee':
         render_packmaps_eevee(context)
     elif context.scene.vlmSettings.bake_packmap_mode == 'cycle_seq':
-        render_packmaps_sequential_bake(op, context, True)
+        render_packmaps_bake(op, context, True)
     elif context.scene.vlmSettings.bake_packmap_mode == 'cycle':
-        render_packmaps_sequential_bake(op, context, False)
+        render_packmaps_bake(op, context, False)
     print(f'\nPackmaps rendered in {vlm_utils.format_time(time.time() - start_time)}.')
     context.scene.vlmSettings.last_bake_step = 'packmaps'
     return {'FINISHED'}

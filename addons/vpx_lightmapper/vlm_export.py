@@ -492,11 +492,11 @@ def export_vpx(op, context):
                         sync_color = False
                         if obj.vlmSettings.bake_light in light_col.children:
                             baked_lights = light_col.children[obj.vlmSettings.bake_light].objects
-                            sync_color = vlm_utils.is_same_light_color(baked_lights, 0.1)
+                            sync_color = vlm_utils.is_rgb_led(baked_lights)
                             vpx_name = baked_lights[0].vlmSettings.vpx_object
                         elif obj.vlmSettings.bake_light in light_col.all_objects:
                             baked_light = context.scene.objects[obj.vlmSettings.bake_light]
-                            sync_color = baked_light.type == 'LIGHT'
+                            sync_color = vlm_utils.is_rgb_led([baked_light])
                             vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object
                         brightness = 1.0 / vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
                         if vpx_name in table_lights: #FIXME
