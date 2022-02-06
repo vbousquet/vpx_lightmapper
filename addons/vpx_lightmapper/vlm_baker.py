@@ -310,6 +310,8 @@ def render_all_groups(op, context):
     
     # Check if light is influencing with regard to the provided group mask using an ellipsoid influence bound
     def get_light_influence(light, group_mask):
+        if light.data.energy <= 0:
+            return None
         if not group_mask:
             w = context.scene.render.resolution_x
             h = context.scene.render.resolution_y
@@ -322,6 +324,8 @@ def render_all_groups(op, context):
         light_center = project_point(Vector(light.location), w, h)
         light_xr = (project_point(Vector(light.location) + Vector((influence_radius, 0, 0)), w, h) - light_center).x # projected radius on x axis
         light_yr = (project_point(Vector(light.location) + camera_rotation @ Vector((0, influence_radius, 0)), w, h) - light_center).length # projected radius on y axis
+        if light_xr <= 0 or light_yr <= 0:
+            return None
         min_x = max(  0, int(light_center.x - light_xr))
         max_x = min(w-1, int(light_center.x + light_xr))
         min_y = max(  0, int(light_center.y - light_yr))
@@ -1190,7 +1194,7 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, render_path, name, n_re
         face.tag = False
     bm.faces.ensure_lookup_table()
     for xy in range(w * h):
-        if bw[4 * xy] > 2:
+        if bw[4 * xy] > 0:
             for face_index in vmaps[xy]:
                 bm.faces[face_index].tag = True
     faces = []
@@ -1211,7 +1215,7 @@ def render_packmaps_gpu(context):
     """
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True) # Purge unlinked datas to avoid out of memory error
     vlmProps = context.scene.vlmSettings
-    opt_force_render = True # Force rendering even if cache is available
+    opt_force_render = False # Force rendering even if cache is available
     opt_padding = int(vlmProps.padding)
     opt_tex_factor = float(vlmProps.packmap_tex_factor)
     opt_uv_padding = opt_padding * opt_tex_factor / int(vlmProps.tex_size)
@@ -1327,6 +1331,7 @@ def render_packmaps_bake(op, context, sequential_baking):
     Implementation using Blender Cycle's builtin bake. This works perfectly but is rather slow.
     """
     opt_force_render = False # Force rendering even if cache is available
+    opt_tex_factor = float(vlmProps.packmap_tex_factor)
     opt_padding = context.scene.vlmSettings.padding
     
     # Purge unlinked datas to avoid out of memory error
@@ -1354,8 +1359,8 @@ def render_packmaps_bake(op, context, sequential_baking):
         print(f'. Rendering packmap #{packmap_index} containing {len(objects)} bake/light map')
         
         if opt_force_render or not os.path.exists(path_png):
-            tex_width = objects[0].vlmSettings.bake_packmap_width
-            tex_height = objects[0].vlmSettings.bake_packmap_height
+            tex_width = int(objects[0].vlmSettings.bake_packmap_width * opt_tex_factor)
+            tex_height = int(objects[0].vlmSettings.bake_packmap_height * opt_tex_factor)
             pack_image = bpy.data.images.new(f"PackMap{packmap_index}", tex_width, tex_height, alpha=True)
             context.scene.render.bake.margin = opt_padding
             context.scene.render.bake.use_clear = True
@@ -1432,6 +1437,7 @@ def render_packmaps_eevee(context):
     Implementation using Eevee render. Works fine. No padding support for the time being
     """
     opt_force_render = False # Force rendering even if cache is available
+    opt_tex_factor = float(vlmProps.packmap_tex_factor)
     opt_padding = context.scene.vlmSettings.padding
     
     col_state = vlm_collections.push_state()
@@ -1506,11 +1512,10 @@ def render_packmaps_eevee(context):
             packmap_index += 1
             continue
         
-        tex_width = objects[0].vlmSettings.bake_packmap_width
-        tex_height = objects[0].vlmSettings.bake_packmap_height
-        # FIXME half texture output regarding the render size => this should be an option
-        context.scene.render.resolution_x = tex_width / 2
-        context.scene.render.resolution_y = tex_height / 2
+        tex_width = int(objects[0].vlmSettings.bake_packmap_width * opt_tex_factor)
+        tex_height = int(objects[0].vlmSettings.bake_packmap_height * opt_tex_factor)
+        context.scene.render.resolution_x = tex_width
+        context.scene.render.resolution_y = tex_height
         context.scene.use_nodes = False
         x_scale = tex_width / tex_height
         camera.location = (0.5 * x_scale, 0.5, 1.0)
