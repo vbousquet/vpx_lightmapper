@@ -309,8 +309,6 @@ def render_all_groups(op, context):
     
     # Check if light is influencing with regard to the provided group mask using an ellipsoid influence bound
     def get_light_influence(light, group_mask):
-        if light.data.energy <= 0:
-            return None
         if not group_mask:
             w = context.scene.render.resolution_x
             h = context.scene.render.resolution_y
@@ -319,6 +317,8 @@ def render_all_groups(op, context):
             w, h, mask = group_mask
         if light.type != 'LIGHT':
             return (0, 1, 0, 1)
+        if light.data.energy <= 0:
+            return None
         influence_radius = light.data.shadow_soft_size + math.log10(light.data.energy) * 250 * global_scale # empirically observed
         light_center = project_point(Vector(light.location), w, h)
         light_xr = (project_point(Vector(light.location) + Vector((influence_radius, 0, 0)), w, h) - light_center).x # projected radius on x axis
@@ -393,9 +393,10 @@ def render_all_groups(op, context):
                     print(f". light scenario '{scenario[0]}' has no render region, skipping (influence area: {influence})")
                     return None, None
                 if vlm_utils.is_rgb_led(scenario[1].objects):
-                    prev_colors = [o.data.color for o in scenario[1].objects if o.type=='LIGHT']
+                    colored_lights = [o for o in scenario[1].objects if o.type=='LIGHT']
+                    prev_colors = [o.data.color for o in colored_lights]
                     for o in scenario[1].objects: o.data.color = (1.0, 1.0, 1.0)
-                    initial_state = (3, scenario[1].objects, prev_colors, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
+                    initial_state = (3, colored_lights, prev_colors, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
                 else:
                     initial_state = (1, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
             else: # Single light
@@ -410,7 +411,7 @@ def render_all_groups(op, context):
                 if not check_min_render_size():
                     print(f". light scenario '{scenario[0]}' has no render region, skipping (influence area: {influence})")
                     return None, None
-                if vlm_utils.is_rgb_led([scenario[2]]):
+                if scenario[2].type == 'LIGHT' and vlm_utils.is_rgb_led([scenario[2]]):
                     prev_color = scenario[2].data.color
                     scenario[2].data.color = (1.0, 1.0, 1.0)
                     initial_state = (4, scenario[2], prev_color, vlm_collections.move_to_col(scenario[2], tmp_col))
