@@ -1,0 +1,61 @@
+TODO
+- Implement surface positionning relative to a ramp
+- Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
+- JP's Star Trek has a wrong texture positionning (panel above ramp)
+- Identify static/active bake and export accordingly (done for opacity, missing for under playfield which, I think, need to be marked as active)
+- When importing plastics wall, create 2 meshes: one for the plastic with a plastic shader (enlarged for the bevelling to be visible), one for the image (bpy.ops.mesh.solidify(thickness=-0.01), invert selection and delete, then scale on z axis)
+- Support 'active' (i.e. non opaque bake) objects for the occluder selection
+- Unhide objects when creating packmaps to avoid error
+- Rewrite VBS fader to apply a fading curve based on filament temperature, adapting color (K to RGB) and intensity
+- When baking, perform sanity checks: Check for collection off
+- Evaluate performing HDR with multiple lightmap (1 for 0-1, then 1 for 1-256)
+- When loading library, update existing node groups instead of reimporting them
+
+- Add support for basic UV projected movables that follow the same path but generate their own mesh even for lightmaps
+- Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
+  . Object must be UV unwrapped, and must have either a VLM.BakeTex node in its material (first slot) or has an imported VPX image (bake will be the same size as the image)
+  . Light map are computed on the UV unwrapped model, filtered based on a custom threshold
+  . Implementation progress:
+    x At group step, just hide them
+    . At render step, set them to hide/indirect for others, then adapt material (create VLM.BakeTex if missing, same size as VPX Texture) perform a bake for each movable/light scenarios, also compute light threshold of the bake and allow to access it from the UI (for easy adjustment of the lighmap bake threshold)
+    . At mesh step, copy the movables to bake result and generate a light mesh for each on the lightmap above threshold
+    . At packmap step, copy bakes to export (with exr to png/webp conversion)
+    . At export step, include them in the VPX and produce sync code
+
+- Rewrite Packmap generation for higher quality (renders should stay untouched, since they guarantee the higher possible quality):
+  x Constrain rotation to 0/90/180/270
+  . Guarantee a scale of 1 (by iterative packing, disabling all scaling)
+  . Build packmap by data transfer (RGBA pixel data copy using a padded mask), not rendering which may cause bluriness (unaligned pixels and loose precision on borders)
+
+- Occluder selection tools delete compositor nodes... Save them and restore them afterward
+
+- don't hide trigger wire (same for reflection)
+
+
+
+
+Closed items:
+- Allow to mark VPX objects as baked without having them in a bake group (when objects are merged for example)
+- Apply layback lattice transform when performing UV projection (or clearly state that lattice is not supported by the process)
+- Fix pruned faces for sub pixel faces of lightmaps
+- Find a way to take in account text overlay with clean alpha borders
+- Link multiple object to one bake (for clean export)
+- Import fixed view node groups, rename all core node groups as VLM. / VPX.
+- Set bake camera pos to Fixed view node groups
+- Add black wood bump to JP 13
+- Add some scracthes to JP 13
+- When baking, check for compositor node setup
+- Make 'Bake Target' Collection not renderable
+- Improve lighting of JP 13 (all to black, then adjust all insert spots)
+- Toggle indirect only for indirect call when baking
+- Check why JP 13 stops on bake mesh generation
+- Add support for traditional baking the playfield (using view dependent shading) instead of render baking
+- Add support for AOI on emissive mesh (sphere bounds of box bounds, then emission power to radiu heuristic)
+- Remove overlay as a preprocess/postprocess and integrate it directly in the render
+- Recreate the base VPX Material, using only Principled BSDF, with gamma corrected plastic translucency
+- Move away from the 'overlay' approach, using a traditional 'bake to' system
+  . Overlay should be regular bake objects (rendered), with a bake target (used as mesh targets)
+  . At Render stage, render the bake object (eventually mask him with the alpha of the bake target for better borders)
+  . At Mesh stage, use the bake target mesh instead of the bake object
+  . UI integration: add a 'bake to' field for bake objects PointerProperty(name="Bake To", type=bpy.types.Object), don't render bake to targets
+- Add an option to take in account VPX playfield reflection (export with reflection flag, adapt backface culling for the reflected ray)

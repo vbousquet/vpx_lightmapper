@@ -113,6 +113,10 @@ def camera_inclination_update(self, context):
     lattice.scale[1] = 6
     lattice.scale[2] = 6
     vlm_collections.find_layer_collection(context.view_layer.layer_collection, setup_col).exclude = setup_exclude
+    
+    # update fixed view shader
+    fv_incoming = bpy.data.node_groups.get('VLM.Fixed View Incoming')
+    if fv_incoming: fv_incoming.nodes['Camera Pos'].inputs[0].default_value = camera_object.location
 
 
 def fit_camera(context, camera_inclination, camera_layback):

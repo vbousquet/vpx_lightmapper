@@ -56,44 +56,38 @@ def get_collection(name, create=True):
         return c
     if name == 'TRASH':
         n, c = create_collection(context, "Trash", get_collection('ROOT', create), create)
-        if n:
-            find_layer_collection(context.view_layer.layer_collection, c).exclude = True
+        if n: find_layer_collection(context.view_layer.layer_collection, c).exclude = True
         return c
     if name == 'HIDDEN':
         n, c = create_collection(context, "Hidden", get_collection('ROOT', create), create)
-        if n:
-            find_layer_collection(context.view_layer.layer_collection, c).exclude = True
+        if n: find_layer_collection(context.view_layer.layer_collection, c).exclude = True
         return c
     if name == 'INDIRECT':
         n, c = create_collection(context, "Indirect", get_collection('ROOT', create), create)
-        if n:
-            find_layer_collection(context.view_layer.layer_collection, c).indirect_only = True
+        if n: find_layer_collection(context.view_layer.layer_collection, c).indirect_only = True
         return c
-    if name == 'OVERLAY':
-        n, c = create_collection(context, "Overlays", get_collection('ROOT', create), create)
+    if name == 'BAKE TARGET':
+        n, c = create_collection(context, "Bake Target", get_collection('ROOT', create), create)
+        if n: c.hide_render = True
         return c
     if name == 'LIGHTS':
         n, c = create_collection(context, "Light Groups", get_collection('ROOT', create), create)
         return c
     if name == 'WORLD':
         n, c = create_collection(context, "World", get_collection('LIGHTS', create), create)
-        if n:
-            c.vlmSettings.light_mode = 'world'
+        if n: c.vlmSettings.light_mode = 'world'
         return c
     if name == 'GI':
         n, c = create_collection(context, "GI", get_collection('LIGHTS', create), create)
-        if n:
-            c.vlmSettings.light_mode = 'group'
+        if n: c.vlmSettings.light_mode = 'group'
         return c
     if name == 'INSERTS':
         n, c = create_collection(context, "Inserts", get_collection('LIGHTS', create), create)
-        if n:
-            c.vlmSettings.light_mode = 'split'
+        if n: c.vlmSettings.light_mode = 'split'
         return c
     if name == 'FLASHERS':
         n, c = create_collection(context, "Flashers", get_collection('LIGHTS', create), create)
-        if n:
-            c.vlmSettings.light_mode = 'split'
+        if n: c.vlmSettings.light_mode = 'split'
         return c
     if name == 'BAKE':
         n, c = create_collection(context, "Bake Groups", get_collection('ROOT', create), create)
@@ -105,13 +99,11 @@ def get_collection(name, create=True):
         return c
     if name == 'BAKE ACTIVE':
         n, c = create_collection(context, "Active", get_collection('BAKE', create), create)
-        if n:
-            c.vlmSettings.bake_mode = 'default'
+        if n: c.vlmSettings.bake_mode = 'default'
         return c
     if name == 'BAKE PLAYFIELD':
         n, c = create_collection(context, "Playfield", get_collection('BAKE', create), create)
-        if n:
-            c.vlmSettings.bake_mode = 'playfield'
+        if n: c.vlmSettings.bake_mode = 'playfield_fv'
         return c
     if name == 'BAKE RESULT':
         n, c = create_collection(context, "Bake Result", get_collection('ROOT', create), create)
@@ -119,10 +111,13 @@ def get_collection(name, create=True):
     if name == 'BAKETMP':
         n, c = create_collection(context, "Bake Temp", get_collection('ROOT', create), create)
         return c
+    if name == 'LIGHTTMP':
+        n, c = create_collection(context, "Light Temp", get_collection('ROOT', create), create)
+        return c
 
 
 def setup_collections():
-    default_col_ids = ['ROOT', 'SETUP', 'HIDDEN', 'INDIRECT', 'OVERLAY', 'LIGHTS', 'WORLD', 'GI', 'INSERTS', 'FLASHERS', 'BAKE', 'BAKE DEFAULT', 'BAKE ACTIVE', 'BAKE PLAYFIELD']
+    default_col_ids = ['ROOT', 'SETUP', 'HIDDEN', 'INDIRECT', 'BAKE TARGET', 'LIGHTS', 'WORLD', 'GI', 'INSERTS', 'FLASHERS', 'BAKE', 'BAKE DEFAULT', 'BAKE ACTIVE', 'BAKE PLAYFIELD']
     for id in default_col_ids:
         get_collection(id)
     get_collection('BAKE PLAYFIELD').vlmSettings.bake_mode = 'playfield'

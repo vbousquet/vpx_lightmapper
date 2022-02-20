@@ -43,10 +43,21 @@ def load_library():
         data_to.images = [name for name in data_from.images if name.startswith("VPX.Core.")]
         data_to.materials = [name for name in data_from.materials if name.startswith("VPX.Core.Mat.")]
         data_to.node_groups = data_from.node_groups
+    # Core materials
     bpy.data.node_groups.get('VLM.BakeInfo').use_fake_user = True
     bpy.data.node_groups.get('VPX.Material').use_fake_user = True
     bpy.data.node_groups.get('VPX.Flasher').use_fake_user = True
-    bpy.data.node_groups.get('Pack Map').use_fake_user = True
+    # Fixed view shading
+    bpy.data.node_groups.get('VLM.Fixed View Glass').use_fake_user = True
+    bpy.data.node_groups.get('VLM.Fixed View Specular').use_fake_user = True
+    bpy.data.node_groups.get('VLM.Fixed View Incoming').use_fake_user = True
+    # Compositing
+    bpy.data.node_groups.get('VLM.Overlay').use_fake_user = True
+    # Miscellaneous nodes
+    bpy.data.node_groups.get('Metal Colors').use_fake_user = True
+    bpy.data.node_groups.get('Color Dispersion').use_fake_user = True
+    # FIXME Legacy nodes to be removed
+    bpy.data.node_groups.get('VLM.Pack Map').use_fake_user = True
 
 
 def push_render_settings(set_raw):
@@ -65,6 +76,14 @@ def push_render_settings(set_raw):
                 bpy.context.scene.cycles.samples,
                 bpy.context.scene.cycles.use_denoising,
                 bpy.context.scene.render.image_settings.exr_codec,
+                bpy.context.scene.render.bake.use_clear,
+                bpy.context.scene.render.bake.use_selected_to_active,
+                bpy.context.scene.use_nodes,
+                bpy.context.scene.render.resolution_x,
+                bpy.context.scene.render.resolution_y,
+                bpy.context.view_layer.use_pass_combined,
+                bpy.context.view_layer.use_pass_object_index,
+                bpy.context.scene.render.bake.cage_extrusion,
                 )
     if set_raw:
         bpy.context.scene.view_settings.view_transform = 'Raw'
@@ -92,6 +111,14 @@ def pop_render_settings(state):
     bpy.context.scene.cycles.samples = state[16]
     bpy.context.scene.cycles.use_denoising = state[17]
     bpy.context.scene.render.image_settings.exr_codec = state[18]
+    bpy.context.scene.render.bake.use_clear = state[19]
+    bpy.context.scene.render.bake.use_selected_to_active = state[20]
+    bpy.context.scene.use_nodes = state[21]
+    bpy.context.scene.render.resolution_x = state[22]
+    bpy.context.scene.render.resolution_y = state[23]
+    bpy.context.view_layer.use_pass_combined = state[24]
+    bpy.context.view_layer.use_pass_object_index = state[25]
+    bpy.context.scene.render.bake.cage_extrusion = state[26]
 
 
 def apply_split_normals(me):
@@ -114,6 +141,12 @@ def get_bakepath(context, type='ROOT'):
     elif type == 'EXPORT':
         return f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/Export/"
     return f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/"
+
+
+def set_selected_and_active(context, obj):
+    bpy.ops.object.select_all(action='DESELECT')
+    context.view_layer.objects.active = obj
+    obj.select_set(True)
 
 
 def strip_vlm(name):
@@ -158,7 +191,7 @@ def is_rgb_led(objects):
     colors = [o.data.color for o in objects if o.type=='LIGHT']
     n_colors = len(colors)
     if n_colors != n_objects:
-        print(f". Lights are marked as RGB Led but use colored emitter. Colored emitters will baked with their colors instead of full white (Lights: {[o.name for o in objects]}).")
+        print(f". Lights are marked as RGB Led but use colored emitter which are baked with their colors instead of full white (Lights: {[o.name for o in objects]}).")
         return True
     if n_objects == 1:
         return True
@@ -171,10 +204,10 @@ def is_rgb_led(objects):
     return True
         
 
-def is_object_in_movable(obj):
+def is_part_of_bake_category(obj, category):
     is_movable = True
     for col in obj.users_collection:
-        if col.vlmSettings.bake_mode != 'movable':
+        if col.vlmSettings.bake_mode != category:
             is_movable = False
     return is_movable
 
@@ -182,6 +215,42 @@ def is_object_in_movable(obj):
 def brightness_from_hdr(hdr_range):
     return 1.0 / max(0.1, min(2, hdr_range))
     #return 1.0 / min( 1 + (hdr_range - 1) / 10, 10)
+
+
+def get_lightings(context):
+    """Return the list of lighting situations to be rendered as list of tuples
+        (name, None/light collection, single light, custom data)
+    """
+    world = ["Environment", None, [], None]
+    light_scenarios = {"Environment": world}
+    lights_col = vlm_collections.get_collection('LIGHTS', create=False)
+    if lights_col is not None:
+        for light_col in lights_col.children:
+            lights = light_col.objects
+            if light_col.hide_render == False and len(lights) > 0:
+                if light_col.vlmSettings.light_mode == 'group':
+                    name = strip_vlm(light_col.name)
+                    light_scenarios[name] = [name, light_col, None, None]
+                elif light_col.vlmSettings.light_mode == 'split':
+                    for light in lights:
+                        name = f"{strip_vlm(light_col.name)}-{light.name}"
+                        light_scenarios[name] = [name, light_col, light, None]
+                elif light_col.vlmSettings.light_mode == 'world':
+                    world[2].extend(lights)
+    return light_scenarios
+
+
+def get_n_lightings(context):
+    return len(get_lightings(context))
+    
+    
+def get_n_render_groups(context):
+    n = 0
+    root_bake_col = vlm_collections.get_collection('BAKE', create=False)
+    if root_bake_col is not None:
+        for obj in root_bake_col.all_objects:
+            n = max(n, obj.vlmSettings.render_group + 1)
+    return n
 
 
 def render_mask(context, width, height, target_image, view_matrix, projection_matrix):

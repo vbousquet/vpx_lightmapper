@@ -39,8 +39,6 @@ from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty,
 from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, Collection)
 from rna_prop_ui import PropertyPanel
 
-# TODO
-
 
 # Use import.reload for all submodule to allow iterative development using bpy.ops.script.reload()
 if "vlm_dependencies" in locals():
@@ -91,10 +89,22 @@ if dependencies_installed:
         importlib.reload(vlm_export)
     else:
         from . import vlm_export
-    if "vlm_baker" in locals():
-        importlib.reload(vlm_baker)
+    if "vlm_group_baker" in locals():
+        importlib.reload(vlm_group_baker)
     else:
-        from . import vlm_baker
+        from . import vlm_group_baker
+    if "vlm_meshes_baker" in locals():
+        importlib.reload(vlm_meshes_baker)
+    else:
+        from . import vlm_meshes_baker
+    if "vlm_render_baker" in locals():
+        importlib.reload(vlm_render_baker)
+    else:
+        from . import vlm_render_baker
+    if "vlm_packmap_baker" in locals():
+        importlib.reload(vlm_packmap_baker)
+    else:
+        from . import vlm_packmap_baker
 
 
 class VLM_Scene_props(PropertyGroup):
@@ -146,6 +156,7 @@ class VLM_Scene_props(PropertyGroup):
     render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
     padding: IntProperty(name="Padding", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
+    use_vpx_reflection: BoolProperty(name="VPX PF Reflection", description="Use VPX playfield reflection (keep faces only visible through playfield reflection)", default = True)
     uv_packer: EnumProperty(
         items=[
             ('blender', 'Blender', 'Use Blender internal UV island packing', '', 0),
@@ -182,7 +193,7 @@ class VLM_Scene_props(PropertyGroup):
         ],
         name='Image format',
         description='Image format used in exported table',
-        default='webp'
+        default='png'
     )
     export_mode: EnumProperty(
         items=[
@@ -204,7 +215,8 @@ class VLM_Collection_props(PropertyGroup):
         items=[
             ('default', 'Default', 'Default bake process', '', 0),
             ('movable', 'Movable', 'Bake to a splitted movable mesh', '', 1),
-            ('playfield', 'Playfield', 'Bake to a dedicated orthographic playfield image', '', 2)
+            ('playfield', 'Playfield', 'Bake to a dedicated orthographic playfield image', '', 2),
+            ('playfield_fv', 'Playfield Fixed View', 'Bake to a dedicated orthographic playfield image, using fixed view shaders', '', 3)
         ],
         name='Bake Mode',
         description='Bake mode for the selected collection',
@@ -232,6 +244,7 @@ class VLM_Object_props(PropertyGroup):
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     is_rgb_led: BoolProperty(name="RGB Led", description="RGB Led (lightmapped to white for dynamic colors)", default = False)
+    bake_to: PointerProperty(name="Bake To", type=bpy.types.Object, description="Target object used as bake mesh target")
     # Movable objects bake settings
     movable_lightmap_threshold: FloatProperty(name="Lightmap threshold", description="Light threshold for generating a lightmap (1 for no lightmaps)", default = 1.0)
     movable_influence: EnumProperty(
@@ -251,7 +264,8 @@ class VLM_Object_props(PropertyGroup):
             ('static', 'Static', 'Static bake', '', 1),
             ('active', 'Active', "'Active', i.e. non opaque, bake", '', 2),
             ('lightmap', 'Lightmap', 'Additive lightmap bake', '', 3),
-            ('playfield', 'Playfield', 'Bake to a orthographic playfield sized image', '', 4)
+            ('playfield', 'Playfield', 'Orthographic playfield sized bake', '', 4),
+            ('playfield_fv', 'Playfield Fixed View', 'Orthographic playfield sized bake, prerendered at target size', '', 5)
         ],
         name="Type",
         default='default'
@@ -271,9 +285,7 @@ class VLM_OT_new(Operator):
     
     def execute(self, context):
         context.scene.render.engine = 'CYCLES'
-        context.scene.cycles.samples = 64
         context.scene.render.film_transparent = True
-        context.scene.cycles.use_preview_denoising = True
         context.scene.vlmSettings.table_file = ""
         context.scene.vlmSettings.last_bake_step = "unstarted"
         vlm_collections.delete_collection(vlm_collections.get_collection('ROOT'))
@@ -292,9 +304,7 @@ class VLM_OT_new_from_vpx(Operator, ImportHelper):
     
     def execute(self, context):
         context.scene.render.engine = 'CYCLES'
-        context.scene.cycles.samples = 64
         context.scene.render.film_transparent = True
-        context.scene.cycles.use_preview_denoising = True
         context.scene.vlmSettings.table_file = ""
         vlm_collections.delete_collection(vlm_collections.get_collection('ROOT'))
         context.scene.vlmSettings.last_bake_step = "unstarted"
@@ -334,7 +344,7 @@ class VLM_OT_compute_render_groups(Operator):
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
-        return vlm_baker.compute_render_groups(self, context)
+        return vlm_group_baker.compute_render_groups(self, context)
 
 
 class VLM_OT_render_all_groups(Operator):
@@ -344,7 +354,7 @@ class VLM_OT_render_all_groups(Operator):
     bl_options = {"REGISTER"}
     
     def execute(self, context):
-        return vlm_baker.render_all_groups(self, context)
+        return vlm_render_baker.render_all_groups(self, context)
 
 
 class VLM_OT_create_bake_meshes(Operator):
@@ -354,7 +364,7 @@ class VLM_OT_create_bake_meshes(Operator):
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
-        return vlm_baker.create_bake_meshes(self, context)
+        return vlm_meshes_baker.create_bake_meshes(self, context)
 
 
 class VLM_OT_render_packmaps(Operator):
@@ -364,7 +374,7 @@ class VLM_OT_render_packmaps(Operator):
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
-        return vlm_baker.render_packmaps(self, context)
+        return vlm_packmap_baker.render_packmaps(self, context)
 
 
 class VLM_OT_export_vpx(Operator):
@@ -386,13 +396,18 @@ class VLM_OT_batch_bake(Operator):
     def execute(self, context):
         start_time = time.time()
         print(f"\nStarting complete bake batch...")
-        vlm_baker.compute_render_groups(self, context)
-        vlm_baker.render_all_groups(self, context)
-        vlm_baker.create_bake_meshes(self, context)
-        vlm_baker.render_packmaps(self, context)
-        vlm_export.export_vpx(self, context)
+        result = vlm_group_baker.compute_render_groups(self, context)
+        if 'FINISHED' not in result: return result
+        result = vlm_render_baker.render_all_groups(self, context)
+        if 'FINISHED' not in result: return result
+        result = vlm_meshes_baker.create_bake_meshes(self, context)
+        if 'FINISHED' not in result: return result
+        result = vlm_packmap_baker.render_packmaps(self, context)
+        if 'FINISHED' not in result: return result
+        result = vlm_export.export_vpx(self, context)
+        if 'FINISHED' not in result: return result
         print(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}")
-        return {"FINISHED"}
+        return {'FINISHED'}
 
 
 class VLM_OT_state_hide(Operator):
@@ -597,17 +612,25 @@ class VLM_OT_load_render_images(Operator):
         bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
         for obj in context.selected_objects:
             if obj.name in result_col.all_objects:
-                paths = [f"{bakepath}{obj.vlmSettings.bake_name} - Group {i}.exr" for i,_ in enumerate(obj.data.materials)]
-                images = [vlm_utils.image_by_path(path) for path in paths]
-                all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
-                print(images)
-                if all_loaded:
-                    for im in images:
+                if obj.vlmSettings.bake_type == 'playfield_fv':
+                    path = f'{bakepath}Environment - {obj.vlmSettings.bake_objects}.exr'
+                    im = vlm_utils.image_by_path(path)
+                    if not os.path.exists(bpy.path.abspath(path)) or im is not None:
                         if im != None and im.name != 'VLM.NoTex': bpy.data.images.remove(im)
-                else:
-                    for path, mat in zip(paths, obj.data.materials):
+                    else:
                         _, im = vlm_utils.get_image_or_black(path)
-                        mat.node_tree.nodes["BakeTex"].image = im
+                        obj.data.materials[0].node_tree.nodes["BakeTex"].image = im
+                else:
+                    paths = [f'{bakepath}{obj.vlmSettings.bake_name} - Group {i}.exr' for i,_ in enumerate(obj.data.materials)]
+                    images = [vlm_utils.image_by_path(path) for path in paths]
+                    all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
+                    if all_loaded:
+                        for im in images:
+                            if im != None and im.name != 'VLM.NoTex': bpy.data.images.remove(im)
+                    else:
+                        for path, mat in zip(paths, obj.data.materials):
+                            _, im = vlm_utils.get_image_or_black(path)
+                            mat.node_tree.nodes["BakeTex"].image = im
         return {"FINISHED"}
 
 
@@ -672,6 +695,7 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         layout.prop(vlmProps, "tex_size")
         layout.prop(vlmProps, "padding")
         layout.prop(vlmProps, "remove_backface", text='Backface')
+        layout.prop(vlmProps, "use_vpx_reflection")
         layout.prop(vlmProps, "uv_packer")
         layout.prop(vlmProps, "packmap_tex_factor")
         layout.prop(vlmProps, "bake_packmap_mode")
@@ -703,7 +727,7 @@ class VLM_PT_Col_Props(bpy.types.Panel):
         bake_col = vlm_collections.get_collection('BAKE')
         light_col = vlm_collections.get_collection('LIGHTS')
         if col.name in bake_col.children:
-            layout.prop(col.vlmSettings, 'bake_mode', expand=True)
+            layout.prop(col.vlmSettings, 'bake_mode')
             layout.prop(col.vlmSettings, 'is_active_mat', expand=True)
         elif col.name in light_col.children:
             layout.prop(col.vlmSettings, 'light_mode', expand=True)
@@ -720,6 +744,7 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
         root_col = vlm_collections.get_collection('ROOT', create=False)
+        bake_col = vlm_collections.get_collection('BAKE', create=False)
         light_col = vlm_collections.get_collection('LIGHTS', create=False)
         result_col = vlm_collections.get_collection('BAKE RESULT', create=False)
         
@@ -755,6 +780,8 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
             row.operator(VLM_OT_state_hide.bl_idname)
             row.operator(VLM_OT_state_indirect.bl_idname)
             row.operator(VLM_OT_state_bake.bl_idname)
+            if len(bake_objects) == 1 and bake_col and bake_objects[0].name in bake_col.all_objects:
+                layout.prop(bake_objects[0].vlmSettings, 'bake_to')
             layout.separator()
             single_group = -1
             for obj in bake_objects:

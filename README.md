@@ -90,13 +90,13 @@ The workflow can be whatever you want, but the tool was designed around the foll
 
 
 The tool expects a scene using the following collections:
-- 'VLM.Setup': the generated camera and lattice object. Just uncheck it.
-- 'VLM.Trash': deleted objects, not rendered
-- 'VLM.Hidden': hidden objects, not rendered
-- 'VLM.Indirect': objects which are not baked (not included in the output meshes and textures) but *indirectly* influence the lighting. For example this can be used for trigger wires, gate wires,...
-- 'VLM.Overlays': objects which are not baked (not included in the output meshes and textures) but *directly* influence the lighting. For example this can be used for all objects not directly visible from the player, insert text overlays, VPW style inserts (depressed cups that give some depth to inserts),...
-- 'VLM.Light Groups': this collection hosts sub-collections which define each lighting situation (see below).
-- 'VLM.Bake Groups': this collection hosts sub-collections which define each bake group (see below).
+- 'Setup': the generated camera and lattice object. Just uncheck it.
+- 'Trash': deleted objects, not rendered
+- 'Hidden': hidden objects, not rendered
+- 'Indirect': objects which are not baked (not included in the output meshes and textures) but *indirectly* influence the lighting. For example this can be used for trigger wires, gate wires,...
+- 'Bake Target': some objects may be defined to be baked to a 'bake target', that is to say that they will be rendered but the result will be projected on another simplified mesh wich will be used in VPX. These 'bake targets' are placed in this collection.
+- 'Light Groups': this collection hosts sub-collections which define each lighting situation (i.e. all the lighting, see below).
+- 'Bake Groups': this collection hosts sub-collections which define each bake group (i.e. what will be rendered, see below).
 
 The UI is available in the scene property panel, inside the "VPX Light Mapper" pane. Lots of informations and tools are also available in the information (N key) panel of the 3D view and the collection property panel (bake & light groups configuration).
 
@@ -109,7 +109,7 @@ The import tool is used to create a scene setup (empty or from an existing table
 
 When updating, the process is the following:
 - All textures are reloaded
-- Objects link to groups (VPX.Hidden/VPX.Bake/...) are left untouched except for deleted objects which are moved to VPX.Trash
+- Objects link to groups (Hidden/Bake/...) are left untouched except for deleted objects which are moved to Trash
 - World environments (IBL and Black) are (re)created if missing. The environment texture is updated in the shader node named 'VPX.Mat.Tex.IBL'
 - Objects are identified by their link to VPX object (look in 3D View side panel, there you can see/edit the VPX identifier, eventually associated to a subpart for multipart objects like bumpers). If object is not found, it is created like on initial import but if object is found, it is updated according to its configuration (available in the 3D View side panel):
 	- If not disabled, meshes/curves/light informations are replaced by the ones defined in the VPX table,
@@ -134,7 +134,7 @@ The tool always fit the camera to the objects to be baked, processing layback ac
 
 The texture baking is performed according to:
 - Light groups, which define each lighting situation to be computed,
-- Bake groups, which define groups of object to be baked together and exported into a single merged mesh.
+- Bake groups, which define groups of object to be rendered, baked together and exported into a single merged mesh.
 
 The lightmap baker automates all the baking process according to the following workflow for each bake group:
 1. Identify non overlapping groups of objects from the camera point of view
@@ -150,7 +150,7 @@ In the collection property panel, each bake groups has a 'bake mode' which deter
 	- Solid bake outputs splitted mesh per bake group
 	- Light map bake meshes are merged together (including the ones baked in playfield mode groups)
 - Playfield
-	- Solid bake outputs splitted mesh per bake group, with a texture projection corresponding to the playfield orthographic view (i.e. a texture that can be used as a playfield image in VPX). Note that playfield bake mode is rendered from the camera point of view to have the right view dependent shading.
+	- Solid bake outputs a splitted mesh per bake group, which is baked to a playfield size plane. This is a traditional bake (not a render with projective UV mapping) and requires to use view dependent shading. The toolkit provides material node group for view dependent shading with regards to the position of the camera.
 	- Light map behave exactly the same as in default mode and are merged together (including the ones from default mode groups)
 - *TODO* Movable
 	- Solid and light map bake outputs splitted mesh and image per object in the bake group, keeping each object origin
@@ -225,7 +225,13 @@ The importer has an option to detect inserts (lights placed on the playfield, wi
 - generate a cup mesh, opened on the top side, corresponding to the VPX light shape, with a core reflective material,
 - adjust the playfield material to be partly translucent for the inserts, using an automatically generated translucency map.
 
-Another (better) way of baking inserts is to make them fully transparent in the playfield texture, then place in the 'Default' bake group a little, black shaded, cup corresponding to their shape to give them some depth. Then the detailled model of the the insert is placed in the overlay collection (ith a plastic shader), and a light or an emitter mesh is placed at the bottom of the cup. This will give depth to the inserts and bake it according to each lighting situation.
+A better way of baking inserts is:
+- Cut hole in the playfield texture (transparent areas),
+- Place in the 'Bake Target' collection a little, black shaded, cup corresponding to their shape to give them some depth. 
+- Place the detailled model of the the insert in the bake collection (with a plastic shader) specifying its 'Bake To' parameter to the little cup previously created. 
+- For the lighting, an emitter mesh is placed inside the model, as well as a spot light slightly above the playfield, all of them grouped together in a light collection to be baked together.
+- Place a glass for the pinball cabinet which should be transparent for camera rays, and classic glass otherwise.
+This will allow inserts with detailled lighting (thanks to the emitter mesh and its nice texture), wich lights its surrounding (thanks to the spot light), and also has large indirect lighting influence (thanks to the pincab glass), with somme fake depth (thanks to the little insert cup), and with limited performance impact (in the end, only the little cup is exported and rendered by VPX).
 
 ### Transparent objects (plastic ramps, bumper caps,...) and alpha blending
 

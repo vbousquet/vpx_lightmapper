@@ -16,8 +16,7 @@
 import bpy
 import time
 from . import vlm_collections
-
-# TODO support 'active' (i.e. non opaque bake) objects
+from . import vlm_utils
 
 
 def select_occluded(context):
@@ -33,6 +32,7 @@ def select_occluded(context):
     print("\nStarting occlusion selection")
     start_time = time.time()
     col_state = vlm_collections.push_state()
+    render_settings = vlm_utils.push_render_settings(False)
 
     rlc = context.view_layer.layer_collection
     root_col = vlm_collections.get_collection('ROOT')
@@ -48,23 +48,20 @@ def select_occluded(context):
     for i, o in enumerate(bake_objects, start=1):
         o.pass_index = i
         o.tag = True
-    old_samples = context.scene.eevee.taa_render_samples
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     context.scene.render.engine = 'CYCLES'
     context.scene.render.resolution_y = 512 # Height used for the object masks
     context.scene.render.resolution_x = int(context.scene.render.resolution_y * render_aspect_ratio)
     context.scene.eevee.taa_render_samples = 1
     context.view_layer.use_pass_combined = False
-    context.view_layer.use_pass_combined = False
     context.view_layer.use_pass_z = False
     context.view_layer.use_pass_object_index = True
     context.scene.use_nodes = True
-    context.scene.node_tree.nodes.clear()
     nodes = context.scene.node_tree.nodes
     links = context.scene.node_tree.links
     rl = nodes.new("CompositorNodeRLayers")
     rl.location.x = -200
-    out = nodes.new("CompositorNodeComposite")
+    out = nodes.new("CompositorNodeComposite") # FIXME set as active
     out.location.x = 200
     vn = nodes.new("CompositorNodeViewer")
     vn.location.x = 200
@@ -81,14 +78,11 @@ def select_occluded(context):
         if obj.tag:
             context.view_layer.objects.active = obj
             obj.select_set(True)
-    context.scene.node_tree.nodes.clear()
-    context.scene.use_nodes = False
-    context.scene.render.resolution_y = int(context.scene.vlmSettings.tex_size)
-    context.scene.render.resolution_x = int(context.scene.render.resolution_y * render_aspect_ratio)
-    context.view_layer.use_pass_combined = True
-    context.view_layer.use_pass_object_index = False
-    context.scene.eevee.taa_render_samples = old_samples
     for o, pass_id in zip(bake_objects, initial_pass_ids): o.pass_index = pass_id
+    nodes.remove(rl)
+    nodes.remove(out)
+    nodes.remove(vn)
+    vlm_utils.pop_render_settings(render_settings)
     vlm_collections.pop_state(col_state)
     print(f"\nOcclusion selection performed in {int(time.time() - start_time)}s.")
     return {'FINISHED'}

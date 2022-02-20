@@ -34,14 +34,6 @@ import olefile
 
 global_scale = vlm_utils.global_scale
 
-# TODO
-# - Implement surface positionning relative to a ramp
-# - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
-# - JP's Star Trek has a wrong texture positionning (panel above ramp)
-# - Identify static/active bake and export accordingly (done for opacity, missing for under playfield which, I think, need to be marked as active)
-# - Recreate the base VPX Material, using only Principled BSDF, with gamma corrected plastic translucency
-
-
 
 class VPX_Material(object):
     def __init__(self):
@@ -324,7 +316,6 @@ def read_vpx(context, filepath):
     hidden_col = vlm_collections.get_collection('HIDDEN')
     movable_col = hidden_col
     indirect_col = vlm_collections.get_collection('INDIRECT')
-    overlay_col = vlm_collections.get_collection('OVERLAY')
     gi_col = vlm_collections.get_collection('GI')
     lights_col = vlm_collections.get_collection('INSERTS')
     flahers_col = vlm_collections.get_collection('FLASHERS')
@@ -1604,7 +1595,7 @@ def read_vpx(context, filepath):
                     created_objects.append(obj)
 
                 is_insert_overlay = opt_detect_insert_overlay and 'insert' in name.casefold()
-                existing, obj = update_object(context, name, 'Flasher', mesh, is_insert_overlay, overlay_col, hidden_col)
+                existing, obj = update_object(context, name, 'Flasher', mesh, is_insert_overlay, bake_col, hidden_col)
                 if obj.vlmSettings.import_transform:
                     obj.rotation_euler = mathutils.Euler((-radians(rot_x), -radians(rot_y), -radians(rot_z)), 'ZYX')
                     #obj.location = (global_scale * x, -global_scale * y, global_scale * height)

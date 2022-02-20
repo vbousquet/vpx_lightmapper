@@ -18,6 +18,7 @@ import os
 import zlib
 import struct
 import re
+import itertools
 from . import biff_io
 from . import vlm_utils
 from . import vlm_collections
@@ -28,8 +29,6 @@ import pythoncom
 import win32crypt
 import win32cryptcon
 from win32com import storagecon
-
-# TODO
 
 
 def export_name(object_name):
@@ -56,7 +55,8 @@ def export_vpx(op, context):
     export_mode = vlmProps.export_mode
     export_image_type = vlmProps.export_image_type
     bake_col = vlm_collections.get_collection('BAKE')
-    overlay_col = vlm_collections.get_collection('OVERLAY')
+    indirect_col = vlm_collections.get_collection('INDIRECT')
+    hide_col = vlm_collections.get_collection('HIDDEN')
     light_col = vlm_collections.get_collection('LIGHTS')
     if not os.path.isfile(input_path):
         op.report({'ERROR'}, f'{input_path} does not exist')
@@ -103,6 +103,8 @@ def export_vpx(op, context):
 
     table_lights = []
     table_flashers = []
+    baked_vpx_lights = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in light_col.all_objects))
+    baked_vpx_objects = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in itertools.chain(bake_col.all_objects, indirect_col.all_objects)))
 
     # Remove previous baked models and append the new ones, also hide/remove baked items
     n_read_item = 0
@@ -132,9 +134,8 @@ def export_vpx(op, context):
             item_data.next()
             if item_data.tag == 'NAME':
                 name = item_data.get_wide_string()
-                is_baked = next((o for o in bake_col.all_objects if o.vlmSettings.vpx_object == name and not vlm_utils.is_object_in_movable(o)), None) is not None
-                is_baked = is_baked or next((o for o in overlay_col.all_objects if o.vlmSettings.vpx_object == name), None) is not None
-                is_baked_light = next((o for o in light_col.all_objects if o.vlmSettings.vpx_object == name), None) is not None
+                is_baked = name in baked_vpx_objects
+                is_baked_light = name in baked_vpx_lights
                 break
             item_data.skip_tag()
         item_data = biff_io.BIFF_reader(data)
@@ -147,7 +148,7 @@ def export_vpx(op, context):
                 reflection_field = True
             elif item_data.tag == 'CLDR' or item_data.tag == 'CLDW': # Collidable for wall ramps and primitives
                 is_physics = item_data.get_bool()
-            elif item_data.tag == 'IMAG' or item_data.tag == 'SIMG' or item_data.tag == 'IMGF' or item_data.tag == 'IMAB':
+            elif item_data.tag == 'IMAG' or item_data.tag == 'SIMG' or item_data.tag == 'IMAB': # or item_data.tag == 'IMGF' keep spinner images
                 item_images.append(item_data.get_string())
             elif (item_type == 0 or item_type == 6) and item_data.tag == 'VSBL': # for wall top (0) and triggers (6)
                 visibility_field = True
@@ -188,17 +189,14 @@ def export_vpx(op, context):
                     if item_data.tag == 'BULT':
                         item_data.put_bool(True)
                     elif item_data.tag == 'BHHI':
-                        item_data.put_float(-28)
+                        item_data.put_float(-2800)
             if item_type == 20:
                 table_flashers.append(name)
                 if is_baked_light:
-                    if item_data.tag == 'FLAX':
-                        x = item_data.get_float()
+                    if item_data.tag == 'FHEI':
                         item_data.skip(-4)
-                        item_data.put_float(x + 1000)
-            if visibility_field and is_part_baked:
-                item_data.put_bool(False)
-            if reflection_field and is_part_baked:
+                        item_data.put_float(-2800)
+            if is_part_baked and (visibility_field or reflection_field):
                 item_data.put_bool(False)
             item_data.skip_tag()
         remove = (export_mode == 'remove' or export_mode == 'remove_all') and is_baked and not is_physics
@@ -245,9 +243,9 @@ def export_vpx(op, context):
     # Add new bake models
     for obj in sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}'):
         is_light = obj.vlmSettings.bake_type == 'lightmap'
-        is_playfield = obj.vlmSettings.bake_type == 'playfield'
+        is_playfield = obj.vlmSettings.bake_type == 'playfield' or obj.vlmSettings.bake_type == 'playfield_fv'
         is_active = obj.vlmSettings.bake_type == 'active'
-        is_static = obj.vlmSettings.bake_type == 'static' or obj.vlmSettings.bake_type == 'playfield'
+        is_static = obj.vlmSettings.bake_type == 'static' or obj.vlmSettings.bake_type == 'playfield_fv'
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', 0, 0, 0)
@@ -283,7 +281,7 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'STRE', is_static)
         writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
-        writer.write_tagged_bool(b'REEN', False)
+        writer.write_tagged_bool(b'REEN', context.scene.vlmSettings.use_vpx_reflection)
         writer.write_tagged_bool(b'EBFC', False)
         writer.write_tagged_string(b'MAPH', '')
         writer.write_tagged_bool(b'OVPH', False)
@@ -344,7 +342,7 @@ def export_vpx(op, context):
         n_game_items += 1
             
     # Mark playfield image has removable
-    if next((obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'playfield'), None) is not None:
+    if next((obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'playfield' or obj.vlmSettings.bake_type == 'playfield_fv'), None) is not None:
         br = biff_io.BIFF_reader(src_storage.openstream('GameStg/GameData').read())
         while not br.is_eof():
             br.next()
@@ -404,11 +402,11 @@ def export_vpx(op, context):
         writer = biff_io.BIFF_writer()
         writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
         writer.write_tagged_string(b'PATH', packmap_path)
-        writer.write_tagged_u32(b'WDTH', int(objects[0].vlmSettings.bake_packmap_width / 2)) #FIXME
-        writer.write_tagged_u32(b'HGHT', int(objects[0].vlmSettings.bake_packmap_height / 2))
+        writer.write_tagged_u32(b'WDTH', int(objects[0].vlmSettings.bake_packmap_width))
+        writer.write_tagged_u32(b'HGHT', int(objects[0].vlmSettings.bake_packmap_height))
         writer.write_tagged_empty(b'JPEG') # Strangely, raw data are pushed outside of the JPEG tag (breaking the BIFF structure of the file)
         writer.write_data(img_writer.get_data())
-        writer.write_tagged_float(b'ALTV', 1.0)
+        writer.write_tagged_float(b'ALTV', 165.0 if 'playfield' in objects[0].vlmSettings.bake_type else 1.0)
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
@@ -439,7 +437,7 @@ def export_vpx(op, context):
                     masi_pos = br.pos
                     n_materials = br.get_u32()
                 elif br.tag == "IMAG": # Playfield image
-                    playfields = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'playfield']
+                    playfields = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'playfield' or obj.vlmSettings.bake_type == 'playfield_fv']
                     if playfields:
                         playfield_image = f'VLM.Packmap{playfields[0].vlmSettings.bake_packmap}'
                         if len(playfields) > 1:
@@ -453,7 +451,7 @@ def export_vpx(op, context):
                 elif br.tag == "PLMA": # Playfield material
                     wr = biff_io.BIFF_writer()
                     wr.new_tag(b'PLMA')
-                    wr.write_string('VLM.Bake.Solid')
+                    wr.write_string('VLM.Bake.Active')
                     wr.close(write_endb=False)
                     br.delete_tag()
                     br.insert_data(wr.get_data())
@@ -495,13 +493,13 @@ def export_vpx(op, context):
                         if obj.vlmSettings.bake_light in light_col.children:
                             baked_lights = light_col.children[obj.vlmSettings.bake_light].objects
                             sync_color = vlm_utils.is_rgb_led(baked_lights)
-                            vpx_name = baked_lights[0].vlmSettings.vpx_object
+                            vpx_name = baked_lights[0].vlmSettings.vpx_object.split(';')[0]
                         elif obj.vlmSettings.bake_light in light_col.all_objects:
                             baked_light = context.scene.objects[obj.vlmSettings.bake_light]
                             sync_color = vlm_utils.is_rgb_led([baked_light])
-                            vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object
+                            vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object.split(';')[0]
                         brightness = 1.0 / vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
-                        if vpx_name in table_lights: #FIXME
+                        if vpx_name in table_lights:
                             updates.append((elem_ref(vpx_name), 0, elem_ref(export_name(obj.name)), sync_color, brightness))
                         elif vpx_name in table_flashers:
                             updates.append((elem_ref(vpx_name), 1, elem_ref(export_name(obj.name)), sync_color, brightness))
@@ -550,6 +548,13 @@ def export_vpx(op, context):
                         for upd in updates:
                             code += push_update(upd[1], upd[0], upd[2], 100 * upd[4], upd[3])
                         code += "End Sub\n\n"
+                        code += "Function LightTemperature(light, is_on, percent)\n"
+                        code += "	If is_on Then\n"
+                        code += "		LightTemperature = percent*percent*(3 - 2*percent) ' Smoothstep\n"
+                        code += "	Else\n"
+                        code += "		LightTemperature = 1 - Sqr(1 - percent*percent) ' \n"
+                        code += "	End If\n"
+                        code += "End Function\n\n"
                         code += "Sub UpdateLightMapFromFlasher(flasher, lightmap, intensity_scale, sync_color)\n"
                         code += "	If flasher.Visible Then\n"
                         code += "		If sync_color Then lightmap.Color = flasher.Color\n"
@@ -561,8 +566,12 @@ def export_vpx(op, context):
                         code += "	End If\n"
                         code += "End Sub\n\n"
                         code += "Sub UpdateLightMapFromLight(light, lightmap, intensity_scale, sync_color)\n"
+                        code += "	light.FadeSpeedUp = light.Intensity / 50 '100\n"
+                        code += "	light.FadeSpeedDown = light.Intensity / 200\n"
                         code += "	If sync_color Then lightmap.Color = light.Colorfull\n"
-                        code += "	lightmap.Opacity = intensity_scale * light.IntensityScale * light.GetCurrentIntensity() / light.Intensity\n"
+                        code += "	Dim t: t = LightTemperature(light, light.GetInPlayStateBool(), light.GetCurrentIntensity() / light.Intensity)\n"
+                        code += "	'Dim t: t = light.GetCurrentIntensity() / light.Intensity\n"
+                        code += "	lightmap.Opacity = intensity_scale * light.IntensityScale * t\n"
                         code += "	lightmap.Visible = lightmap.Opacity > 0.1\n"
                         code += "End Sub\n\n"
                     wr = biff_io.BIFF_writer()
