@@ -161,6 +161,13 @@ def render_packmaps_bake(op, context, sequential_baking):
     
     cg = vlm_utils.push_render_settings(True)
     col_state = vlm_collections.push_state()
+
+    # FIXME setup color grading according to VPX tone mapping (experimental, to be improved)
+    context.scene.view_settings.view_transform = 'Filmic'
+    context.scene.view_settings.look = 'Low Contrast'
+    context.scene.view_settings.exposure = -3
+    context.scene.view_settings.gamma = 1
+
     rlc = context.view_layer.layer_collection
     result_col = vlm_collections.get_collection('BAKE RESULT')
     vlm_collections.find_layer_collection(rlc, result_col).exclude = False

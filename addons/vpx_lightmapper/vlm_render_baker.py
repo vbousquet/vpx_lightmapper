@@ -43,6 +43,8 @@ def get_light_influence_radius(light):
     If evaluation fails, return (None, None) otherwise, returns (center, radius)
     Computed based on mesures on real renders, per radius, for 1/10/100/1000 energy
     """
+    if not light.vlmSettings.enable_aoi:
+        return (None, None)
     if light.type == 'LIGHT':
         light_aois = {
             0.01: [1.069, 2.019, 4.314, 10.00],
@@ -303,6 +305,7 @@ def render_all_groups(op, context):
     #context.scene.render.image_settings.exr_codec = 'DWAA' # Lossy compression (4x to 10x smaller on lightmaps)
     context.scene.render.image_settings.color_depth = '16'
     context.scene.render.film_transparent = True
+    context.view_layer.use_pass_z = False
     context.scene.use_nodes = True
 
     col_state = vlm_collections.push_state()

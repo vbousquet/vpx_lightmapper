@@ -29,12 +29,19 @@ TODO
 
 - Occluder selection tools delete compositor nodes... Save them and restore them afterward
 
-- don't hide trigger wire (same for reflection)
+- Allow the user to select the final tonemapping
+- When baking packmap, apply Filmic / Low Constrats, Exposire -1, Gamma = 1 to get correct color after tonemapping in VPX
+- Check that tonemapping is applied to playfield bake (I don't think it is)
+
 
 
 
 
 Closed items:
+- Split reflection flag between mesh baking (for keeping playfield oriented faces) and exporting (for activating reflection of lightmaps)
+- Add an option to disable AOI for selected lights
+- don't hide trigger wire
+- Don't save depth of renders
 - Allow to mark VPX objects as baked without having them in a bake group (when objects are merged for example)
 - Apply layback lattice transform when performing UV projection (or clearly state that lattice is not supported by the process)
 - Fix pruned faces for sub pixel faces of lightmaps

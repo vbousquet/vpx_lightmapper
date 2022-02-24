@@ -198,7 +198,7 @@ class BIFF_writer:
         self.data.write(struct.pack("<f", value))
         
     def write_string(self, value):
-        d = value.encode('ascii')
+        d = value.encode('latin_1')
         self.write_u32(len(d))
         self.write_data(d)
         

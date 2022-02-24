@@ -95,7 +95,7 @@ def create_bake_meshes(op, context):
 
     # Bake mesh generation settings
     opt_backface_limit_angle = vlmProps.remove_backface
-    opt_vpx_reflection = vlmProps.use_vpx_reflection
+    opt_vpx_reflection = vlmProps.keep_pf_reflection_faces
     opt_optimize_mesh = True
     shell_size = global_scale * 0.1 # amount of extrustion for light map shell
     opt_lightmap_prune_res = min(256, opt_tex_size) # resolution used in the algorithm for unlit face pruning (artefact observed at 256)

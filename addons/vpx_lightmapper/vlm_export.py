@@ -150,8 +150,10 @@ def export_vpx(op, context):
                 is_physics = item_data.get_bool()
             elif item_data.tag == 'IMAG' or item_data.tag == 'SIMG' or item_data.tag == 'IMAB': # or item_data.tag == 'IMGF' keep spinner images
                 item_images.append(item_data.get_string())
-            elif (item_type == 0 or item_type == 6) and item_data.tag == 'VSBL': # for wall top (0) and triggers (6)
+            elif item_type == 0 and item_data.tag == 'VSBL': # for wall top (0)
                 visibility_field = True
+            elif item_type == 6 and item_data.tag == 'VSBL': # for triggers (6), don't hide since they are all movable parts
+                visibility_field = False
             elif item_type == 0 and item_data.tag == 'SVBL': # for wall sides (0)
                 visibility_field = True
             elif (item_type == 12 or item_type == 21) and item_data.tag == 'RVIS': # for ramps (12) and rubbers (21)
@@ -281,7 +283,7 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'STRE', is_static)
         writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
-        writer.write_tagged_bool(b'REEN', context.scene.vlmSettings.use_vpx_reflection)
+        writer.write_tagged_bool(b'REEN', context.scene.vlmSettings.enable_vpx_reflection)
         writer.write_tagged_bool(b'EBFC', False)
         writer.write_tagged_string(b'MAPH', '')
         writer.write_tagged_bool(b'OVPH', False)

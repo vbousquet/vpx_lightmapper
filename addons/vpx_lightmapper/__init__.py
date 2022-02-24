@@ -156,7 +156,7 @@ class VLM_Scene_props(PropertyGroup):
     render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
     padding: IntProperty(name="Padding", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
-    use_vpx_reflection: BoolProperty(name="VPX PF Reflection", description="Use VPX playfield reflection (keep faces only visible through playfield reflection)", default = True)
+    keep_pf_reflection_faces: BoolProperty(name="Keep playfield reflection", description="Keep faces only visible through playfield reflection", default = False)
     uv_packer: EnumProperty(
         items=[
             ('blender', 'Blender', 'Use Blender internal UV island packing', '', 0),
@@ -186,6 +186,7 @@ class VLM_Scene_props(PropertyGroup):
         default='cycle'
     )
     # Exporter options
+    enable_vpx_reflection: BoolProperty(name="Enable VPX reflection", description="Enable VPX playfield reflection for exported models and lightmaps", default = True)
     export_image_type: EnumProperty(
         items=[
             ('png', 'PNG', 'Use PNG images', '', 0),
@@ -243,7 +244,8 @@ class VLM_Object_props(PropertyGroup):
     import_mesh: BoolProperty(name="Mesh", description="Update mesh on import", default = True)
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
-    is_rgb_led: BoolProperty(name="RGB Led", description="RGB Led (lightmapped to white for dynamic colors)", default = False)
+    is_rgb_led: BoolProperty(name="RGB Led", description="RGB Led (lightmapped to white then colored in VPX for dynamic colors)", default = False)
+    enable_aoi: BoolProperty(name="Enable AOI", description="Area Of Influence rendering optimization", default = True)
     bake_to: PointerProperty(name="Bake To", type=bpy.types.Object, description="Target object used as bake mesh target")
     # Movable objects bake settings
     movable_lightmap_threshold: FloatProperty(name="Lightmap threshold", description="Light threshold for generating a lightmap (1 for no lightmaps)", default = 1.0)
@@ -695,12 +697,13 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         layout.prop(vlmProps, "tex_size")
         layout.prop(vlmProps, "padding")
         layout.prop(vlmProps, "remove_backface", text='Backface')
-        layout.prop(vlmProps, "use_vpx_reflection")
+        layout.prop(vlmProps, "keep_pf_reflection_faces")
         layout.prop(vlmProps, "uv_packer")
         layout.prop(vlmProps, "packmap_tex_factor")
         layout.prop(vlmProps, "bake_packmap_mode")
         layout.prop(vlmProps, "export_image_type")
         layout.prop(vlmProps, "export_mode")
+        layout.prop(vlmProps, "enable_vpx_reflection")
         row = layout.row()
         row.scale_y = 1.5
         row.operator(VLM_OT_compute_render_groups.bl_idname, icon='GROUP_VERTEX', text='Groups')
@@ -756,7 +759,8 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                 layout.prop(obj.vlmSettings, 'vpx_object', text='VPX', expand=True)
                 layout.prop(obj.vlmSettings, 'vpx_subpart', text='Subpart', expand=True)
                 if light_col and obj.name in light_col.all_objects:
-                    layout.prop(obj.vlmSettings, 'is_rgb_led', text='RGB Led', expand=True)
+                    layout.prop(obj.vlmSettings, 'is_rgb_led', expand=True)
+                    layout.prop(obj.vlmSettings, 'enable_aoi', expand=True)
                 layout.separator()
             layout.label(text="Import options:")
             row = layout.row(align=True)

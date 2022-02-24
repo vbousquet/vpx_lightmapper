@@ -84,6 +84,8 @@ def push_render_settings(set_raw):
                 bpy.context.view_layer.use_pass_combined,
                 bpy.context.view_layer.use_pass_object_index,
                 bpy.context.scene.render.bake.cage_extrusion,
+                bpy.context.scene.view_settings.exposure,
+                bpy.context.scene.view_settings.gamma,
                 )
     if set_raw:
         bpy.context.scene.view_settings.view_transform = 'Raw'
@@ -119,6 +121,8 @@ def pop_render_settings(state):
     bpy.context.view_layer.use_pass_combined = state[24]
     bpy.context.view_layer.use_pass_object_index = state[25]
     bpy.context.scene.render.bake.cage_extrusion = state[26]
+    bpy.context.scene.view_settings.exposure = state[27]
+    bpy.context.scene.view_settings.gamma = state[28]
 
 
 def apply_split_normals(me):
