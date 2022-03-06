@@ -32,8 +32,6 @@ from . import vlm_collections
 from PIL import Image
 import olefile
 
-global_scale = vlm_utils.global_scale
-
 
 class VPX_Material(object):
     def __init__(self):
@@ -292,6 +290,8 @@ def read_vpx(context, filepath):
     if not os.path.isfile(filepath):
         self.report({'WARNING'},f"{filepath} does not exist")
         return {'CANCELLED'}
+
+    global_scale = vlm_utils.get_global_scale(context)
 
     opt_light_size = context.scene.vlmSettings.light_size
     opt_light_intensity = context.scene.vlmSettings.light_intensity

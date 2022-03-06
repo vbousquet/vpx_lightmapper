@@ -5,11 +5,10 @@ TODO
 - Identify static/active bake and export accordingly (done for opacity, missing for under playfield which, I think, need to be marked as active)
 - When importing plastics wall, create 2 meshes: one for the plastic with a plastic shader (enlarged for the bevelling to be visible), one for the image (bpy.ops.mesh.solidify(thickness=-0.01), invert selection and delete, then scale on z axis)
 - Support 'active' (i.e. non opaque bake) objects for the occluder selection
-- Unhide objects when creating packmaps to avoid error
-- Rewrite VBS fader to apply a fading curve based on filament temperature, adapting color (K to RGB) and intensity
+- Unhide objects when creating packmaps to avoid error => won't be needed with pack nest
+- Rewrite VBS fader to apply a fading curve based on filament temperature, adapting color (K to RGB) and intensity (using the HDR part, to view filament cooling down in flashers :))
 - When baking, perform sanity checks: Check for collection off
 - Evaluate performing HDR with multiple lightmap (1 for 0-1, then 1 for 1-256)
-- When loading library, update existing node groups instead of reimporting them
 
 - Add support for basic UV projected movables that follow the same path but generate their own mesh even for lightmaps
 - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
@@ -22,22 +21,28 @@ TODO
     . At packmap step, copy bakes to export (with exr to png/webp conversion)
     . At export step, include them in the VPX and produce sync code
 
-- Rewrite Packmap generation for higher quality (renders should stay untouched, since they guarantee the higher possible quality):
-  x Constrain rotation to 0/90/180/270
+- Rewrite Packmap generation for higher quality (renders should stay untouched, since they guarantee the higher possible quality) => only possible with custom nesting algorithm
+  . Constrain rotation to 0/90/180/270
   . Guarantee a scale of 1 (by iterative packing, disabling all scaling)
   . Build packmap by data transfer (RGBA pixel data copy using a padded mask), not rendering which may cause bluriness (unaligned pixels and loose precision on borders)
 
 - Occluder selection tools delete compositor nodes... Save them and restore them afterward
 
 - Allow the user to select the final tonemapping
-- When baking packmap, apply Filmic / Low Constrats, Exposire -1, Gamma = 1 to get correct color after tonemapping in VPX
-- Check that tonemapping is applied to playfield bake (I don't think it is)
+
+- Add glow map baking (camera space post process bake)
+- In a split light group, bake same VPX lights together
+- When loading library, update existing node groups instead of skipping them
 
 
 
 
 
 Closed items:
+- Add support for using different scales: vpx/inches/cm
+- When loading library, update existing node groups instead of reimporting them => now they are skipped (updating would be better)
+- When baking packmap, apply adjusted tonemapping to get correct color after tonemapping in VPX
+- Check that tonemapping is applied to playfield bake (I don't think it is) => ok for bake mode (anyway, this is supposed to be replaced by NestPacker)
 - Split reflection flag between mesh baking (for keeping playfield oriented faces) and exporting (for activating reflection of lightmaps)
 - Add an option to disable AOI for selected lights
 - don't hide trigger wire

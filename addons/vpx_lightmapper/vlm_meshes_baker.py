@@ -30,8 +30,6 @@ from . import vlm_collections
 from . import vlm_uvpacker
 from PIL import Image # External dependency
 
-global_scale = vlm_utils.global_scale
-
 
 def compute_uvmap_density(mesh, uv_layer):
     area_sum = 0
@@ -69,6 +67,8 @@ def create_bake_meshes(op, context):
     if context.scene.vlmSettings.layback_mode == 'deform':
         op.report({'ERROR'}, 'Deform camera mode is not supported by the lightmapper')
         return {'CANCELLED'}
+
+    global_scale = vlm_utils.get_global_scale(context)
 
     area = next((a for a in context.screen.areas if a.type == 'VIEW_3D'), None)
     if not area:

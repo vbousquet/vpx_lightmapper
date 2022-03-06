@@ -33,8 +33,6 @@ from . import vlm_collections
 from . import vlm_uvpacker
 from PIL import Image # External dependency
 
-global_scale = vlm_utils.global_scale
-
 
 def render_packmaps_gpu(context):
     """Render all packmaps corresponding for the available current bake results

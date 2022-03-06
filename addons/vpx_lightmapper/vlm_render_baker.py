@@ -30,8 +30,6 @@ from . import vlm_collections
 from . import vlm_uvpacker
 from PIL import Image # External dependency
 
-global_scale = vlm_utils.global_scale
-
 
 def project_point(proj, p):
     p1 = proj @ Vector((p.x, p.y, p.z, 1)) # projected coordinates (range [-1, 1]x[-1, 1])

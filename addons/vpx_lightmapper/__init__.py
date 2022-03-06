@@ -107,8 +107,29 @@ if dependencies_installed:
         from . import vlm_packmap_baker
 
 
+def unit_update(self, context):
+    if context.scene.vlmSettings.units_mode == 'inch':
+        context.scene.unit_settings.system = 'IMPERIAL'
+        context.scene.unit_settings.length_unit = 'INCHES'
+    elif context.scene.vlmSettings.units_mode == 'cm':
+        context.scene.unit_settings.system = 'METRIC'
+        context.scene.unit_settings.length_unit = 'CENTIMETERS'
+    elif context.scene.vlmSettings.units_mode == 'vpx':
+        context.scene.unit_settings.system = 'NONE'
+
+
 class VLM_Scene_props(PropertyGroup):
     # Importer options
+    units_mode: EnumProperty(
+        items=[
+            ('vpx', 'VPX', 'VPX units', '', 0),
+            ('inch', 'Inch', 'Inches (50 VPX = 1.0625")', '', 1),
+            ('cm', 'cm', 'Centimeters (50 VPX = 2.69875cm)', '', 2)
+        ],
+        name='Units',
+        default='inch', 
+        update=unit_update
+    )
     light_size: FloatProperty(name="Light Size", description="Light size factor from VPX to Blender", default = 5.0)
     light_intensity: FloatProperty(name="Light Intensity", description="Light intensity factor from VPX to Blender", default = 250.0)
     insert_size: FloatProperty(name="Insert Size", description="Inserts light size factor from VPX to Blender", default = 0.0)
@@ -652,6 +673,7 @@ class VLM_PT_Importer(bpy.types.Panel):
         row.operator(VLM_OT_new_from_vpx.bl_idname)
         row.operator(VLM_OT_update.bl_idname)
         layout.prop(vlmProps, "table_file")
+        layout.prop(vlmProps, "units_mode")
         layout.prop(vlmProps, "light_size")
         layout.prop(vlmProps, "light_intensity")
         layout.separator()

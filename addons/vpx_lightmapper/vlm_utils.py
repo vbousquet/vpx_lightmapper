@@ -28,7 +28,11 @@ from gpu_extras.batch import batch_for_shader
 from . import vlm_collections
 
 
-global_scale = 0.01
+def get_global_scale(context):
+    if context.scene.vlmSettings.units_mode == 'vpx':
+        return 0.01 # VPX units
+    else:
+        return 0.01 * 2.69875 / 50 # Metric scale (imperial is performed by blender itself)
 
 
 def load_library():
@@ -38,12 +42,16 @@ def load_library():
     librarypath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VPXMeshes.blend")
     if not os.path.isfile(librarypath):
         print(f'{librarypath} does not exist')
+    # Core materials, Compositing, Fixed view shading & miscellaneous nodes
+    nodegroups = ('VLM.BakeInfo', 'VPX.Material', 'VPX.Flasher', 'VLM.Overlay', 'VLM.Fixed View Glass', 'VLM.Fixed View Specular', 'VLM.Fixed View Incoming', 'Metal Colors')
     with bpy.data.libraries.load(librarypath, link=False) as (data_from, data_to):
         data_to.objects = [name for name in data_from.objects if name.startswith("VPX.Core.")]
         data_to.images = [name for name in data_from.images if name.startswith("VPX.Core.")]
         data_to.materials = [name for name in data_from.materials if name.startswith("VPX.Core.Mat.")]
-        data_to.node_groups = data_from.node_groups
-    # Core materials
+        data_to.node_groups = [name for name in nodegroups if not name in bpy.data.node_groups] # only import missing node groups since we add a fake user
+    for nodegroup in nodegroups:
+        bpy.data.node_groups[nodegroup].use_fake_user = True
+
     bpy.data.node_groups.get('VLM.BakeInfo').use_fake_user = True
     bpy.data.node_groups.get('VPX.Material').use_fake_user = True
     bpy.data.node_groups.get('VPX.Flasher').use_fake_user = True
@@ -56,8 +64,6 @@ def load_library():
     # Miscellaneous nodes
     bpy.data.node_groups.get('Metal Colors').use_fake_user = True
     bpy.data.node_groups.get('Color Dispersion').use_fake_user = True
-    # FIXME Legacy nodes to be removed
-    bpy.data.node_groups.get('VLM.Pack Map').use_fake_user = True
 
 
 def push_render_settings(set_raw):

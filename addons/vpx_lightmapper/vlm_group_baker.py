@@ -21,8 +21,6 @@ from . import vlm_utils
 from . import vlm_collections
 from PIL import Image # External dependency
 
-global_scale = vlm_utils.global_scale
-
 
 def compute_render_groups(op, context):
     """Evaluate the set of bake groups (groups of objects that do not overlap when rendered 
