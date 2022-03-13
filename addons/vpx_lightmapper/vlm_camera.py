@@ -126,7 +126,7 @@ def fit_camera(context, camera_inclination, camera_layback):
     playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
     layback = mathutils.Matrix()
-    layback[0][2] -math.tan(math.radians(camera_layback) / 2)
+    layback[0][2] = -math.tan(math.radians(camera_layback) / 2)
     camera_angle = math.radians(camera_inclination)
     camera_object.rotation_euler = mathutils.Euler((camera_angle, 0.0, 0.0), 'XYZ')
     camera_object.data.shift_x = 0

@@ -34,6 +34,9 @@ TODO
 - In a split light group, bake same VPX lights together
 - When loading library, update existing node groups instead of skipping them
 
+- Include an asset folder, register it as an asset library when the plugin is activated, move the core assets to this asset library instead of loading them directly, populate with additional assets (screws, bulbs, posts, inserts, materials,...)
+
+- Simplify the core materials, they can be done with simple Principled BSDF
 
 
 

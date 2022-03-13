@@ -116,6 +116,14 @@ def unit_update(self, context):
         context.scene.unit_settings.length_unit = 'CENTIMETERS'
     elif context.scene.vlmSettings.units_mode == 'vpx':
         context.scene.unit_settings.system = 'NONE'
+    new_scale = vlm_utils.get_global_scale(context)
+    if context.scene.vlmSettings.active_scale != new_scale:
+        scaling = new_scale / context.scene.vlmSettings.active_scale
+        # FIXME scale all objects relative to origin
+        for i in range(4):
+            context.scene.vlmSettings.playfield_size[i] = scaling * context.scene.vlmSettings.playfield_size[i]
+        context.scene.vlmSettings.active_scale = new_scale
+        vlm_camera.camera_inclination_update
 
 
 class VLM_Scene_props(PropertyGroup):
@@ -230,6 +238,7 @@ class VLM_Scene_props(PropertyGroup):
     # Active table informations
     table_file: StringProperty(name="Table", description="Table filename", default="")
     playfield_size: FloatVectorProperty(name="Playfield size:", description="Size of the playfield in VP unit", default=(0, 0, 0, 0), size=4)
+    active_scale: FloatProperty(name="Active scale", description="Scale of the active table", default = 1.0)
 
 
 class VLM_Collection_props(PropertyGroup):
@@ -895,6 +904,7 @@ class VLM_PT_Props_warning_panel(bpy.types.Panel):
     bl_category = "VLM"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
+    bl_context = "scene"
 
     @classmethod
     def poll(self, context):
