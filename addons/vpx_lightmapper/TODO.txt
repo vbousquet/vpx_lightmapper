@@ -38,7 +38,9 @@ TODO
 
 - Simplify the core materials, they can be done with simple Principled BSDF
 
+- Add the ability to bake additional environment lighting as additive lighting (base bake = dark pub or even no IBL, then additional for lit up room)
 
+- Add support for multiple object to be baked to the same target (for example a simple playfield mesh which holds the bake of the playfield, cut outs, and inserts)
 
 
 Closed items:

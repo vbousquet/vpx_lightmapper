@@ -228,25 +228,23 @@ def brightness_from_hdr(hdr_range):
 
 
 def get_lightings(context):
-    """Return the list of lighting situations to be rendered as list of tuples
-        (name, None/light collection, single light, custom data)
+    """Return the list of lighting situations to be rendered as dictionary of tuples
+        (name, is lightmap, light collection, lights, custom data)
     """
-    world = ["Environment", None, [], None]
-    light_scenarios = {"Environment": world}
+    light_scenarios = {}
     lights_col = vlm_collections.get_collection('LIGHTS', create=False)
-    if lights_col is not None:
-        for light_col in lights_col.children:
-            lights = light_col.objects
-            if light_col.hide_render == False and len(lights) > 0:
-                if light_col.vlmSettings.light_mode == 'group':
-                    name = strip_vlm(light_col.name)
-                    light_scenarios[name] = [name, light_col, None, None]
-                elif light_col.vlmSettings.light_mode == 'split':
-                    for light in lights:
-                        name = f"{strip_vlm(light_col.name)}-{light.name}"
-                        light_scenarios[name] = [name, light_col, light, None]
-                elif light_col.vlmSettings.light_mode == 'world':
-                    world[2].extend(lights)
+    if lights_col is None: return light_scenarios
+    for light_col in (l for l in lights_col.children if not l.hide_render):
+        lights = light_col.objects
+        if light_col.vlmSettings.light_mode == 'solid': # Base solid bake
+            light_scenarios['Solid'] = ['Solid', False, light_col, lights, None]
+        elif light_col.vlmSettings.light_mode == 'group': # Lightmap of a group of lights
+            light_scenarios[light_col.name] = [light_col.name, True, light_col, lights, None]
+        elif light_col.vlmSettings.light_mode == 'split': # Lightmaps for multiple VPX lights
+            for vpx_light in {l.vpx_object for l in lights}:
+                light_group = [l for l in lights if l.vpx_object == vpx_light]
+                name = f"{light_col.name}-{vpx_light.name}"
+                light_scenarios[name] = [name, True, light_col, light_group, None]
     return light_scenarios
 
 
@@ -340,11 +338,6 @@ def render_mask(context, width, height, target_image, view_matrix, projection_ma
     space.shading.single_color = state[6]
     space.shading.type = state[7]
     
-    if not target_image in bpy.data.images:
-        bpy.data.images.new(target_image, width, height)
-    image = bpy.data.images[target_image]
-    image.scale(width, height)
+    target_image.scale(width, height)
     buffer.dimensions = width * height * 4
-    image.pixels = [v / 255 for v in buffer]
-    
-    return image
+    target_image.pixels = [v / 255 for v in buffer]

@@ -62,7 +62,7 @@ Depending on your security configuration, this additional dependency installatio
 
 ### Visual Pinball X with additive blended primitives
 
-Additionnally, this tool use an experimental build of Visual Pinball X which adds additive blending support. It is available [here](https://github.com/vbousquet/vpinball/tree/additive-blend) (source only, builds are not publicly available). Please be aware that THIS BUILD MUST NOT BE USED except for experimenting with the light mapper. It is likely that it will break your tables if you open and save them with it.
+Additionnally, this tool needs the latest, not yet released, build of Visual Pinball X or Visual Pinball for VR. These are available [here for VPX](https://github.com/vpinball/vpinball/actions) and [here for VPVR](https://github.com/vpinball/vpvr/actions). Be aware that these builds are not release version but alpha build. Therefore you are likely to encounter bugs, and you should not use them without backing up your work first.
 
 ### Better packing of UV maps
 

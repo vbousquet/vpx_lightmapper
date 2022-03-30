@@ -149,38 +149,45 @@ def update_material(mesh, slot, materials, mat_name, image, translucency=-1):
 
 def get_vpx_item(context, vpx_name, vpx_subpart):
     trash_col = vlm_collections.get_collection('TRASH')
-    return next((o for o in context.scene.objects if o.vlmSettings.vpx_object == vpx_name and o.vlmSettings.vpx_subpart == vpx_subpart and o.name not in trash_col.all_objects), None)
+    return [o for o in context.scene.objects if vpx_name in o.vlmSettings.vpx_object.split(';') and o.vlmSettings.vpx_subpart == vpx_subpart and o.name not in trash_col.all_objects]
 
+
+def needs_update(context, vpx_name, vpx_subpart):
+    found = False
+    for existing in get_vpx_item(context, vpx_name, vpx_subpart): # We may find more than one
+        if existing:
+            found = True
+            if ';' not in existing.vlmSettings.vpx_object and (existing.vlmSettings.import_mesh or existing.vlmSettings.import_transform): return True
+        else:
+            break
+    return not found
+    
 
 def update_object(context, vpx_name, vpx_subpart, data, visible, bake_col, hidden_col):
     obj_name = vpx_name if vpx_subpart == '' else f'{vpx_name}.{vpx_subpart}'
-    while True: # We may find more than one
-        existing = get_vpx_item(context, vpx_name, vpx_subpart)
-        if existing:
-            existing.name = obj_name
-            if not existing.vlmSettings.import_mesh:
-                return False, existing
-            if hasattr(existing, 'materials') and hasattr(data, 'materials'):
-                while len(data.materials) < len(existing.data.materials):
-                    data.materials.append(None)
-                for i in range(len(existing.data.materials), len(data.materials)):
-                    data.materials.pop()
-                for i, m in enumerate(existing.data.materials):
-                    data.materials[i] = m
-            if type(existing.data) == type(data):
-                existing.data = data
-                return False, existing
-            else:
-                print(f'. WARNING: incompatible data type between existing {obj_name} and created one, trashing the old one and recreating (existing={type(existing.data)} new={type(data)})')
-                if obj_name == existing.name: existing.name = f'{existing.name}.Old'
-                trash_col = vlm_collections.get_collection('TRASH')
-                vlm_collections.move_to_col(existing, trash_col)
+    for existing in get_vpx_item(context, vpx_name, vpx_subpart): # We may find more than one
+        existing.name = obj_name
+        if ';' in existing.vlmSettings.vpx_object or not existing.vlmSettings.import_mesh:
+            return False, existing
+        if hasattr(existing, 'materials') and hasattr(data, 'materials'):
+            while len(data.materials) < len(existing.data.materials):
+                data.materials.append(None)
+            for i in range(len(existing.data.materials), len(data.materials)):
+                data.materials.pop()
+            for i, m in enumerate(existing.data.materials):
+                data.materials[i] = m
+        if type(existing.data) == type(data):
+            existing.data = data
+            return False, existing
         else:
-            break
-    print(f'. Creating {obj_name}')
+            print(f'. WARNING: incompatible data type between existing {obj_name} and created one, trashing the old one and recreating (existing={type(existing.data)} new={type(data)})')
+            if obj_name == existing.name: existing.name = f'{existing.name}.Old'
+            trash_col = vlm_collections.get_collection('TRASH')
+            vlm_collections.move_to_col(existing, trash_col)
     obj = bpy.data.objects.new(obj_name, data)
     obj.vlmSettings.vpx_object = vpx_name
     obj.vlmSettings.vpx_subpart = vpx_subpart
+    print(f". Creating VPX object: '{obj_name}', subpart: '{vpx_subpart}' (Blender object name: '{obj.name}')")
     if visible:
         bake_col.objects.link(obj)
     else:
@@ -189,7 +196,7 @@ def update_object(context, vpx_name, vpx_subpart, data, visible, bake_col, hidde
 
 
 def update_location(obj, x, y, z, layback_factor = 0):
-    if obj.vlmSettings.import_transform:
+    if ';' not in obj.vlmSettings.vpx_object and obj.vlmSettings.import_transform:
         obj.vlmSettings.layback_offset = -z * layback_factor
         obj.location = (x, y + obj.vlmSettings.layback_offset, z)
 
@@ -198,7 +205,7 @@ def add_core_mesh(obj_list, vpx_name, vpx_subpart, core_mesh, visible, bake_col,
     mesh = bpy.data.objects[core_mesh].data.copy()
     _, obj = update_object(bpy.context, vpx_name, vpx_subpart, mesh, visible, bake_col, hidden_col)
     update_material(obj.data, 0, materials, material, image)
-    if obj.vlmSettings.import_transform:
+    if ';' not in obj.vlmSettings.vpx_object and obj.vlmSettings.import_transform:
         obj.location = (global_scale * x, -global_scale * y, global_scale * z)
         obj.scale = (global_scale * x_size, global_scale * y_size, global_scale * z_size)
         obj.rotation_euler = mathutils.Euler((0.0, 0.0, -radians(rot_z)), 'XYZ')
@@ -284,11 +291,11 @@ def create_curve(curve_name, points, cyclic, flat, global_scale, curve_resolutio
     return curve
 
 
-def read_vpx(context, filepath):
+def read_vpx(op, context, filepath):
     print("reading ", filepath)
 
     if not os.path.isfile(filepath):
-        self.report({'WARNING'},f"{filepath} does not exist")
+        op.report({'WARNING'},f"{filepath} does not exist")
         return {'CANCELLED'}
 
     global_scale = vlm_utils.get_global_scale(context)
@@ -458,7 +465,11 @@ def read_vpx(context, filepath):
                             sub_data.skip_tag()
                         elif sub_data.tag == 'PATH':
                             path = sub_data.get_string()
+                        else:
+                            sub_data.skip_tag()
                     image_data.skip(sub_data.pos)
+                else:
+                    image_data.skip_tag()
             name = f"VPX.Tex.{vpx_name.casefold()}"
             if name in bpy.data.images:
                 image = bpy.data.images[name]
@@ -583,6 +594,7 @@ def read_vpx(context, filepath):
                         points.append(load_point(item_data))
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
+                if not needs_update(context, name, ''): continue
                 surface_offsets[name] = height_top
                 is_plastic = 2.5 < (height_top - height_bottom) < 3.5 # and 45 < height_bottom < 55
                 extrude_height = global_scale * 0.5 * (height_top - height_bottom)
@@ -718,8 +730,8 @@ def read_vpx(context, filepath):
 
                 created_objects.append(obj)
 
-                while len(mesh.materials) < 3:
-                    mesh.materials.append(None)
+                while len(obj.data.materials) < 3:
+                    obj.data.materials.append(None)
                 if opt_process_plastics and is_plastic:
                     # Use alpha plastic glass (no IOR, alpha bake suited for alpha blended in VPX) on top if the image is not opaque
                     obj.data.materials[0] = bpy.data.materials["VPX.Core.Mat.Plastic" if top_image not in opaque_images else "VPX.Core.Mat.Plastic.NoAlpha"]
@@ -841,15 +853,18 @@ def read_vpx(context, filepath):
                 obj = add_core_mesh(created_objects, name, '', meshes[shape], visible, indirect_col, hidden_col, materials, material, "", x, y, 0.0, scale_x, scale_y, scale_z, orientation, global_scale)
                 shifted_objects.append((obj, surface))
                 if shape == 1 or shape == 3 or shape == 5 or shape == 6 and wire_thickness > 0 and obj.vlmSettings.import_mesh:
-                    bpy.ops.object.select_all(action='DESELECT')
-                    obj.select_set(True)
-                    context.view_layer.objects.active = obj
-                    bpy.ops.object.mode_set(mode='EDIT')
-                    bm = bmesh.from_edit_mesh(obj.data)
-                    for v in bm.verts:
-                        v.co += wire_thickness * v.normal
-                    bmesh.update_edit_mesh(obj.data)
-                    bpy.ops.object.mode_set(mode='OBJECT')
+                    if obj.type == 'MESH':
+                        bpy.ops.object.select_all(action='DESELECT')
+                        obj.select_set(True)
+                        context.view_layer.objects.active = obj
+                        bpy.ops.object.mode_set(mode='EDIT')
+                        bm = bmesh.from_edit_mesh(obj.data)
+                        for v in bm.verts:
+                            v.co += wire_thickness * v.normal
+                        bmesh.update_edit_mesh(obj.data)
+                        bpy.ops.object.mode_set(mode='OBJECT')
+                    elif obj.type == 'CURVE':
+                        pass # FIXME adjust wire thickness
             
             elif item_type == 7: # Light
                 x = y = halo_height = intensity = 0
@@ -966,7 +981,7 @@ def read_vpx(context, filepath):
                     _, obj = update_object(context, name, '', mesh, True, default_light, hidden_col)
                     shifted_objects.append((obj, surface))
                     created_objects.append(obj)
-                    if obj.vlmSettings.import_transform:
+                    if ';' not in obj.vlmSettings.vpx_object and obj.vlmSettings.import_transform:
                         z = 0.01 * global_scale # Slightly above playfield
                         if bulb:
                             z += halo_height * global_scale
@@ -1187,6 +1202,7 @@ def read_vpx(context, filepath):
                         points.append(load_point(item_data))
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
+                if not needs_update(context, name, ''): continue
                 z_axis = mathutils.Vector((0,0,1))
                 curve_name = f"{name}.Curve"
                 active = is_active(materials, material, image, opaque_images)
@@ -1466,11 +1482,13 @@ def read_vpx(context, filepath):
                             uvs.append( (d[p+6], 1.0 - d[p+7]) )
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
+                if not needs_update(context, name, ''): continue
                 mesh_name = f"{name}.Mesh"
                 mesh = bpy.data.meshes.new(mesh_name)
                 if use_3d_mesh:
                     mesh.from_pydata(vertices, [], faces)
                     mesh.flip_normals()
+                    mesh.validate()
                     mesh.use_auto_smooth = True
                     mesh.normals_split_custom_set_from_vertices(normals)
                     uv_layer = mesh.uv_layers.new()
@@ -1501,7 +1519,7 @@ def read_vpx(context, filepath):
                 active = is_active(materials, material, image, opaque_images)
                 target_col = active_col if active else bake_col
                 existing, obj = update_object(context, name, '', mesh, visible, target_col, hidden_col)
-                if obj.vlmSettings.import_transform:
+                if ';' not in obj.vlmSettings.vpx_object and obj.vlmSettings.import_transform:
                     axis_matrix = mathutils.Matrix.Scale(-1, 4, (1,0,0)) @ axis_conversion('-Y', 'Z', 'Y', 'Z').to_4x4()
                     pos = mathutils.Vector(((position[0] + rot_tra[3])* global_scale, (position[1] + rot_tra[4])* global_scale, (position[2] + rot_tra[5])* global_scale))
                     scale = mathutils.Vector((-size[0] * global_scale, -size[1] * global_scale, -size[2] * global_scale))
@@ -1596,7 +1614,7 @@ def read_vpx(context, filepath):
 
                 is_insert_overlay = opt_detect_insert_overlay and 'insert' in name.casefold()
                 existing, obj = update_object(context, name, 'Flasher', mesh, is_insert_overlay, bake_col, hidden_col)
-                if obj.vlmSettings.import_transform:
+                if ';' not in obj.vlmSettings.vpx_object and obj.vlmSettings.import_transform:
                     obj.rotation_euler = mathutils.Euler((-radians(rot_x), -radians(rot_y), -radians(rot_z)), 'ZYX')
                     #obj.location = (global_scale * x, -global_scale * y, global_scale * height)
                     obj.location = (half_x, half_y, global_scale * height)
@@ -1708,6 +1726,7 @@ def read_vpx(context, filepath):
                         points.append(load_point(item_data))
                     elif item_data.tag in skipped:
                         item_data.skip_tag()
+                if not needs_update(context, name, ''): continue
                 curve_name = f"{name}.Curve"
                 curve = bpy.data.curves.new(curve_name, type='CURVE')
                 curve.dimensions = '3D'
@@ -1786,8 +1805,9 @@ def read_vpx(context, filepath):
             obj.location.z += surface_offsets[surface] * global_scale
             
     # Create the playfield
-    playfield_obj = get_vpx_item(context, 'playfield_mesh', '')
-    if playfield_obj:
+    playfield_objects = get_vpx_item(context, 'playfield_mesh', '')
+    if len(playfield_objects) == 1:
+        playfield_obj = playfield_objects[0]
         [col.objects.unlink(playfield_obj) for col in playfield_obj.users_collection]
         pfmesh = playfield_obj.data
         pfmesh.transform(playfield_obj.matrix_basis)
@@ -1849,6 +1869,7 @@ def read_vpx(context, filepath):
         translucency_image.source = 'GENERATED' # Defaults to a full translucent playfield
         translucency_image.generated_type = 'BLANK'
         translucency_image.generated_color = (0.0, 0.0, 0.0, 1.0)
+        translucency_image.use_fake_user = True # To avoid beeing freed by the following orphan purge
         mat = pfmesh.materials[0]
         mat.node_tree.nodes["TranslucencyMap"].image = translucency_image
         if opt_use_pf_translucency_map: # Render the translucency map (which can be entirely empty if there is no inserts cups)
@@ -1858,15 +1879,16 @@ def read_vpx(context, filepath):
             cups_initial_collection = vlm_collections.move_all_to_col(insert_cups, tmp_col)
             vlm_collections.exclude_all(context, root_col)
             vlm_collections.exclude_all(context, tmp_col, False)
-            # Force a wiexport update (I did not find any better way....)
+            # Force a viewport update (I did not find any better way....)
             bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
             view_matrix = mathutils.Matrix.LocRotScale(mathutils.Vector((-1.0, 1.0, 0)), None, mathutils.Vector((2.0 / playfield_width, 2.0 / playfield_height, 0.1)))
             projection_matrix = mathutils.Matrix.OrthoProjection('XY', 4)
-            vlm_utils.render_mask(context, int(opt_tex_size / 2), opt_tex_size, translucency_image.name, view_matrix, projection_matrix)
+            vlm_utils.render_mask(context, int(opt_tex_size / 2), opt_tex_size, translucency_image, view_matrix, projection_matrix)
             vlm_collections.restore_all_col_links(cups_initial_collection)
             vlm_collections.delete_collection(tmp_col)
             translucency_image.pack()
-
+        translucency_image.use_fake_user = False
+        
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
 

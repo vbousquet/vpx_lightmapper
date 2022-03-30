@@ -177,86 +177,58 @@ def check_min_render_size(context):
 def setup_light_scenario(context, scenario, group_mask, tmp_col, bake_info_group):
     """Apply a light scenario for rendering, returning the previous state and a lambda to restore it
     """
-    if scenario[1] is None: # Base render (world lighting from Blender's World and World light groups)
-        context.scene.render.use_border = False
-        context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
-        context.scene.render.image_settings.color_mode = 'RGBA'
-        initial_state = (0, vlm_collections.move_all_to_col(scenario[2], tmp_col))
-        if bake_info_group:
-            bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 1.0
-            bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 0.0
-        return initial_state, lambda initial_state : restore_light_setup(initial_state, bake_info_group)
-    else: # Lightmap render (no world lighting)
+    name, is_lightmap, light_col, lights, _ = scenario
+    if is_lightmap:
         context.scene.render.use_border = True
-        context.scene.world = bpy.data.worlds["VPX.Env.Black"]
+        context.scene.world = light_col.vlmSettings.world
         context.scene.render.image_settings.color_mode = 'RGB'
         if bake_info_group:
             bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 0.0
             bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 1.0
-        if scenario[2] is None: # Group of lights
-            influence = None
-            for light in scenario[1].objects:
-                light_influence = get_light_influence(context, light, group_mask)
-                if light_influence:
-                    if influence:
-                        min_x, max_x, min_y, max_y = influence
-                        min_x2, max_x2, min_y2, max_y2 = light_influence
-                        influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
-                    else:
-                        influence = light_influence
-            if not influence:
-                return None, None
-            min_x, max_x, min_y, max_y = influence
-            context.scene.render.border_min_x = min_x
-            context.scene.render.border_max_x = max_x
-            context.scene.render.border_min_y = 1-max_y
-            context.scene.render.border_max_y = 1-min_y
-            if not check_min_render_size(context):
-                print(f". light scenario '{scenario[0]}' has no render region, skipping (influence area: {influence})")
-                return None, None
-            if vlm_utils.is_rgb_led(scenario[1].objects):
-                colored_lights = [o for o in scenario[1].objects if o.type=='LIGHT']
-                prev_colors = [o.data.color for o in colored_lights]
-                for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
-                initial_state = (3, colored_lights, prev_colors, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
-            else:
-                initial_state = (1, vlm_collections.move_all_to_col(scenario[1].all_objects, tmp_col))
-        else: # Single light
-            influence = get_light_influence(context, scenario[2], group_mask)
-            if not influence:
-                return None, None
-            min_x, max_x, min_y, max_y = influence
-            context.scene.render.border_min_x = min_x
-            context.scene.render.border_max_x = max_x
-            context.scene.render.border_min_y = 1-max_y
-            context.scene.render.border_max_y = 1-min_y
-            if not check_min_render_size(context):
-                print(f". light scenario '{scenario[0]}' has no render region, skipping (influence area: {influence})")
-                return None, None
-            if scenario[2].type == 'LIGHT' and vlm_utils.is_rgb_led([scenario[2]]):
-                prev_color = scenario[2].data.color
-                scenario[2].data.color = (1.0, 1.0, 1.0)
-                initial_state = (4, scenario[2], prev_color, vlm_collections.move_to_col(scenario[2], tmp_col))
-            else:
-                initial_state = (2, vlm_collections.move_to_col(scenario[2], tmp_col))
-        return initial_state, lambda initial_state : restore_light_setup(initial_state, bake_info_group)
+        influence = None
+        for light in lights:
+            light_influence = get_light_influence(context, light, group_mask)
+            if light_influence:
+                if influence:
+                    min_x, max_x, min_y, max_y = influence
+                    min_x2, max_x2, min_y2, max_y2 = light_influence
+                    influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
+                else:
+                    influence = light_influence
+        if not influence:
+            return None, None
+        min_x, max_x, min_y, max_y = influence
+        context.scene.render.border_min_x = min_x
+        context.scene.render.border_max_x = max_x
+        context.scene.render.border_min_y = 1 - max_y
+        context.scene.render.border_max_y = 1 - min_y
+        if not check_min_render_size(context):
+            print(f". light scenario '{name}' has no render region, skipping (influence area: {influence})")
+            return None, None
+        if vlm_utils.is_rgb_led(lights):
+            colored_lights = [o for o in lights if o.type=='LIGHT']
+            prev_colors = [o.data.color for o in colored_lights]
+            for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
+            initial_state = (2, vlm_collections.move_all_to_col(lights, tmp_col), colored_lights, prev_colors)
+        else:
+            initial_state = (1, vlm_collections.move_all_to_col(lights, tmp_col))
+    else:
+        context.scene.render.use_border = False
+        context.scene.world = light_col.vlmSettings.world
+        context.scene.render.image_settings.color_mode = 'RGBA'
+        if bake_info_group:
+            bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 1.0
+            bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 0.0
+        initial_state = (0, vlm_collections.move_all_to_col(lights, tmp_col))
+    return initial_state, lambda initial_state : restore_light_setup(initial_state, bake_info_group)
 
 
 def restore_light_setup(initial_state, bake_info_group):
     """Restore state after setting up a light scenario for rendering
     """
-    if initial_state[0] == 0: # World
-        vlm_collections.restore_all_col_links(initial_state[1])
-    elif initial_state[0] == 1: # Group lightmap, pre-colored
-        vlm_collections.restore_all_col_links(initial_state[1])
-    elif initial_state[0] == 2: # Split lightmap, pre-colored
-        vlm_collections.restore_col_links(initial_state[1])
-    elif initial_state[0] == 3: # Group lightmap, white
-        for obj, color in zip(initial_state[1], initial_state[2]): obj.data.color = color
-        vlm_collections.restore_all_col_links(initial_state[3])
-    elif initial_state[0] == 4: # Split lightmap, white
-        initial_state[1].data.color = initial_state[2]
-        vlm_collections.restore_col_links(initial_state[3])
+    if initial_state[0] == 2: # RGB led, restore colors
+        for obj, color in zip(initial_state[2], initial_state[3]): obj.data.color = color
+    vlm_collections.restore_all_col_links(initial_state[1])
     if bake_info_group:
         bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 0.0
         bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 0.0
@@ -312,7 +284,6 @@ def render_all_groups(op, context):
     tmp_light_col = vlm_collections.get_collection('LIGHTTMP')
     indirect_col = vlm_collections.get_collection('INDIRECT')
     lights_col = vlm_collections.get_collection('LIGHTS')
-    world_col = vlm_collections.get_collection('WORLD')
     root_bake_col = vlm_collections.get_collection('BAKE')
     vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('HIDDEN')).exclude = True
     vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('TRASH')).exclude = True
@@ -369,7 +340,7 @@ def render_all_groups(op, context):
             obj.select_set(True)
         context.view_layer.objects.active = pf_obj
         pf_obj.select_set(True)
-        scenario = light_scenarios['Environment']
+        scenario = light_scenarios['Solid']
         path_exr = bpy.path.abspath(f'{bakepath}{scenario[0]} - {col.name}.exr')
         if opt_force_render or not os.path.exists(path_exr):
             state, restore_func = setup_light_scenario(context, scenario, None, tmp_col, bake_info_group)
@@ -397,18 +368,17 @@ def render_all_groups(op, context):
 
     print(f'\nRendering {n_render_groups} render groups for {n_lighting_situations} lighting situations')
     for group_index, group_mask in enumerate(group_masks):
-        objects = [obj for obj in root_bake_col.all_objects if obj.vlmSettings.render_group == group_index]
+        objects = [obj for obj in root_bake_col.all_objects if (obj.vlmSettings.bake_to is None and obj.vlmSettings.render_group == group_index) or (obj.vlmSettings.bake_to is not None and obj.vlmSettings.bake_to.vlmSettings.render_group == group_index)]
         has_bake_to = next((obj for obj in objects if obj.vlmSettings.bake_to is not None), None) is not None
         n_objects = len(objects)
         initial_collections = vlm_collections.move_all_to_col(objects, tmp_col)
         loaded = mask = None
         for i, (name, scenario) in enumerate(light_scenarios.items(), start=1):
-            render_path = f'{bakepath}{scenario[0]} - Group {group_index}.exr'
-            context.scene.render.filepath = render_path
-            if opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath)):
+            render_path = f'{bakepath}{name} - Group {group_index}.exr'
+            if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
                 state, restore_func = setup_light_scenario(context, scenario, group_mask, tmp_light_col, bake_info_group)
                 if state:
-                    nodes['VLM.IsLightmap'].outputs[0].default_value = 0 if scenario[1] is None else 1
+                    nodes['VLM.IsLightmap'].outputs[0].default_value = 1 if scenario[1] else 0
                     if has_bake_to: 
                         # If we have objects that are baked to bake targets, we compute an alpha mask for the group and apply it to the renders
                         # The alpha mask is the alpha channel of a render of the objects of the group, replacing the one which have bake targets with there targets (to get proper alpha blending on borders)
@@ -416,7 +386,7 @@ def render_all_groups(op, context):
                             mask_path = f'{bakepath}Group {group_index} Mask.exr'
                             loaded, mask = vlm_utils.get_image_or_black(mask_path)
                             if loaded == 'black':
-                                print(f". Rendering alpha mask for group #{group_index} for better borders of bake targets")
+                                print(f". Rendering alpha mask for group #{group_index} for bake targets")
                                 restore_func(state)
                                 bake_sources = [obj for obj in objects if obj.vlmSettings.bake_to is not None]
                                 bake_targets = [obj.vlmSettings.bake_to for obj in bake_sources]
@@ -429,7 +399,6 @@ def render_all_groups(op, context):
                                 context.scene.cycles.max_bounces = 1
                                 bpy.ops.render.render(write_still=True)
                                 context.scene.cycles.max_bounces = n_max_bounces
-                                context.scene.render.filepath = render_path
                                 context.scene.use_nodes = True
                                 vlm_collections.restore_all_col_links(initial_bake_target_collections)
                                 for obj in bake_sources:
@@ -443,6 +412,7 @@ def render_all_groups(op, context):
                         nodes['VLM.UseOverlay'].outputs[0].default_value = 0
                         nodes['VLM.AlphaMask'].image = None
                     print(f". {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%} Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}' ({i}/{n_lighting_situations})")
+                    context.scene.render.filepath = render_path
                     bpy.ops.render.render(write_still=True)
                     restore_func(state)
                     n_render_performed += 1

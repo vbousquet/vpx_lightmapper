@@ -58,6 +58,7 @@ def export_vpx(op, context):
     indirect_col = vlm_collections.get_collection('INDIRECT')
     hide_col = vlm_collections.get_collection('HIDDEN')
     light_col = vlm_collections.get_collection('LIGHTS')
+    global_scale = vlm_utils.get_global_scale(context)
     if not os.path.isfile(input_path):
         op.report({'ERROR'}, f'{input_path} does not exist')
         return {'CANCELLED'}
@@ -104,7 +105,7 @@ def export_vpx(op, context):
     table_lights = []
     table_flashers = []
     baked_vpx_lights = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in light_col.all_objects))
-    baked_vpx_objects = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in itertools.chain(bake_col.all_objects, indirect_col.all_objects)))
+    baked_vpx_objects = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in itertools.chain(bake_col.all_objects, indirect_col.all_objects) if not vlm_utils.is_part_of_bake_category(o, 'movable')))
 
     # Remove previous baked models and append the new ones, also hide/remove baked items
     n_read_item = 0
@@ -148,6 +149,8 @@ def export_vpx(op, context):
                 reflection_field = True
             elif item_data.tag == 'CLDR' or item_data.tag == 'CLDW': # Collidable for wall ramps and primitives
                 is_physics = item_data.get_bool()
+            elif item_data.tag == 'ISTO': # Toy (never collidable)
+                is_physics = is_physics and not item_data.get_bool()
             elif item_data.tag == 'IMAG' or item_data.tag == 'SIMG' or item_data.tag == 'IMAB': # or item_data.tag == 'IMGF' keep spinner images
                 item_images.append(item_data.get_string())
             elif item_type == 0 and item_data.tag == 'VSBL': # for wall top (0)
@@ -251,7 +254,7 @@ def export_vpx(op, context):
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', 0, 0, 0)
-        writer.write_tagged_padded_vector(b'VSIZ', 100, 100, 100)
+        writer.write_tagged_padded_vector(b'VSIZ', 1.0/global_scale, 1.0/global_scale, 1.0/global_scale)
         writer.write_tagged_float(b'RTV0', 0)
         writer.write_tagged_float(b'RTV1', 0)
         writer.write_tagged_float(b'RTV2', 0)

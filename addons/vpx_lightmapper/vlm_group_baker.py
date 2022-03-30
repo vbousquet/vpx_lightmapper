@@ -20,6 +20,22 @@ import time
 from . import vlm_utils
 from . import vlm_collections
 from PIL import Image # External dependency
+import unicodedata
+import string
+
+
+def clean_filename(filename):
+    whitelist = "-_.() %s%s" % (string.ascii_letters, string.digits)
+    
+    # keep only valid ascii chars
+    cleaned_filename = unicodedata.normalize('NFKD', filename).encode('ASCII', 'ignore').decode()
+    
+    # keep only whitelisted chars
+    cleaned_filename = ''.join(c for c in cleaned_filename if c in whitelist)
+    char_limit = 255
+    if len(cleaned_filename)>char_limit:
+        print("Warning, filename truncated because it was over {}. Filenames may no longer be unique".format(char_limit))
+    return cleaned_filename[:char_limit]    
 
 
 def compute_render_groups(op, context):
@@ -65,20 +81,24 @@ def compute_render_groups(op, context):
 
     # at least 2 pixels padding around each objects to avoid overlaps, and help clean island spliting
     mask_pad = math.ceil(opt_mask_size * 2 / opt_tex_size)
-    print(mask_pad)
+    print(f'Mask padding: {mask_pad}')
 
     object_groups = []
     bakepath = vlm_utils.get_bakepath(context, type='MASKS')
     vlm_utils.mkpath(bakepath)
-    all_objects = [obj for obj in root_bake_col.all_objects]
+    bake_targets = list({obj.vlmSettings.bake_to for obj in root_bake_col.all_objects if obj.vlmSettings.bake_to is not None})
+    all_objects = bake_targets + [obj for obj in root_bake_col.all_objects]
     for i, obj in enumerate(all_objects, start=1):
         obj.vlmSettings.render_group = -1
         if vlm_utils.is_part_of_bake_category(obj, 'movable'):
             print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it is a movable object")
             continue
+        if obj.vlmSettings.bake_to is not None:
+            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it is baked to {obj.vlmSettings.bake_to.name} (group {obj.vlmSettings.bake_to.vlmSettings.render_group})")
+            continue
         print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}'")
         # Render object visibility mask (basic low res render)
-        context.scene.render.filepath = f"{bakepath}{obj.name}.png"
+        context.scene.render.filepath = f"{bakepath}{clean_filename(obj.name)}.png"
         need_render = opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath))
         if not need_render:
             im = Image.open(bpy.path.abspath(context.scene.render.filepath))

@@ -115,9 +115,9 @@ class BIFF_reader:
         self.pos = self.pos + self.bytes_in_record_remaining
         self.bytes_in_record_remaining = 0
 
-    def next(self):
+    def next(self, warn=True):
         if self.bytes_in_record_remaining > 0:
-            print(f"{self.tag} : {self.bytes_in_record_remaining} unread octets")
+            if warn: print(f"{self.tag} : {self.bytes_in_record_remaining} unread octets")
             self.skip(self.bytes_in_record_remaining)
         self.record_start = self.pos
         self.bytes_in_record_remaining = self.get_u32()

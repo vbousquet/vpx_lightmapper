@@ -200,7 +200,7 @@ def render_packmaps_bake(op, context, sequential_baking):
                 if sequential_baking: # Bake each render gorup separately. Slow but nneded by low memory system
                     for i in range(n_materials):
                         if obj.vlmSettings.bake_type == 'playfield_fv':
-                            path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}Environment - {obj.vlmSettings.bake_objects}.exr"
+                            path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}Solid - {obj.vlmSettings.bake_objects}.exr"
                         else:
                             path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr"
                         loaded, render = vlm_utils.get_image_or_black(path)
@@ -223,7 +223,7 @@ def render_packmaps_bake(op, context, sequential_baking):
                     unloads = []
                     for i, mat in enumerate(obj.data.materials):
                         if obj.vlmSettings.bake_type == 'playfield_fv':
-                            path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}Environment - {obj.vlmSettings.bake_objects}.exr"
+                            path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}Solid - {obj.vlmSettings.bake_objects}.exr"
                         else:
                             path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr"
                         loaded, render = vlm_utils.get_image_or_black(path)
@@ -498,7 +498,7 @@ def render_packmaps_data_transfer_v0(op, context):
             tex_width = int(objects[0].vlmSettings.bake_packmap_width)
             tex_height = int(objects[0].vlmSettings.bake_packmap_height)
             if bake_type == 'playfield_fv':
-                path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}Environment - {objects[0].vlmSettings.bake_objects}.exr"
+                path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}Solid - {objects[0].vlmSettings.bake_objects}.exr"
                 render = bpy.data.images.load(path, check_existing=False)
                 render.scale(render.size[0], render.size[1])
                 render.filepath_raw = path_png

@@ -118,6 +118,7 @@ def unit_update(self, context):
         context.scene.unit_settings.system = 'NONE'
     new_scale = vlm_utils.get_global_scale(context)
     if context.scene.vlmSettings.active_scale != new_scale:
+        print(f'old scale:{context.scene.vlmSettings.active_scale} => new scale:{new_scale}')
         scaling = new_scale / context.scene.vlmSettings.active_scale
         # FIXME scale all objects relative to origin
         for i in range(4):
@@ -253,17 +254,18 @@ class VLM_Collection_props(PropertyGroup):
         description='Bake mode for the selected collection',
         default='default'
     )
+    is_active_mat: BoolProperty(name="Active Material", description="True if this bake group need an 'Active' material (non opaque, under playfield,...)", default = False)
     light_mode: EnumProperty(
         items=[
-            ('world', 'World', 'Contribute to base lighting', '', 0),
-            ('group', 'Group', 'Bake all lights as a single group', '', 1),
-            ('split', 'Split', 'Bake each light separately', '', 2)
+            ('solid', 'Solid', 'Base solid bake', '', 0),
+            ('group', 'Group', 'Bake all lights as a single lightmap group', '', 1),
+            ('split', 'Split', 'Bake each light as a separate lightmap', '', 2)
         ],
         name='Light Mode',
         description='Light mode for the selected collection',
         default='group'
     )
-    is_active_mat: BoolProperty(name="Active Material", description="True if this bake group need an 'Active' material (non opaque, under playfield,...)", default = False)
+    world: PointerProperty(name="World", type=bpy.types.World, description="World lighting to be used (should be empty for playfield lights)")
 
 
 class VLM_Object_props(PropertyGroup):
@@ -340,7 +342,7 @@ class VLM_OT_new_from_vpx(Operator, ImportHelper):
         context.scene.vlmSettings.table_file = ""
         vlm_collections.delete_collection(vlm_collections.get_collection('ROOT'))
         context.scene.vlmSettings.last_bake_step = "unstarted"
-        return vlm_import.read_vpx(context, self.filepath)
+        return vlm_import.read_vpx(self, context, self.filepath)
 
 
 class VLM_OT_update(Operator):
@@ -356,7 +358,7 @@ class VLM_OT_update(Operator):
     def execute(self, context):
         vlmProps = context.scene.vlmSettings
         context.scene.vlmSettings.last_bake_step = "unstarted"
-        return vlm_import.read_vpx(context, bpy.path.abspath(context.scene.vlmSettings.table_file))
+        return vlm_import.read_vpx(self, context, bpy.path.abspath(context.scene.vlmSettings.table_file))
 
 
 class VLM_OT_select_occluded(Operator):
@@ -645,7 +647,7 @@ class VLM_OT_load_render_images(Operator):
         for obj in context.selected_objects:
             if obj.name in result_col.all_objects:
                 if obj.vlmSettings.bake_type == 'playfield_fv':
-                    path = f'{bakepath}Environment - {obj.vlmSettings.bake_objects}.exr'
+                    path = f'{bakepath}Solid - {obj.vlmSettings.bake_objects}.exr'
                     im = vlm_utils.image_by_path(path)
                     if not os.path.exists(bpy.path.abspath(path)) or im is not None:
                         if im != None and im.name != 'VLM.NoTex': bpy.data.images.remove(im)
@@ -765,6 +767,7 @@ class VLM_PT_Col_Props(bpy.types.Panel):
             layout.prop(col.vlmSettings, 'is_active_mat', expand=True)
         elif col.name in light_col.children:
             layout.prop(col.vlmSettings, 'light_mode', expand=True)
+            layout.prop(col.vlmSettings, 'world', expand=True)
         else:
             layout.label(text="Select a bake or light group") 
 
