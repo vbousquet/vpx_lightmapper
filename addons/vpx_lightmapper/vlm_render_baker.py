@@ -107,14 +107,14 @@ def get_light_influence_radius(light):
     return (None, None)
 
 
-def get_light_influence(context, light, group_mask):
+def get_light_influence(scene, depsgraph, camera, light, group_mask):
     """Compute area of influence of the given light
     If a group mask is provided, the AOI is filtered against it
     The implementation use a 2D ellipsoid influence bound computed by projecting a 3D sphere bound
     """
     if not group_mask:
-        w = context.scene.render.resolution_x
-        h = context.scene.render.resolution_y
+        w = scene.render.resolution_x
+        h = scene.render.resolution_y
         mask = None
     else:
         w, h, mask = group_mask
@@ -123,15 +123,14 @@ def get_light_influence(context, light, group_mask):
     if center is None:
         return (0, 1, 0, 1)
     
-    camera = bpy.data.objects['Bake Camera']
     camera_rotation = mathutils.Quaternion(camera.rotation_quaternion)
     modelview_matrix = camera.matrix_world.inverted()
     projection_matrix = camera.calc_matrix_camera(
-        context.view_layer.depsgraph,
-        x = context.scene.render.resolution_x,
-        y = context.scene.render.resolution_y,
-        scale_x = context.scene.render.pixel_aspect_x,
-        scale_y = context.scene.render.pixel_aspect_y,
+        depsgraph,
+        x = scene.render.resolution_x,
+        y = scene.render.resolution_y,
+        scale_x = scene.render.pixel_aspect_x,
+        scale_y = scene.render.pixel_aspect_y,
     )
     proj = projection_matrix @ modelview_matrix
 
@@ -164,62 +163,69 @@ def get_light_influence(context, light, group_mask):
     return None
 
 
-def check_min_render_size(context):
-    w = context.scene.render.border_max_x - context.scene.render.border_min_x
-    if int(w * context.scene.render.resolution_x) < 1:
+def check_min_render_size(scene):
+    w = scene.render.border_max_x - scene.render.border_min_x
+    if int(w * scene.render.resolution_x) < 1:
         return False
-    h = context.scene.render.border_max_y - context.scene.render.border_min_y
-    if int(h * context.scene.render.resolution_y) < 1:
+    h = scene.render.border_max_y - scene.render.border_min_y
+    if int(h * scene.render.resolution_y) < 1:
         return False
     return True
 
 
-def setup_light_scenario(context, scenario, group_mask, tmp_col, bake_info_group):
+def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_col, bake_info_group):
     """Apply a light scenario for rendering, returning the previous state and a lambda to restore it
     """
     name, is_lightmap, light_col, lights, _ = scenario
+    prev_world = scene.world
     if is_lightmap:
-        context.scene.render.use_border = True
-        context.scene.world = light_col.vlmSettings.world
-        context.scene.render.image_settings.color_mode = 'RGB'
+        scene.render.use_border = True
+        scene.world = light_col.vlmSettings.world
+        scene.render.image_settings.color_mode = 'RGB'
         if bake_info_group:
             bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 0.0
             bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 1.0
-        influence = None
-        for light in lights:
-            light_influence = get_light_influence(context, light, group_mask)
-            if light_influence:
-                if influence:
-                    min_x, max_x, min_y, max_y = influence
-                    min_x2, max_x2, min_y2, max_y2 = light_influence
-                    influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
-                else:
-                    influence = light_influence
-        if not influence:
-            return None, None
-        min_x, max_x, min_y, max_y = influence
-        context.scene.render.border_min_x = min_x
-        context.scene.render.border_max_x = max_x
-        context.scene.render.border_min_y = 1 - max_y
-        context.scene.render.border_max_y = 1 - min_y
-        if not check_min_render_size(context):
-            print(f". light scenario '{name}' has no render region, skipping (influence area: {influence})")
-            return None, None
+        if light_col.vlmSettings.world:
+            scene.render.border_min_x = 0
+            scene.render.border_max_x = 1
+            scene.render.border_min_y = 0
+            scene.render.border_max_y = 1
+        else:
+            influence = None
+            for light in lights:
+                light_influence = get_light_influence(scene, depsgraph, camera, light, group_mask)
+                if light_influence:
+                    if influence:
+                        min_x, max_x, min_y, max_y = influence
+                        min_x2, max_x2, min_y2, max_y2 = light_influence
+                        influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
+                    else:
+                        influence = light_influence
+            if not influence:
+                return None, None
+            min_x, max_x, min_y, max_y = influence
+            scene.render.border_min_x = min_x
+            scene.render.border_max_x = max_x
+            scene.render.border_min_y = 1 - max_y
+            scene.render.border_max_y = 1 - min_y
+            if not check_min_render_size(scene):
+                print(f". light scenario '{name}' has no render region, skipping (influence area: {influence})")
+                return None, None
         if vlm_utils.is_rgb_led(lights):
             colored_lights = [o for o in lights if o.type=='LIGHT']
             prev_colors = [o.data.color for o in colored_lights]
             for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
-            initial_state = (2, vlm_collections.move_all_to_col(lights, tmp_col), colored_lights, prev_colors)
+            initial_state = (2, vlm_collections.move_all_to_col(lights, render_col), scene, prev_world, colored_lights, prev_colors)
         else:
-            initial_state = (1, vlm_collections.move_all_to_col(lights, tmp_col))
+            initial_state = (1, vlm_collections.move_all_to_col(lights, render_col), scene, prev_world)
     else:
-        context.scene.render.use_border = False
-        context.scene.world = light_col.vlmSettings.world
-        context.scene.render.image_settings.color_mode = 'RGBA'
+        scene.render.use_border = False
+        scene.world = light_col.vlmSettings.world
+        scene.render.image_settings.color_mode = 'RGBA'
         if bake_info_group:
             bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 1.0
             bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 0.0
-        initial_state = (0, vlm_collections.move_all_to_col(lights, tmp_col))
+        initial_state = (0, vlm_collections.move_all_to_col(lights, render_col), scene, prev_world)
     return initial_state, lambda initial_state : restore_light_setup(initial_state, bake_info_group)
 
 
@@ -227,8 +233,9 @@ def restore_light_setup(initial_state, bake_info_group):
     """Restore state after setting up a light scenario for rendering
     """
     if initial_state[0] == 2: # RGB led, restore colors
-        for obj, color in zip(initial_state[2], initial_state[3]): obj.data.color = color
+        for obj, color in zip(initial_state[4], initial_state[5]): obj.data.color = color
     vlm_collections.restore_all_col_links(initial_state[1])
+    initial_state[2].world = initial_state[3]
     if bake_info_group:
         bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 0.0
         bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 0.0
@@ -245,15 +252,29 @@ def render_all_groups(op, context):
         op.report({'ERROR'}, 'Deform camera mode is not supported by the lightmapper')
         return {'CANCELLED'}
 
-    if 'VLM.Overlay' not in bpy.data.node_groups:
+    bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+    if not bake_col:
+        op.report({'ERROR'}, "No 'VLM.Bake' collection to process")
+        return {'CANCELLED'}
+
+    light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
+    if not light_col:
+        op.report({'ERROR'}, "No 'VLM.Lights' collection to process")
+        return {'CANCELLED'}
+
+    camera_object = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    if not camera_object:
+        op.report({'ERROR'}, 'Bake camera is missing')
+        return {'CANCELLED'}
+
+    if context.scene.use_nodes and 'VLM.Overlay' not in bpy.data.node_groups:
         context.scene.use_nodes = True
         vlm_utils.load_library()
         op.report({'ERROR'}, 'You must use the provided VLM.Overlay node group in your compositor setup')
         return {'CANCELLED'}
 
-    if not context.scene.use_nodes:
-        context.scene.use_nodes = True
-        op.report({'ERROR'}, 'You must enable the compositor, using the provided VLM.Overlay node group')
+    if context.scene.use_nodes and not next((node for node in context.scene.node_tree.nodes if node.bl_idname == 'CompositorNodeGroup' and node.node_tree == bpy.data.node_groups['VLM.Overlay']), None):
+        op.report({'ERROR'}, 'You must use the provided VLM.Overlay node group in your compostor setup')
         return {'CANCELLED'}
 
     start_time = time.time()
@@ -262,43 +283,63 @@ def render_all_groups(op, context):
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
     opt_force_render = False # Force rendering even if cache is available
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
+
+    # Create temp render scene, using the user render settings and compositor setup if any
+    scene = bpy.data.scenes.new('VLM.Tmp Scene')
+    scene.collection.objects.link(camera_object)
+    scene.camera = camera_object
+    for prop in bpy.context.scene.render.bl_rna.properties:
+        if not prop.is_readonly and prop.identifier not in {'rna_type'}:
+            setattr(scene.render, prop.identifier, getattr(context.scene.render, prop.identifier))
+    for prop in bpy.context.scene.cycles.bl_rna.properties:
+        if not prop.is_readonly and prop.identifier not in {'rna_type'}:
+            setattr(scene.cycles, prop.identifier, getattr(context.scene.cycles, prop.identifier))
+    scene.render.engine = 'CYCLES'
+    scene.render.use_border = False
+    scene.render.use_crop_to_border = False
+    scene.render.resolution_y = opt_tex_size
+    scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio)
+    scene.render.image_settings.file_format = 'OPEN_EXR'
+    scene.render.image_settings.color_mode = 'RGBA'
+    scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression which is big
+    #scene.render.image_settings.exr_codec = 'DWAA' # Lossy compression (4x to 10x smaller on lightmaps)
+    scene.render.image_settings.color_depth = '16'
+    scene.render.film_transparent = True
+    scene.view_settings.view_transform = 'Raw'
+    scene.view_settings.look = 'None'
+    scene.view_layers[0].use_pass_z = False
+    scene.use_nodes = True
+    if context.scene.use_nodes:
+        scene.node_tree.nodes = context.scene.node_tree.nodes
+        scene.node_tree.links = context.scene.node_tree.links
+        pass # FIXME
+    else:
+        nodes = scene.node_tree.nodes
+        links = scene.node_tree.links
+        nodes.clear()
+        links.clear()
+        rl = nodes.new("CompositorNodeRLayers")
+        rl.scene = scene
+        rl.location.x = -200
+        group = nodes.new('CompositorNodeGroup')
+        group.width = 300
+        group.node_tree = bpy.data.node_groups['VLM.Overlay']
+        out = nodes.new("CompositorNodeComposite")
+        out.location.x = 200
+        links.new(rl.outputs[0], group.inputs[0])
+        links.new(rl.outputs[1], group.inputs[1])
+        links.new(group.outputs[0], out.inputs[0])
     nodes = bpy.data.node_groups['VLM.Overlay'].nodes
 
-    cg = vlm_utils.push_render_settings(True)
-    context.scene.render.use_border = False
-    context.scene.render.use_crop_to_border = False
-    context.scene.render.resolution_y = opt_tex_size
-    context.scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio)
-    context.scene.render.image_settings.file_format = 'OPEN_EXR'
-    context.scene.render.image_settings.color_mode = 'RGBA'
-    context.scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression which is big
-    #context.scene.render.image_settings.exr_codec = 'DWAA' # Lossy compression (4x to 10x smaller on lightmaps)
-    context.scene.render.image_settings.color_depth = '16'
-    context.scene.render.film_transparent = True
-    context.view_layer.use_pass_z = False
-    context.scene.use_nodes = True
-
-    col_state = vlm_collections.push_state()
-    rlc = context.view_layer.layer_collection
-    tmp_col = vlm_collections.get_collection('BAKETMP')
-    tmp_light_col = vlm_collections.get_collection('LIGHTTMP')
-    indirect_col = vlm_collections.get_collection('INDIRECT')
-    lights_col = vlm_collections.get_collection('LIGHTS')
-    root_bake_col = vlm_collections.get_collection('BAKE')
-    vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('HIDDEN')).exclude = True
-    vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('TRASH')).exclude = True
-    vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('BAKE TARGET')).exclude = True
-    vlm_collections.find_layer_collection(rlc, lights_col).exclude = True
-    vlm_collections.find_layer_collection(rlc, indirect_col).exclude = False
-    vlm_collections.find_layer_collection(rlc, indirect_col).indirect_only = True
-    vlm_collections.find_layer_collection(rlc, lights_col).exclude = True
-    for bake_col in root_bake_col.children:
-        vlm_collections.find_layer_collection(rlc, bake_col).exclude = False
-        vlm_collections.find_layer_collection(rlc, bake_col).indirect_only = True
-    vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
-    vlm_collections.find_layer_collection(rlc, tmp_light_col).exclude = False
-    vlm_collections.find_layer_collection(rlc, tmp_light_col).indirect_only = True
-
+    # Setup the scene with all the bake objects with indirect render influence
+    indirect_col = bpy.data.collections.new('Indirect')
+    render_col = bpy.data.collections.new('Render')
+    scene.collection.children.link(indirect_col)
+    scene.collection.children.link(render_col)
+    vlm_collections.find_layer_collection(scene.view_layers[0].layer_collection, indirect_col).indirect_only = True
+    for obj in bake_col.all_objects:
+        indirect_col.objects.link(obj)
+    
     n_render_groups = vlm_utils.get_n_render_groups(context)
     light_scenarios = vlm_utils.get_lightings(context)
     n_lighting_situations = len(light_scenarios)
@@ -306,44 +347,46 @@ def render_all_groups(op, context):
     n_total_render = n_render_groups * n_lighting_situations
     bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
 
-    print(f'\nBaking playfield with fixed view shading bake groups for base environment lighting')
-    playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
-    playfield_right = playfield_width - playfield_left
-    playfield_bottom = playfield_height - playfield_top
-    pf_h = opt_tex_size
-    pf_w = int(pf_h * playfield_width / playfield_height)
-    pf_bake = bpy.data.images.new('Playfield.Bake.Image', pf_w, pf_h, alpha=True, float_buffer=True)
-    pf_mat = bpy.data.materials.new('Playfield.Bake.Mat')
-    pf_mat.use_nodes = True
-    pf_mat.node_tree.nodes.clear()
-    node_bake = pf_mat.node_tree.nodes.new(type='ShaderNodeTexImage')
-    node_bake.image = pf_bake
-    pf_mat.node_tree.nodes.active = node_bake
-    pf_verts = [(playfield_left, -playfield_bottom, 0.0), (playfield_right, -playfield_bottom, 0.0), (playfield_left, -playfield_top, 0.0), (playfield_right, -playfield_top, 0.0)]
-    pf_mesh = bpy.data.meshes.new("Playfield.Bake.Target")
-    pf_mesh.from_pydata(pf_verts, [], [(0, 1, 3, 2)])
-    pf_mesh.uv_layers.new()
-    pf_mesh.materials.append(pf_mat)
-    pf_obj = bpy.data.objects.new("Playfield.Bake.Temp", pf_mesh)
-    tmp_col.objects.link(pf_obj)
-    context.scene.render.bake.use_clear = True
-    context.scene.render.bake.use_selected_to_active = True
-    ax = bpy.context.scene.render.pixel_aspect_x
-    context.scene.render.pixel_aspect_x = 1
-    context.scene.render.bake.cage_extrusion = 10
-    for col in [col for col in root_bake_col.children if col.vlmSettings.bake_mode == 'playfield_fv']:
+
+    # FIXME this needs a full review and is unlikely to work (bake is not tied to the rgiht scene), 'Solid' scenario does not mean anything anymore
+    for col in [col for col in bake_col.children if col.vlmSettings.bake_mode == 'playfield_fv']:
+        print(f'\nBaking solid playfield with fixed view shading {col.name}')
+        playfield_left, playfield_top, playfield_width, playfield_height = scene.vlmSettings.playfield_size
+        playfield_right = playfield_width - playfield_left
+        playfield_bottom = playfield_height - playfield_top
+        pf_h = opt_tex_size
+        pf_w = int(pf_h * playfield_width / playfield_height)
+        pf_bake = bpy.data.images.new('Playfield.Bake.Image', pf_w, pf_h, alpha=True, float_buffer=True)
+        pf_mat = bpy.data.materials.new('Playfield.Bake.Mat')
+        pf_mat.use_nodes = True
+        pf_mat.node_tree.nodes.clear()
+        node_bake = pf_mat.node_tree.nodes.new(type='ShaderNodeTexImage')
+        node_bake.image = pf_bake
+        pf_mat.node_tree.nodes.active = node_bake
+        pf_verts = [(playfield_left, -playfield_bottom, 0.0), (playfield_right, -playfield_bottom, 0.0), (playfield_left, -playfield_top, 0.0), (playfield_right, -playfield_top, 0.0)]
+        pf_mesh = bpy.data.meshes.new("Playfield.Bake.Target")
+        pf_mesh.from_pydata(pf_verts, [], [(0, 1, 3, 2)])
+        pf_mesh.uv_layers.new()
+        pf_mesh.materials.append(pf_mat)
+        pf_obj = bpy.data.objects.new("Playfield.Bake.Temp", pf_mesh)
+        render_col.objects.link(pf_obj)
+        scene.render.bake.use_clear = True
+        scene.render.bake.use_selected_to_active = True
+        ax = scene.render.pixel_aspect_x
+        scene.render.pixel_aspect_x = 1
+        scene.render.bake.cage_extrusion = 10
         print(f'\nBaking {col.name} to playfield texture under environment lighting')
         n_total_render += 1
         vlm_collections.find_layer_collection(rlc, col).indirect_only = False
         bpy.ops.object.select_all(action='DESELECT')
         for obj in col.all_objects:
             obj.select_set(True)
-        context.view_layer.objects.active = pf_obj
+        scene.view_layers[0].objects.active = pf_obj
         pf_obj.select_set(True)
         scenario = light_scenarios['Solid']
         path_exr = bpy.path.abspath(f'{bakepath}{scenario[0]} - {col.name}.exr')
         if opt_force_render or not os.path.exists(path_exr):
-            state, restore_func = setup_light_scenario(context, scenario, None, tmp_col, bake_info_group)
+            state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, None, tmp_col, bake_info_group)
             if state:
                 bpy.ops.object.bake(type='COMBINED', margin=0)
                 pf_bake.save_render(path_exr)
@@ -354,12 +397,13 @@ def render_all_groups(op, context):
         else:
             n_existing += 1
         vlm_collections.find_layer_collection(rlc, col).indirect_only = True
-    bpy.context.scene.render.pixel_aspect_x = ax
-    tmp_col.objects.unlink(pf_obj)
-    bpy.data.images.remove(pf_bake)
-    bpy.data.meshes.remove(pf_mesh)
+        scene.render.pixel_aspect_x = ax
+        render_col.objects.unlink(pf_obj)
+        bpy.data.images.remove(pf_bake)
+        bpy.data.meshes.remove(pf_mesh)
         
     # Load the group masks to filter out the obviously non influenced scenarios
+    print(n_render_groups)
     mask_path = vlm_utils.get_bakepath(context, type='MASKS')
     group_masks = []
     for i in range(n_render_groups):
@@ -368,18 +412,18 @@ def render_all_groups(op, context):
 
     print(f'\nRendering {n_render_groups} render groups for {n_lighting_situations} lighting situations')
     for group_index, group_mask in enumerate(group_masks):
-        objects = [obj for obj in root_bake_col.all_objects if (obj.vlmSettings.bake_to is None and obj.vlmSettings.render_group == group_index) or (obj.vlmSettings.bake_to is not None and obj.vlmSettings.bake_to.vlmSettings.render_group == group_index)]
-        has_bake_to = next((obj for obj in objects if obj.vlmSettings.bake_to is not None), None) is not None
+        objects = [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == group_index]
         n_objects = len(objects)
-        initial_collections = vlm_collections.move_all_to_col(objects, tmp_col)
+        initial_collections = vlm_collections.move_all_to_col(objects, render_col)
         loaded = mask = None
         for i, (name, scenario) in enumerate(light_scenarios.items(), start=1):
             render_path = f'{bakepath}{name} - Group {group_index}.exr'
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
-                state, restore_func = setup_light_scenario(context, scenario, group_mask, tmp_light_col, bake_info_group)
+                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col, bake_info_group)
                 if state:
                     nodes['VLM.IsLightmap'].outputs[0].default_value = 1 if scenario[1] else 0
-                    if has_bake_to: 
+                    # Disabled since there should not be any border issue and test don't show this as usefull
+                    if False and next((obj for obj in objects if obj.vlmSettings.bake_to is not None), None) is not None:
                         # If we have objects that are baked to bake targets, we compute an alpha mask for the group and apply it to the renders
                         # The alpha mask is the alpha channel of a render of the objects of the group, replacing the one which have bake targets with there targets (to get proper alpha blending on borders)
                         if mask is None:
@@ -391,29 +435,27 @@ def render_all_groups(op, context):
                                 bake_sources = [obj for obj in objects if obj.vlmSettings.bake_to is not None]
                                 bake_targets = [obj.vlmSettings.bake_to for obj in bake_sources]
                                 initial_bake_target_collections = vlm_collections.move_all_to_col(bake_targets, tmp_col)
-                                for obj in bake_sources:
-                                    obj.hide_render = True
-                                n_max_bounces = context.scene.cycles.max_bounces
-                                context.scene.use_nodes = False
-                                context.scene.render.filepath = mask_path
-                                context.scene.cycles.max_bounces = 1
-                                bpy.ops.render.render(write_still=True)
-                                context.scene.cycles.max_bounces = n_max_bounces
-                                context.scene.use_nodes = True
+                                for obj in bake_sources: obj.hide_render = True
+                                n_max_bounces = scene.cycles.max_bounces
+                                scene.use_nodes = False
+                                scene.render.filepath = mask_path
+                                scene.cycles.max_bounces = 1
+                                bpy.ops.render.render(write_still=True, scene=scene.name)
+                                scene.cycles.max_bounces = n_max_bounces
+                                scene.use_nodes = True
                                 vlm_collections.restore_all_col_links(initial_bake_target_collections)
-                                for obj in bake_sources:
-                                    obj.hide_render = False
+                                for obj in bake_sources: obj.hide_render = False
                                 loaded = 'loaded'
                                 mask = bpy.data.images.load(mask_path, check_existing=False)
-                                state, restore_func = setup_light_scenario(context, scenario, group_mask, tmp_light_col, bake_info_group)
+                                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col, bake_info_group)
                         nodes['VLM.UseOverlay'].outputs[0].default_value = 1
                         nodes['VLM.AlphaMask'].image = mask
                     else:
                         nodes['VLM.UseOverlay'].outputs[0].default_value = 0
                         nodes['VLM.AlphaMask'].image = None
                     print(f". {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%} Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}' ({i}/{n_lighting_situations})")
-                    context.scene.render.filepath = render_path
-                    bpy.ops.render.render(write_still=True)
+                    scene.render.filepath = render_path
+                    bpy.ops.render.render(write_still=True, scene=scene.name)
                     restore_func(state)
                     n_render_performed += 1
                 else:
@@ -428,12 +470,8 @@ def render_all_groups(op, context):
     nodes['VLM.UseOverlay'].outputs[0].default_value = 0
     nodes['VLM.IsLightmap'].outputs[0].default_value = 0
     nodes['VLM.AlphaMask'].image = None
+    bpy.data.scenes.remove(scene)
 
-    context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
-    vlm_utils.pop_render_settings(cg)
-    vlm_collections.delete_collection(tmp_col)
-    vlm_collections.delete_collection(tmp_light_col)
-    vlm_collections.pop_state(col_state)
     length = time.time() - start_time
     print(f"\nRendering finished in a total time of {vlm_utils.format_time(length)}")
     if n_existing > 0: print(f". {n_existing:>3} renders were skipped since they were already existing")

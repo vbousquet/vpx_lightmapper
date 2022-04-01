@@ -22,6 +22,8 @@ import math
 import mathutils
 import functools
 import datetime
+import string
+import unicodedata
 from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
 
@@ -33,6 +35,18 @@ def get_global_scale(context):
         return 0.01 # VPX units
     else:
         return 0.01 * 2.69875 / 50 # Metric scale (imperial is performed by blender itself)
+
+
+def get_vpx_item(context, vpx_name, vpx_subpart, single=False):
+    '''
+    Search the complete scene for objects linked to the given vpx object/subpart
+    Depending on single argument, returns a list of the found objects, eventually empty if none found
+    or the first found element (or None if not found)
+    '''
+    if single:
+        return next((o for o in context.scene.objects if vpx_name in o.vlmSettings.vpx_object.split(';') and o.vlmSettings.vpx_subpart == vpx_subpart), None)
+    else:
+        return [o for o in context.scene.objects if vpx_name in o.vlmSettings.vpx_object.split(';') and o.vlmSettings.vpx_subpart == vpx_subpart]
 
 
 def load_library():
@@ -64,6 +78,20 @@ def load_library():
     # Miscellaneous nodes
     bpy.data.node_groups.get('Metal Colors').use_fake_user = True
     bpy.data.node_groups.get('Color Dispersion').use_fake_user = True
+
+
+def clean_filename(filename):
+    whitelist = "-_.() %s%s" % (string.ascii_letters, string.digits)
+    
+    # keep only valid ascii chars
+    cleaned_filename = unicodedata.normalize('NFKD', filename).encode('ASCII', 'ignore').decode()
+    
+    # keep only whitelisted chars
+    cleaned_filename = ''.join(c for c in cleaned_filename if c in whitelist)
+    char_limit = 255
+    if len(cleaned_filename)>char_limit:
+        print("Warning, filename truncated because it was over {}. Filenames may no longer be unique".format(char_limit))
+    return cleaned_filename[:char_limit]    
 
 
 def push_render_settings(set_raw):
@@ -232,18 +260,18 @@ def get_lightings(context):
         (name, is lightmap, light collection, lights, custom data)
     """
     light_scenarios = {}
-    lights_col = vlm_collections.get_collection('LIGHTS', create=False)
-    if lights_col is None: return light_scenarios
-    for light_col in (l for l in lights_col.children if not l.hide_render):
-        lights = light_col.objects
+    light_cols = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
+    if light_cols is None: return light_scenarios
+    for light_col in (l for l in light_cols.children if not l.hide_render):
+        lights = light_col.all_objects
         if light_col.vlmSettings.light_mode == 'solid': # Base solid bake
-            light_scenarios['Solid'] = ['Solid', False, light_col, lights, None]
+            light_scenarios[light_col.name] = [light_col.name, False, light_col, lights, None]
         elif light_col.vlmSettings.light_mode == 'group': # Lightmap of a group of lights
             light_scenarios[light_col.name] = [light_col.name, True, light_col, lights, None]
         elif light_col.vlmSettings.light_mode == 'split': # Lightmaps for multiple VPX lights
-            for vpx_light in {l.vpx_object for l in lights}:
-                light_group = [l for l in lights if l.vpx_object == vpx_light]
-                name = f"{light_col.name}-{vpx_light.name}"
+            for vpx_light in {l.vlmSettings.vpx_object for l in lights}:
+                light_group = [l for l in lights if l.vlmSettings.vpx_object == vpx_light]
+                name = f"{light_col.name}-{vpx_light}"
                 light_scenarios[name] = [name, True, light_col, light_group, None]
     return light_scenarios
 
@@ -254,9 +282,9 @@ def get_n_lightings(context):
     
 def get_n_render_groups(context):
     n = 0
-    root_bake_col = vlm_collections.get_collection('BAKE', create=False)
-    if root_bake_col is not None:
-        for obj in root_bake_col.all_objects:
+    bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+    if bake_col is not None:
+        for obj in bake_col.all_objects:
             n = max(n, obj.vlmSettings.render_group + 1)
     return n
 

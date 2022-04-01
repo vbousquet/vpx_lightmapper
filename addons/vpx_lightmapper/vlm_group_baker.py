@@ -20,22 +20,6 @@ import time
 from . import vlm_utils
 from . import vlm_collections
 from PIL import Image # External dependency
-import unicodedata
-import string
-
-
-def clean_filename(filename):
-    whitelist = "-_.() %s%s" % (string.ascii_letters, string.digits)
-    
-    # keep only valid ascii chars
-    cleaned_filename = unicodedata.normalize('NFKD', filename).encode('ASCII', 'ignore').decode()
-    
-    # keep only whitelisted chars
-    cleaned_filename = ''.join(c for c in cleaned_filename if c in whitelist)
-    char_limit = 255
-    if len(cleaned_filename)>char_limit:
-        print("Warning, filename truncated because it was over {}. Filenames may no longer be unique".format(char_limit))
-    return cleaned_filename[:char_limit]    
 
 
 def compute_render_groups(op, context):
@@ -50,98 +34,101 @@ def compute_render_groups(op, context):
         op.report({'ERROR'}, 'Deform camera mode is not supported by the lightmapper')
         return {'CANCELLED'}
 
+    bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+    if not bake_col:
+        op.report({'ERROR'}, "No 'VLM.Bake' collection to process")
+        return {'CANCELLED'}
+
+    camera_object = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    if not camera_object:
+        op.report({'ERROR'}, 'Bake camera is missing')
+        return {'CANCELLED'}
+
     start_time = time.time()
     print(f"\nEvaluating render groups")
     opt_mask_size = 1024 # Height used for the object masks
-    opt_mask_threshold = 0.0 # Alpha threshold used when building object groups
     opt_force_render = False # Force rendering even if cache is available
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
-    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
-    
-    col_state = vlm_collections.push_state()
-    rlc = context.view_layer.layer_collection
-    root_col = vlm_collections.get_collection('ROOT')
-    tmp_col = vlm_collections.get_collection('BAKETMP')
-    root_bake_col = vlm_collections.get_collection('BAKE')
-    for col in root_col.children:
-        vlm_collections.find_layer_collection(rlc, col).exclude = True
-    vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
-
-    render_state = vlm_utils.push_render_settings(True)
-    context.scene.render.engine = 'BLENDER_EEVEE'
-    context.scene.render.film_transparent = True
-    context.scene.eevee.taa_render_samples = 1
-    context.scene.render.resolution_y = opt_mask_size
-    context.scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
-    context.scene.render.image_settings.file_format = "PNG"
-    context.scene.render.image_settings.color_mode = 'RGBA'
-    context.scene.render.image_settings.color_depth = '8'
-    context.scene.world = bpy.data.worlds["VPX.Env.Black"]
-    context.scene.use_nodes = False
-
     # at least 2 pixels padding around each objects to avoid overlaps, and help clean island spliting
-    mask_pad = math.ceil(opt_mask_size * 2 / opt_tex_size)
-    print(f'Mask padding: {mask_pad}')
+    opt_mask_pad = math.ceil(opt_mask_size * 2 / opt_tex_size)
+    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
 
-    object_groups = []
+    scene = bpy.data.scenes.new('VLM.Tmp Scene')
+    scene.collection.objects.link(camera_object)
+    scene.camera = camera_object
+    scene.render.engine = 'BLENDER_EEVEE'
+    scene.render.film_transparent = True
+    scene.render.resolution_y = opt_mask_size
+    scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
+    scene.render.pixel_aspect_x = context.scene.render.pixel_aspect_x
+    scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_mode = 'RGBA'
+    scene.render.image_settings.color_depth = '8'
+    scene.eevee.taa_render_samples = 1
+    scene.view_settings.view_transform = 'Raw'
+    scene.view_settings.look = 'None'
+    scene.world = bpy.data.worlds["VPX.Env.Black"]
+    scene.use_nodes = False
+
+    object_masks = []
     bakepath = vlm_utils.get_bakepath(context, type='MASKS')
     vlm_utils.mkpath(bakepath)
-    bake_targets = list({obj.vlmSettings.bake_to for obj in root_bake_col.all_objects if obj.vlmSettings.bake_to is not None})
-    all_objects = bake_targets + [obj for obj in root_bake_col.all_objects]
-    for i, obj in enumerate(all_objects, start=1):
+    all_objects = list(bake_col.all_objects)
+    i = 0 # FIXME count masks
+    while all_objects:
+        obj = all_objects.pop()
         obj.vlmSettings.render_group = -1
         if vlm_utils.is_part_of_bake_category(obj, 'movable'):
             print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it is a movable object")
             continue
-        if obj.vlmSettings.bake_to is not None:
-            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it is baked to {obj.vlmSettings.bake_to.name} (group {obj.vlmSettings.bake_to.vlmSettings.render_group})")
+        if obj.vlmSettings.indirect_only:
+            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it is only indirectly influencing the scene")
             continue
-        print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}'")
-        # Render object visibility mask (basic low res render)
-        context.scene.render.filepath = f"{bakepath}{clean_filename(obj.name)}.png"
-        need_render = opt_force_render or not os.path.exists(bpy.path.abspath(context.scene.render.filepath))
+        if obj.vlmSettings.bake_to:
+            scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(obj.vlmSettings.bake_to.name)}.png"
+            obj_group = [o for o in all_objects if o.vlmSettings.bake_to == obj.vlmSettings.bake_to]
+            obj_group.append(obj.vlmSettings.bake_to)
+            all_objects = [o for o in all_objects if o not in obj_group]
+            print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for bake target '{obj.vlmSettings.bake_to.name}' ({[o.name for o in obj_group]})")
+        else:
+            scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(obj.name)}.png"
+            obj_group = [obj]
+            print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}'")
+        need_render = opt_force_render or not os.path.exists(bpy.path.abspath(scene.render.filepath))
         if not need_render:
-            im = Image.open(bpy.path.abspath(context.scene.render.filepath))
-            need_render = im.size[0] != context.scene.render.resolution_x or im.size[1] != context.scene.render.resolution_y
+            im = Image.open(bpy.path.abspath(scene.render.filepath))
+            need_render = im.size[0] != scene.render.resolution_x or im.size[1] != scene.render.resolution_y
         if need_render:
-            initial_collection = vlm_collections.move_to_col(obj, tmp_col)
-            bpy.ops.render.render(write_still=True)
-            vlm_collections.restore_col_links(initial_collection)
-            im = Image.open(bpy.path.abspath(context.scene.render.filepath))
-        # Evaluate if this object can be grouped with previous renders (no alpha overlaps)
-        for p in range(mask_pad):
+            for o in obj_group: scene.collection.objects.link(o)
+            bpy.ops.render.render(write_still=True, scene=scene.name)
+            for o in obj_group: scene.collection.objects.unlink(o)
+            im = Image.open(bpy.path.abspath(scene.render.filepath))
+        # Evaluate if this object can be grouped with previous renders (no overlaps)
+        for p in range(opt_mask_pad):
             im.alpha_composite(im, (0, 1))
             im.alpha_composite(im, (0, -1))
             im.alpha_composite(im, (1, 0))
             im.alpha_composite(im, (-1, 0))
         alpha = im.tobytes("raw", "A")
-        n_groups = len(object_groups)
-        obj.vlmSettings.render_group = n_groups
+        n_groups = len(object_masks)
+        g = n_groups
         r = range(0, n_groups) if (i % 2) == 0 else range(n_groups-1, -1, -1)
         for group_index in r:
-            group = object_groups[group_index]
-            ga = group['mask']
-            if next((b for b in zip(alpha, ga) if b[0] > opt_mask_threshold and b[1] > opt_mask_threshold), None) is None:
-                obj.vlmSettings.render_group = group_index
-                group['mask'] = [max(b[0],b[1]) for b in zip(alpha, ga)]
-                group['objects'].append(obj)
+            ga = object_masks[group_index]
+            if next((b for b in zip(alpha, ga) if b[0] > 0.0 and b[1] > 0.0), None) is None:
+                object_masks[group_index] = [max(b[0],b[1]) for b in zip(alpha, ga)]
+                g = group_index
                 break
-        if obj.vlmSettings.render_group == len(object_groups):
-            object_groups.append({'objects': [obj], 'mask': alpha})
+        if g == n_groups: object_masks.append(alpha)
+        for o in obj_group: o.vlmSettings.render_group = g
     
     # Save group masks for later use
-    for i, group in enumerate(object_groups):
-        im = Image.frombytes('L', (context.scene.render.resolution_x, context.scene.render.resolution_y), bytes(group['mask']), 'raw')
+    for i, group in enumerate(object_masks):
+        im = Image.frombytes('L', (scene.render.resolution_x, scene.render.resolution_y), bytes(group), 'raw')
         im.save(bpy.path.abspath(f"{bakepath}Group {i}.png"))
 
-    context.scene.render.engine = 'CYCLES'
-    context.scene.world = bpy.data.worlds["VPX.Env.IBL"]
-    vlm_utils.pop_render_settings(render_state)
-
-    vlm_collections.delete_collection(tmp_col)
-    vlm_collections.pop_state(col_state)
-
-    print(f"\n{len(object_groups)} render groups defined in {vlm_utils.format_time(time.time() - start_time)}.")
+    print(f"\n{len(object_masks)} render groups defined in {vlm_utils.format_time(time.time() - start_time)}.")
+    bpy.data.scenes.remove(scene)
     context.scene.vlmSettings.last_bake_step = 'groups'
     return {'FINISHED'}
     

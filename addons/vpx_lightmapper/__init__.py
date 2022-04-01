@@ -89,6 +89,10 @@ if dependencies_installed:
         importlib.reload(vlm_export)
     else:
         from . import vlm_export
+    if "vlm_export_obj" in locals():
+        importlib.reload(vlm_export_obj)
+    else:
+        from . import vlm_export_obj
     if "vlm_group_baker" in locals():
         importlib.reload(vlm_group_baker)
     else:
@@ -125,6 +129,11 @@ def unit_update(self, context):
             context.scene.vlmSettings.playfield_size[i] = scaling * context.scene.vlmSettings.playfield_size[i]
         context.scene.vlmSettings.active_scale = new_scale
         vlm_camera.camera_inclination_update
+
+
+def select_render_group(self, context):
+    for obj in context.scene.collection.all_objects:
+        obj.select_set(obj.name in context.view_layer.objects and obj.vlmSettings.render_group == context.scene.vlmSettings.render_group_select)
 
 
 class VLM_Scene_props(PropertyGroup):
@@ -240,6 +249,8 @@ class VLM_Scene_props(PropertyGroup):
     table_file: StringProperty(name="Table", description="Table filename", default="")
     playfield_size: FloatVectorProperty(name="Playfield size:", description="Size of the playfield in VP unit", default=(0, 0, 0, 0), size=4)
     active_scale: FloatProperty(name="Active scale", description="Scale of the active table", default = 1.0)
+    # Tools
+    render_group_select: IntProperty(name="Select Group", description="Select all objects from a render group", default = 0, min = 0, update=select_render_group)
 
 
 class VLM_Collection_props(PropertyGroup):
@@ -275,9 +286,11 @@ class VLM_Object_props(PropertyGroup):
     layback_offset: FloatProperty(name="Layback offset", description="Y offset caused by current layback", default = 0.0)
     import_mesh: BoolProperty(name="Mesh", description="Update mesh on import", default = True)
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
+    indirect_only: BoolProperty(name="Indirect", description="Do not bake this object but consider its influence on the scene", default = False)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     is_rgb_led: BoolProperty(name="RGB Led", description="RGB Led (lightmapped to white then colored in VPX for dynamic colors)", default = False)
     enable_aoi: BoolProperty(name="Enable AOI", description="Area Of Influence rendering optimization", default = True)
+    enable_glow: BoolProperty(name="Enable Glow", description="Enable light glow", default = False)
     bake_to: PointerProperty(name="Bake To", type=bpy.types.Object, description="Target object used as bake mesh target")
     # Movable objects bake settings
     movable_lightmap_threshold: FloatProperty(name="Lightmap threshold", description="Light threshold for generating a lightmap (1 for no lightmaps)", default = 1.0)
@@ -289,9 +302,9 @@ class VLM_Object_props(PropertyGroup):
         default='indirect'
     )
     # Bake result properties
-    bake_name: StringProperty(name="Name", description="Lighting situation identifier", default="")
-    bake_objects: StringProperty(name="Object", description="Object or collection of object used to create this bake/lightmap", default="")
-    bake_light: StringProperty(name="Light", description="Light or collection of lights used to create this lightmap", default="")
+    bake_name: StringProperty(name="Lighting", description="Lighting scenario", default="")
+    bake_objects: StringProperty(name="Bake", description="Object or collection of object included in this bake/lightmap", default="")
+    bake_light: StringProperty(name="Sync", description="Object to sync state on", default="")
     bake_type: EnumProperty(
         items=[
             ('default', 'Default', "Default non static opaque bake", '', 0),
@@ -322,8 +335,7 @@ class VLM_OT_new(Operator):
         context.scene.render.film_transparent = True
         context.scene.vlmSettings.table_file = ""
         context.scene.vlmSettings.last_bake_step = "unstarted"
-        vlm_collections.delete_collection(vlm_collections.get_collection('ROOT'))
-        vlm_collections.setup_collections()
+        unit_update(self, context)
         vlm_utils.load_library()
         return {'FINISHED'}
 
@@ -340,8 +352,8 @@ class VLM_OT_new_from_vpx(Operator, ImportHelper):
         context.scene.render.engine = 'CYCLES'
         context.scene.render.film_transparent = True
         context.scene.vlmSettings.table_file = ""
-        vlm_collections.delete_collection(vlm_collections.get_collection('ROOT'))
         context.scene.vlmSettings.last_bake_step = "unstarted"
+        unit_update(self, context)
         return vlm_import.read_vpx(self, context, self.filepath)
 
 
@@ -356,19 +368,30 @@ class VLM_OT_update(Operator):
         return os.path.exists(bpy.path.abspath(context.scene.vlmSettings.table_file))
 
     def execute(self, context):
-        vlmProps = context.scene.vlmSettings
-        context.scene.vlmSettings.last_bake_step = "unstarted"
+        unit_update(self, context)
         return vlm_import.read_vpx(self, context, bpy.path.abspath(context.scene.vlmSettings.table_file))
 
 
 class VLM_OT_select_occluded(Operator):
-    bl_idname = "vlm.select_ocluded_operator"
+    bl_idname = "vlm.select_occluded_operator"
     bl_label = "Select Occluded"
     bl_description = "Select occluded objects"
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
-        return vlm_occlusion.select_occluded(context)
+        return vlm_occlusion.select_occluded(self, context)
+
+
+class VLM_OT_select_indirect(Operator):
+    bl_idname = "vlm.select_indirect_operator"
+    bl_label = "Select Indirect"
+    bl_description = "Select objects that indirectly affect rendering"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        for obj in context.scene.collection.all_objects:
+            obj.select_set(obj.name in context.view_layer.objects and obj.vlmSettings.indirect_only)
+        return {'FINISHED'}
 
 
 class VLM_OT_compute_render_groups(Operator):
@@ -421,6 +444,62 @@ class VLM_OT_export_vpx(Operator):
         return vlm_export.export_vpx(self, context)
 
 
+class VLM_OT_export_bake(Operator):
+    bl_idname = "vlm.export_bake_operator"
+    bl_label = "Export OBJ"
+    bl_description = "Export bake to a Wavefront OBJ file with its texture"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap >= 0), None) is not None
+
+    def execute(self, context):
+        return vlm_export_obj.export_obj(self, context)
+
+
+class VLM_OT_export_pov(Operator):
+    bl_idname = "vlm.export_pov_operator"
+    bl_label = "Export POV"
+    bl_description = "Export a POV file for easy VPX/Blender comparison. Needs manual adjustment in VPX from console informations."
+    bl_options = {"REGISTER"}
+    
+    @classmethod
+    def poll(cls, context):
+        return len(context.selected_objects) == 1 and context.selected_objects[0].type == 'CAMERA'
+
+    def execute(self, context):
+        camera_object = context.selected_objects[0]
+        path = bpy.path.abspath(f'{vlm_utils.get_bakepath(context, type="EXPORT")}{camera_object.name}.pov')
+        sections = ['desktop', 'fullscreen', 'fullsinglescreen']
+        with open(path, 'w') as f:
+            f.write('<?xml version="1.0" encoding="utf-8"?>\n')
+            f.write('<POV>\n')
+            for section in sections:
+                f.write(f'\t<{section}>\n')
+                f.write(f'\t\t<inclination>{math.degrees(camera_object.rotation_euler[0])}</inclination>\n')
+                f.write(f'\t\t<fov>{math.degrees(camera_object.data.angle)}</fov>\n')
+                f.write(f'\t\t<layback>0.000000</layback>\n')
+                f.write(f'\t\t<rotation>270.000000</rotation>\n')
+                #f.write(f'\t\t<rotation>0.000000</rotation>\n')
+                f.write(f'\t\t<xscale>1.000000</xscale>\n')
+                f.write(f'\t\t<yscale>1.000000</yscale>\n')
+                f.write(f'\t\t<zscale>1.000000</zscale>\n')
+                f.write(f'\t\t<xoffset>0.000000</xoffset>\n')
+                f.write(f'\t\t<yoffset>0.000000</yoffset>\n')
+                f.write(f'\t\t<zoffset>0.000000</zoffset>\n')
+                f.write(f'\t</{section}>\n')
+            f.write('</POV>\n')
+        scale = 1.0 / vlm_utils.get_global_scale(context)
+        print(f"\nCamera POV exported to '{path}'")
+        if camera_object.data.shift_x != 0 or camera_object.data.shift_y != 0:
+            print(f"WARNING: Blender's camera is shifted by {camera_object.data.shift_x}, {camera_object.data.shift_y}")
+        if context.scene.render.pixel_aspect_x != 1 or context.scene.render.pixel_aspect_y != 1:
+            print(f"WARNING: Blender's pixel aspect is not squared: {context.scene.render.pixel_aspect_x}, {context.scene.render.pixel_aspect_y}")
+        print(f"Use VPX 'F6' mode to move camera to ({round(-scale*camera_object.location[1])}, {round(scale*camera_object.location[0])}, {round(scale*camera_object.location[2])})\n")
+        return {'FINISHED'}
+
+
 class VLM_OT_batch_bake(Operator):
     bl_idname = "vlm.batch_bake_operator"
     bl_label = "Batch All"
@@ -444,73 +523,20 @@ class VLM_OT_batch_bake(Operator):
         return {'FINISHED'}
 
 
-class VLM_OT_state_hide(Operator):
-    bl_idname = "vlm.state_hide_operator"
-    bl_label = "Hide"
-    bl_description = "Hide object from bake"
-    bl_options = {"REGISTER", "UNDO"}
-    
-    @classmethod
-    def poll(cls, context):
-        root_col = vlm_collections.get_collection('ROOT', create=False)
-        target_col = vlm_collections.get_collection('HIDDEN', create=False)
-        return root_col is not None and target_col is not None and \
-            next((o for o in context.selected_objects if o.name in root_col.all_objects and o.name not in target_col.all_objects), None) is not None
-
-    def execute(self, context):
-        root_col = vlm_collections.get_collection('ROOT', create=False)
-        target_col = vlm_collections.get_collection('HIDDEN', create=False)
-        if root_col is not None and target_col is not None:
-            for obj in [obj for obj in context.selected_objects if obj.name in root_col.all_objects and obj.name not in target_col.all_objects]:
-                target_col.objects.link(obj)
-                [col.objects.unlink(obj) for col in obj.users_collection if col != target_col]
-        return {"FINISHED"}
-
-
-class VLM_OT_state_indirect(Operator):
-    bl_idname = "vlm.state_indirect_operator"
+class VLM_OT_state_indirect_only(Operator):
+    bl_idname = "vlm.state_indirect_only"
     bl_label = "Indirect"
-    bl_description = "Hide object from bake, but keep indirect interaction"
+    bl_description = "Only affect rendering indirectly (reflection/refraction and shadows)"
     bl_options = {"REGISTER", "UNDO"}
+    indirect_only: bpy.props.BoolProperty()
     
     @classmethod
     def poll(cls, context):
-        root_col = vlm_collections.get_collection('ROOT', create=False)
-        target_col = vlm_collections.get_collection('INDIRECT', create=False)
-        return root_col is not None and target_col is not None and \
-            next((o for o in context.selected_objects if o.name in root_col.all_objects and o.name not in target_col.all_objects), None) is not None
+        return True
 
     def execute(self, context):
-        root_col = vlm_collections.get_collection('ROOT', create=False)
-        target_col = vlm_collections.get_collection('INDIRECT', create=False)
-        if root_col is not None and target_col is not None:
-            for obj in [obj for obj in context.selected_objects if obj.name in root_col.all_objects and obj.name not in target_col.all_objects]:
-                target_col.objects.link(obj)
-                [col.objects.unlink(obj) for col in obj.users_collection if col != target_col]
-        return {"FINISHED"}
-
-
-class VLM_OT_state_bake(Operator):
-    bl_idname = "vlm.state_bake_operator"
-    bl_label = "Bake"
-    bl_description = "Enable objects for baking"
-    bl_options = {"REGISTER", "UNDO"}
-    
-    @classmethod
-    def poll(cls, context):
-        root_col = vlm_collections.get_collection('ROOT', create=False)
-        target_col = vlm_collections.get_collection('BAKE', create=False)
-        return root_col is not None and target_col is not None and \
-            next((o for o in context.selected_objects if o.name in root_col.all_objects and o.name not in target_col.all_objects and o.type != 'LIGHT'), None) is not None
-        return False
-
-    def execute(self, context):
-        root_col = vlm_collections.get_collection('ROOT', create=False)
-        target_col = vlm_collections.get_collection('BAKE DEFAULT', create=False)
-        if root_col is not None and target_col is not None:
-            for obj in [obj for obj in context.selected_objects if obj.name in root_col.all_objects and obj.name not in target_col.all_objects and obj.type != 'LIGHT']:
-                target_col.objects.link(obj)
-                [col.objects.unlink(obj) for col in obj.users_collection if col != target_col]
+        for obj in [obj for obj in context.selected_objects]:
+            obj.vlmSettings.indirect_only = self.indirect_only
         return {"FINISHED"}
 
 
@@ -523,14 +549,11 @@ class VLM_OT_state_import_mesh(Operator):
     
     @classmethod
     def poll(cls, context):
-        bake_col = vlm_collections.get_collection('ROOT', create=False)
-        return bake_col is not None and next((obj for obj in context.selected_objects if obj.name in bake_col.all_objects), None) is not None
+        return True
 
     def execute(self, context):
-        bake_col = vlm_collections.get_collection('ROOT', create=False)
-        if bake_col is not None:
-            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects]:
-                obj.vlmSettings.import_mesh = self.enable_import
+        for obj in [obj for obj in context.selected_objects]:
+            obj.vlmSettings.import_mesh = self.enable_import
         return {"FINISHED"}
 
 
@@ -543,14 +566,11 @@ class VLM_OT_state_import_transform(Operator):
     
     @classmethod
     def poll(cls, context):
-        bake_col = vlm_collections.get_collection('ROOT', create=False)
-        return bake_col is not None and next((obj for obj in context.selected_objects if obj.name in bake_col.all_objects), None) is not None
+        return True
 
     def execute(self, context):
-        bake_col = vlm_collections.get_collection('ROOT', create=False)
-        if bake_col is not None:
-            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects]:
-                obj.vlmSettings.import_transform = self.enable_transform
+        for obj in [obj for obj in context.selected_objects]:
+            obj.vlmSettings.import_transform = self.enable_transform
         return {"FINISHED"}
 
 
@@ -562,7 +582,7 @@ class VLM_OT_clear_render_group_cache(Operator):
     
     @classmethod
     def poll(cls, context):
-        bake_col = vlm_collections.get_collection('BAKE', create=False)
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
         if bake_col is not None:
             files = glob.glob(bpy.path.abspath(f"{vlm_utils.get_bakepath(context, type='RENDERS')}") + "* - Group *.exr")
             for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.render_group >= 0]:
@@ -571,7 +591,7 @@ class VLM_OT_clear_render_group_cache(Operator):
         return False
 
     def execute(self, context):
-        bake_col = vlm_collections.get_collection('BAKE', create=False)
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
         delete_set = {}
         if bake_col is not None:
             files = glob.glob(bpy.path.abspath(f"{vlm_utils.get_bakepath(context, type='RENDERS')}") + "* - Group *.exr")
@@ -591,37 +611,28 @@ class VLM_OT_select_render_group(Operator):
     
     @classmethod
     def poll(cls, context):
-        bake_col = vlm_collections.get_collection('BAKE', create=False)
-        return bake_col is not None and next((obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.render_group >= 0), None) is not None
+        return len(set((obj.vlmSettings.render_group for obj in context.selected_objects if obj.vlmSettings.render_group >= 0))) == 1
 
     def execute(self, context):
-        bake_col = vlm_collections.get_collection('BAKE', create=False)
-        if bake_col is not None:
-            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.render_group >= 0]:
-                for other in bake_col.all_objects:
-                    if other.vlmSettings.render_group == obj.vlmSettings.render_group:
-                        other.select_set(True)
+        context.scene.vlmSettings.render_group_select = next((obj.vlmSettings.render_group for obj in context.selected_objects if obj.vlmSettings.render_group >= 0))
         return {"FINISHED"}
 
 
 class VLM_OT_select_packmap_group(Operator):
     bl_idname = "vlm.select_packmap_group"
-    bl_label = "Select"
+    bl_label = "Select Packmap"
     bl_description = "Select all object from this packmap"
     bl_options = {"REGISTER", "UNDO"}
     
     @classmethod
     def poll(cls, context):
-        bake_col = vlm_collections.get_collection('BAKE RESULT', create=False)
-        return bake_col is not None and next((obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.bake_packmap >= 0), None) is not None
+        return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap >= 0), None) is not None
 
     def execute(self, context):
-        bake_col = vlm_collections.get_collection('BAKE RESULT', create=False)
-        if bake_col is not None:
-            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.bake_packmap >= 0]:
-                for other in bake_col.all_objects:
-                    if other.vlmSettings.bake_packmap == obj.vlmSettings.bake_packmap:
-                        other.select_set(True)
+        for obj in [obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap >= 0]:
+            for other in context.view_layer.objects:
+                if other.vlmSettings.bake_packmap == obj.vlmSettings.bake_packmap:
+                    other.select_set(True)
         return {"FINISHED"}
 
 
@@ -630,41 +641,36 @@ class VLM_OT_load_render_images(Operator):
     bl_label = "Load/Unload Renders"
     bl_description = "Load/Unload render images for preview"
     bl_options = {"REGISTER", "UNDO"}
+    is_unload: bpy.props.BoolProperty()
     
     @classmethod
     def poll(cls, context):
-        object_col = vlm_collections.get_collection('BAKE RESULT', create=False)
-        if object_col is not None:
-            for obj in context.selected_objects:
-                if obj.name in object_col.all_objects:
-                    return True
-        return False
+        return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap >= 0), None) is not None
 
     def execute(self, context):
-        vlmProps = context.scene.vlmSettings
-        result_col = vlm_collections.get_collection('BAKE RESULT')
         bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
-        for obj in context.selected_objects:
-            if obj.name in result_col.all_objects:
-                if obj.vlmSettings.bake_type == 'playfield_fv':
-                    path = f'{bakepath}Solid - {obj.vlmSettings.bake_objects}.exr'
-                    im = vlm_utils.image_by_path(path)
-                    if not os.path.exists(bpy.path.abspath(path)) or im is not None:
-                        if im != None and im.name != 'VLM.NoTex': bpy.data.images.remove(im)
-                    else:
-                        _, im = vlm_utils.get_image_or_black(path)
-                        obj.data.materials[0].node_tree.nodes["BakeTex"].image = im
+        for obj in [o for o in context.selected_objects if o.vlmSettings.bake_packmap >= 0]:
+            if obj.vlmSettings.bake_type == 'playfield_fv':
+                path = f'{bakepath}Solid - {obj.vlmSettings.bake_objects}.exr'
+                im = vlm_utils.image_by_path(path)
+                #if not os.path.exists(bpy.path.abspath(path)) or im is not None:
+                if self.is_unload:
+                    if im != None and im.name != 'VLM.NoTex': bpy.data.images.remove(im)
                 else:
-                    paths = [f'{bakepath}{obj.vlmSettings.bake_name} - Group {i}.exr' for i,_ in enumerate(obj.data.materials)]
-                    images = [vlm_utils.image_by_path(path) for path in paths]
-                    all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
-                    if all_loaded:
-                        for im in images:
-                            if im != None and im.name != 'VLM.NoTex': bpy.data.images.remove(im)
-                    else:
-                        for path, mat in zip(paths, obj.data.materials):
-                            _, im = vlm_utils.get_image_or_black(path)
-                            mat.node_tree.nodes["BakeTex"].image = im
+                    _, im = vlm_utils.get_image_or_black(path)
+                    obj.data.materials[0].node_tree.nodes["BakeTex"].image = im
+            else:
+                paths = [f'{bakepath}{obj.vlmSettings.bake_name} - Group {i}.exr' for i,_ in enumerate(obj.data.materials)]
+                images = [vlm_utils.image_by_path(path) for path in paths]
+                all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
+                if self.is_unload:
+                #if all_loaded:
+                    for im in images:
+                        if im != None and im.name != 'VLM.NoTex': bpy.data.images.remove(im)
+                else:
+                    for path, mat in zip(paths, obj.data.materials):
+                        _, im = vlm_utils.get_image_or_black(path)
+                        mat.node_tree.nodes["BakeTex"].image = im
         return {"FINISHED"}
 
 
@@ -760,8 +766,8 @@ class VLM_PT_Col_Props(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
         col = context.collection
-        bake_col = vlm_collections.get_collection('BAKE')
-        light_col = vlm_collections.get_collection('LIGHTS')
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+        light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
         if col.name in bake_col.children:
             layout.prop(col.vlmSettings, 'bake_mode')
             layout.prop(col.vlmSettings, 'is_active_mat', expand=True)
@@ -780,12 +786,11 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
-        root_col = vlm_collections.get_collection('ROOT', create=False)
-        bake_col = vlm_collections.get_collection('BAKE', create=False)
-        light_col = vlm_collections.get_collection('LIGHTS', create=False)
-        result_col = vlm_collections.get_collection('BAKE RESULT', create=False)
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+        light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         
-        bake_objects = [obj for obj in context.selected_objects if (root_col is not None and obj.name in root_col.all_objects) and (result_col is None or obj.name not in result_col.all_objects)]
+        bake_objects = [obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap < 0]
         if bake_objects:
             if len(bake_objects) == 1:
                 obj = bake_objects[0]
@@ -813,11 +818,12 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                 row.operator(VLM_OT_state_import_transform.bl_idname, text='-', icon='MATERIAL').enable_transform = True
             layout.separator()
             layout.label(text="Bake visibility:")
-            row = layout.row(align=True)
-            row.scale_y = 1.5
-            row.operator(VLM_OT_state_hide.bl_idname)
-            row.operator(VLM_OT_state_indirect.bl_idname)
-            row.operator(VLM_OT_state_bake.bl_idname)
+            if all((x.vlmSettings.indirect_only for x in bake_objects)):
+                layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Indirect Only', icon='INDIRECT_ONLY_ON').indirect_only = False
+            elif all((not x.vlmSettings.indirect_only for x in bake_objects)):
+                layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Default render', icon='INDIRECT_ONLY_OFF').indirect_only = True
+            else:
+                layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Mixed', icon='REMOVE').indirect_only = True
             if len(bake_objects) == 1 and bake_col and bake_objects[0].name in bake_col.all_objects:
                 layout.prop(bake_objects[0].vlmSettings, 'bake_to')
             layout.separator()
@@ -836,6 +842,9 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
             row = layout.row(align=True)
             row.operator(VLM_OT_clear_render_group_cache.bl_idname)
             row.operator(VLM_OT_select_render_group.bl_idname)
+            if len(bake_objects) == 1 and bake_objects[0].type == 'CAMERA':
+                layout.separator()
+                layout.operator(VLM_OT_export_pov.bl_idname)
 
 
 class VLM_PT_3D_Bake_Result(bpy.types.Panel):
@@ -846,8 +855,7 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
-        result_col = vlm_collections.get_collection('BAKE RESULT', create=False)
-        result_objects = [obj for obj in context.selected_objects if result_col is not None and obj.name in result_col.all_objects]
+        result_objects = [obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap >= 0]
         if result_objects:
             if len(result_objects) == 1:
                 props = result_objects[0].vlmSettings
@@ -862,8 +870,30 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
                 layout.prop(props, 'bake_packmap_width')
                 layout.prop(props, 'bake_packmap_height')
                 layout.operator(VLM_OT_select_packmap_group.bl_idname)
-            layout.separator()
-            layout.operator(VLM_OT_load_render_images.bl_idname)
+            has_loaded = False
+            has_unloaded = False
+            bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
+            for obj in result_objects:
+                if obj.vlmSettings.bake_type == 'playfield_fv':
+                    path = f'{bakepath}Solid - {obj.vlmSettings.bake_objects}.exr'
+                    im = vlm_utils.image_by_path(path)
+                    if not os.path.exists(bpy.path.abspath(path)) or im is not None:
+                        has_loaded = True
+                    else:
+                        has_unloaded = True
+                else:
+                    paths = [f'{bakepath}{obj.vlmSettings.bake_name} - Group {i}.exr' for i,_ in enumerate(obj.data.materials)]
+                    images = [vlm_utils.image_by_path(path) for path in paths]
+                    all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
+                    if all_loaded:
+                        has_loaded = True
+                    else:
+                        has_unloaded = True
+            if has_loaded:
+                layout.operator(VLM_OT_load_render_images.bl_idname, text='Unload Renders', icon='RESTRICT_RENDER_ON').is_unload = True
+            else:
+                layout.operator(VLM_OT_load_render_images.bl_idname, text='Load Renders', icon='RESTRICT_RENDER_OFF').is_unload = False
+            layout.operator(VLM_OT_export_bake.bl_idname, icon='EXPORT')
 
 
 class VLM_PT_3D_Selection(bpy.types.Panel):
@@ -874,6 +904,8 @@ class VLM_PT_3D_Selection(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
+        layout.prop(context.scene.vlmSettings, 'render_group_select', expand=True, text='R.Group', icon='RESTRICT_RENDER_OFF')
+        layout.operator(VLM_OT_select_indirect.bl_idname)
         layout.operator(VLM_OT_select_occluded.bl_idname)
 
 
@@ -980,17 +1012,18 @@ classes = (
     VLM_OT_create_bake_meshes,
     VLM_OT_render_packmaps,
     VLM_OT_batch_bake,
-    VLM_OT_state_hide,
-    VLM_OT_state_indirect,
-    VLM_OT_state_bake,
     VLM_OT_state_import_mesh,
     VLM_OT_state_import_transform,
+    VLM_OT_state_indirect_only,
     VLM_OT_clear_render_group_cache,
     VLM_OT_select_render_group,
     VLM_OT_select_packmap_group,
+    VLM_OT_select_indirect,
     VLM_OT_select_occluded,
     VLM_OT_load_render_images,
+    VLM_OT_export_bake,
     VLM_OT_export_vpx,
+    VLM_OT_export_pov,
     )
 preference_classes = (VLM_PT_3D_warning_panel, VLM_PT_Props_warning_panel, VLM_OT_install_dependencies, VLM_preferences)
 registered_classes = []

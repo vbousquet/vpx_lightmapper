@@ -9,6 +9,7 @@ TODO
 - Rewrite VBS fader to apply a fading curve based on filament temperature, adapting color (K to RGB) and intensity (using the HDR part, to view filament cooling down in flashers :))
 - When baking, perform sanity checks: Check for collection off
 - Evaluate performing HDR with multiple lightmap (1 for 0-1, then 1 for 1-256)
+- Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled
 
 - Add support for basic UV projected movables that follow the same path but generate their own mesh even for lightmaps
 - Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
@@ -26,24 +27,24 @@ TODO
   . Guarantee a scale of 1 (by iterative packing, disabling all scaling)
   . Build packmap by data transfer (RGBA pixel data copy using a padded mask), not rendering which may cause bluriness (unaligned pixels and loose precision on borders)
 
-- Occluder selection tools delete compositor nodes... Save them and restore them afterward
 
 - Allow the user to select the final tonemapping
 
 - Add glow map baking (camera space post process bake)
-- In a split light group, bake same VPX lights together
 - When loading library, update existing node groups instead of skipping them
 
 - Include an asset folder, register it as an asset library when the plugin is activated, move the core assets to this asset library instead of loading them directly, populate with additional assets (screws, bulbs, posts, inserts, materials,...)
 
 - Simplify the core materials, they can be done with simple Principled BSDF
 
-- Add the ability to bake additional environment lighting as additive lighting (base bake = dark pub or even no IBL, then additional for lit up room)
 
-- Add support for multiple object to be baked to the same target (for example a simple playfield mesh which holds the bake of the playfield, cut outs, and inserts)
 
 
 Closed items:
+- In a split light group, bake same VPX lights together
+- Occluder selection tools delete compositor nodes... Save them and restore them afterward
+- Add the ability to bake additional environment lighting as additive lighting (base bake = dark pub or even no IBL, then additional for lit up room)
+- Add support for multiple object to be baked to the same target (for example a simple playfield mesh which holds the bake of the playfield, cut outs, and inserts)
 - Add support for using different scales: vpx/inches/cm
 - When loading library, update existing node groups instead of reimporting them => now they are skipped (updating would be better)
 - When baking packmap, apply adjusted tonemapping to get correct color after tonemapping in VPX

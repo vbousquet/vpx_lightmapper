@@ -46,81 +46,22 @@ def delete_collection(col):
     bpy.data.collections.remove(col)
 
 
-def get_collection(name, create=True):
-    context = bpy.context
-    if name == 'ROOT':
-        n, c = create_collection(context, "VPX Light Mapper", context.scene.collection, create)
-        return c
-    if name == 'SETUP':
-        n, c = create_collection(context, "Setup", get_collection('ROOT', create), create)
-        return c
-    if name == 'TRASH':
-        n, c = create_collection(context, "Trash", get_collection('ROOT', create), create)
-        if n: find_layer_collection(context.view_layer.layer_collection, c).exclude = True
-        return c
-    if name == 'HIDDEN':
-        n, c = create_collection(context, "Hidden", get_collection('ROOT', create), create)
-        if n: find_layer_collection(context.view_layer.layer_collection, c).exclude = True
-        return c
-    if name == 'INDIRECT':
-        n, c = create_collection(context, "Indirect", get_collection('ROOT', create), create)
-        if n: find_layer_collection(context.view_layer.layer_collection, c).indirect_only = True
-        return c
-    if name == 'BAKE TARGET':
-        n, c = create_collection(context, "Bake Target", get_collection('ROOT', create), create)
-        if n: c.hide_render = True
-        return c
-    if name == 'LIGHTS':
-        n, c = create_collection(context, "Light Groups", get_collection('ROOT', create), create)
-        return c
-    if name == 'WORLD':
-        n, c = create_collection(context, "World", get_collection('LIGHTS', create), create)
-        if n: c.vlmSettings.light_mode = 'world'
-        return c
-    if name == 'GI':
-        n, c = create_collection(context, "GI", get_collection('LIGHTS', create), create)
-        if n: c.vlmSettings.light_mode = 'group'
-        return c
-    if name == 'INSERTS':
-        n, c = create_collection(context, "Inserts", get_collection('LIGHTS', create), create)
-        if n: c.vlmSettings.light_mode = 'split'
-        return c
-    if name == 'FLASHERS':
-        n, c = create_collection(context, "Flashers", get_collection('LIGHTS', create), create)
-        if n: c.vlmSettings.light_mode = 'split'
-        return c
-    if name == 'BAKE':
-        n, c = create_collection(context, "Bake Groups", get_collection('ROOT', create), create)
-        return c
-    if name == 'BAKE DEFAULT':
-        n, c = create_collection(context, "Default", get_collection('BAKE', create), create)
-        if n:
-            c.vlmSettings.bake_mode = 'default'
-        return c
-    if name == 'BAKE ACTIVE':
-        n, c = create_collection(context, "Active", get_collection('BAKE', create), create)
-        if n: c.vlmSettings.bake_mode = 'default'
-        return c
-    if name == 'BAKE PLAYFIELD':
-        n, c = create_collection(context, "Playfield", get_collection('BAKE', create), create)
-        if n: c.vlmSettings.bake_mode = 'playfield_fv'
-        return c
-    if name == 'BAKE RESULT':
-        n, c = create_collection(context, "Bake Result", get_collection('ROOT', create), create)
-        return c
-    if name == 'BAKETMP':
-        n, c = create_collection(context, "Bake Temp", get_collection('ROOT', create), create)
-        return c
-    if name == 'LIGHTTMP':
-        n, c = create_collection(context, "Light Temp", get_collection('ROOT', create), create)
-        return c
+def unlink_collection(col):
+    for sub_col in bpy.data.collections:
+        if col.name in sub_col.children:
+            sub_col.children.unlink(col)
 
 
-def setup_collections():
-    default_col_ids = ['ROOT', 'SETUP', 'HIDDEN', 'INDIRECT', 'BAKE TARGET', 'LIGHTS', 'WORLD', 'GI', 'INSERTS', 'FLASHERS', 'BAKE', 'BAKE DEFAULT', 'BAKE ACTIVE', 'BAKE PLAYFIELD']
-    for id in default_col_ids:
-        get_collection(id)
-    get_collection('BAKE PLAYFIELD').vlmSettings.bake_mode = 'playfield'
+def get_collection(parent_col, col_name, create=True):
+    if col_name in parent_col.children:
+        return parent_col.children[col_name]
+    if create:
+        print(f'. Creating collection {col_name} in {parent_col.name}')
+        new_col = bpy.data.collections.new(col_name)
+        new_col.name = col_name # Force naming
+        parent_col.children.link(new_col)
+        return new_col
+    return None
 
 
 def push_state(root_col=None):
@@ -174,7 +115,8 @@ def restore_all_col_links(saved_state):
 
 def exclude_all(context, root_col, exclude=True):
     rlc = context.view_layer.layer_collection
-    find_layer_collection(rlc, root_col).exclude = exclude
+    root_view_layer = find_layer_collection(rlc, root_col) # May be None for scene collection
+    if root_view_layer: root_view_layer.exclude = exclude
     for col in root_col.children:
         exclude_all(context, col, exclude)
 

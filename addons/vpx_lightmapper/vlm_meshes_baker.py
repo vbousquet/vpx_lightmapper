@@ -68,21 +68,36 @@ def create_bake_meshes(op, context):
         op.report({'ERROR'}, 'Deform camera mode is not supported by the lightmapper')
         return {'CANCELLED'}
 
-    global_scale = vlm_utils.get_global_scale(context)
-
     ctx_area = next((a for a in context.screen.areas if a.type == 'VIEW_3D'), None)
     if not ctx_area:
         op.report({'ERROR'}, 'This operator must be used with a 3D view active')
         return {'CANCELLED'}
     ctx_area.regions[-1].data.view_perspective = 'CAMERA'
 
+    root_bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+    if not root_bake_col:
+        op.report({'ERROR'}, "No 'VLM.Bake' collection to process")
+        return {'CANCELLED'}
+
+    light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
+    if not light_col:
+        op.report({'ERROR'}, "No 'VLM.Lights' collection to process")
+        return {'CANCELLED'}
+
+    camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    if not camera:
+        op.report({'ERROR'}, 'Bake camera is missing')
+        return {'CANCELLED'}
+
     print("\nCreating all bake meshes")
     start_time = time.time()
-    camera = bpy.data.objects['Bake Camera']
+    global_scale = vlm_utils.get_global_scale(context)
+
     vlmProps = context.scene.vlmSettings
     n_render_groups = vlm_utils.get_n_render_groups(context)
     cursor_loc = context.scene.cursor.location
     context.scene.cursor.location = camera.location # Used for sorting faces by distance from view point
+    result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result')
 
     # Purge unlinked datas to avoid wrong names
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -113,30 +128,6 @@ def create_bake_meshes(op, context):
             data_to.materials = [name for name in data_from.materials if name == "VPX.Core.Mat.PackMap"]
             data_to.node_groups = data_from.node_groups
     
-    # Create temp collection and setup for rendering (exclude all baked/indirect objects as indirect and temp col as render target)
-    col_state = vlm_collections.push_state()
-    rlc = context.view_layer.layer_collection
-    tmp_col = vlm_collections.get_collection('BAKETMP')
-    indirect_col = vlm_collections.get_collection('INDIRECT')
-    result_col = vlm_collections.get_collection('BAKE RESULT')
-    lights_col = vlm_collections.get_collection('LIGHTS')
-    root_bake_col = vlm_collections.get_collection('BAKE')
-    vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('HIDDEN')).exclude = True
-    vlm_collections.find_layer_collection(rlc, vlm_collections.get_collection('TRASH')).exclude = True
-    vlm_collections.find_layer_collection(rlc, result_col).exclude = False
-    vlm_collections.find_layer_collection(rlc, lights_col).exclude = True
-    vlm_collections.find_layer_collection(rlc, indirect_col).exclude = False
-    vlm_collections.find_layer_collection(rlc, indirect_col).indirect_only = True
-    vlm_collections.find_layer_collection(rlc, tmp_col).exclude = False
-    vlm_collections.find_layer_collection(rlc, root_bake_col).exclude = False
-    vlm_collections.find_layer_collection(rlc, lights_col).exclude = True
-    for bake_col in root_bake_col.children:
-        vlm_collections.find_layer_collection(rlc, bake_col).exclude = False
-        vlm_collections.find_layer_collection(rlc, bake_col).indirect_only = True
-        # FIXME hide from render all objects marked as such
-        if bake_col.vlmSettings.bake_mode == 'movable':
-            pass
-
     # Prepare the list of lighting situation with a packmap material per render group, and a merge group per light situation
     light_merge_groups = {}
     light_scenarios = vlm_utils.get_lightings(context)
@@ -171,12 +162,12 @@ def create_bake_meshes(op, context):
         print(f"\nBuilding base bake target model for '{bake_col.name}' bake group")
         poly_start = 0
         objects_to_join = []
-        bake_col_object_set = sorted({obj.vlmSettings.bake_to.name if obj.vlmSettings.bake_to else obj.name for obj in bake_col.objects if not obj.hide_render})
+        bake_col_object_set = sorted({obj.vlmSettings.bake_to.name if obj.vlmSettings.bake_to else obj.name for obj in bake_col.objects if not obj.hide_render and not obj.vlmSettings.indirect_only})
         for i, obj_name in enumerate(bake_col_object_set):
             print(f". Adding #{i+1}/{len(bake_col_object_set)}: {obj_name}")
             dup = bpy.data.objects[obj_name].copy()
             dup.data = dup.data.copy()
-            tmp_col.objects.link(dup)
+            result_col.objects.link(dup)
             dup_name = dup.name
             if dup.type != 'MESH':
                 bpy.ops.object.select_all(action='DESELECT')
@@ -193,7 +184,7 @@ def create_bake_meshes(op, context):
             dup.data.materials.clear()
             dup.data.validate()
             for i in range(n_render_groups):
-                dup.data.materials.append(light_scenarios['Solid'][4][i])
+                dup.data.materials.append(list(light_scenarios.values())[0][4][i])
             for poly in dup.data.polygons:
                 poly.material_index = dup.vlmSettings.render_group
             override = context.copy()
@@ -401,13 +392,12 @@ def create_bake_meshes(op, context):
         
         print(f'. Base mesh has {len(bake_mesh.polygons)} faces and {len(bake_mesh.vertices)} vertices')
         bake_meshes.append((bake_col, bake_mesh))
+        result_col.objects.unlink(bake_target)
 
     # Merge bake mesh accross bake groups for the light mesh, then extrude it along normal according to its shell factor, and compute its visibility map
     prunemap_width = int(opt_lightmap_prune_res * opt_ar)
     prunemap_height = opt_lightmap_prune_res
     print(f'\nCreating base lightmap meshes (prune map size={prunemap_width}x{prunemap_height})')
-    bake_target = bpy.data.objects[bake_target_name]
-    bake_mesh = bake_target.data
     light_mesh = bpy.data.meshes.new('LightMesh')
     bm = bmesh.new()
     for bake_col, bake_mesh in bake_meshes:
@@ -420,14 +410,14 @@ def create_bake_meshes(op, context):
     bm.to_mesh(light_mesh)
     bm.free()
     for index in range(n_render_groups):
-        light_mesh.materials.append(light_scenarios['Solid'][4][index])
+        light_mesh.materials.append(list(light_scenarios.values())[0][4][index])
     obj = bpy.data.objects.new(f"LightMesh", light_mesh)
-    tmp_col.objects.link(obj)
+    result_col.objects.link(obj)
     bpy.ops.object.select_all(action='DESELECT')
     context.view_layer.objects.active = obj
     obj.select_set(True)
     lightmap_vmap = build_visibility_map(light_mesh, n_render_groups, prunemap_width, prunemap_height)
-    tmp_col.objects.unlink(obj)
+    result_col.objects.unlink(obj)
 
     bake_results = []
     print(f'\nOptimizing lightmap meshes (prune map size={prunemap_width}x{prunemap_height})')
@@ -459,12 +449,12 @@ def create_bake_meshes(op, context):
         else:
             for bake_col, bake_mesh in bake_meshes:
                 bake_group_name = vlm_utils.strip_vlm(bake_col.name)
-                bake_instance = bpy.data.objects.get(f'BM.{bake_group_name}')
+                bake_instance = bpy.data.objects.get(f'BM.{name}.{bake_group_name}')
                 if bake_instance:
                     vlm_collections.unlink(bake_instance)
                     bake_instance.data = bake_mesh.copy()
                 else:
-                    bake_instance = bpy.data.objects.new(f'BM.{bake_group_name}', bake_mesh.copy())
+                    bake_instance = bpy.data.objects.new(f'BM.{name}.{bake_group_name}', bake_mesh.copy())
                 for index in range(n_render_groups):
                     bake_instance.data.materials[index] = materials[index]
                 bake_instance.vlmSettings.bake_name = name
@@ -583,21 +573,11 @@ def create_bake_meshes(op, context):
                 packed_density += compute_uvmap_density(obj.data, obj.data.uv_layers["UVMap Packed"])
             print(f'.  Packmap #{index}: {density:>6.2%} target density for {len(bakes)} objects => {w:>4}x{h:>4} texture size with {packed_density:>6.2%} effective packed density')
 
-    # Final view setup (hide bake groups and lights to preview the result)
-    context.scene.cursor.location = cursor_loc
-    vlm_collections.pop_state(col_state)
-    vlm_collections.delete_collection(tmp_col)
-    vlm_collections.find_layer_collection(rlc, result_col).exclude = False
-    vlm_collections.find_layer_collection(rlc, lights_col).exclude = True
-    vlm_collections.find_layer_collection(rlc, root_bake_col).exclude = True
-    vlm_collections.find_layer_collection(rlc, indirect_col).exclude = True
-
-    # Purge unlinked datas
+    # Purge unlinked datas and clean up
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
     print(f"\nbake meshes created in {str(datetime.timedelta(seconds=time.time() - start_time))}")
 
     context.scene.vlmSettings.last_bake_step = 'meshes'
-    
     return {'FINISHED'}
 
 
