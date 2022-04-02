@@ -208,6 +208,7 @@ def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_
             scene.render.border_max_x = max_x
             scene.render.border_min_y = 1 - max_y
             scene.render.border_max_y = 1 - min_y
+            print(f". light scenario '{name}' influence area computed to: {influence}")
             if not check_min_render_size(scene):
                 print(f". light scenario '{name}' has no render region, skipping (influence area: {influence})")
                 return None, None
@@ -215,9 +216,9 @@ def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_
             colored_lights = [o for o in lights if o.type=='LIGHT']
             prev_colors = [o.data.color for o in colored_lights]
             for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
-            initial_state = (2, vlm_collections.move_all_to_col(lights, render_col), scene, prev_world, colored_lights, prev_colors)
+            initial_state = (2, lights, colored_lights, prev_colors)
         else:
-            initial_state = (1, vlm_collections.move_all_to_col(lights, render_col), scene, prev_world)
+            initial_state = (1, lights)
     else:
         scene.render.use_border = False
         scene.world = light_col.vlmSettings.world
@@ -225,20 +226,23 @@ def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_
         if bake_info_group:
             bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 1.0
             bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 0.0
-        initial_state = (0, vlm_collections.move_all_to_col(lights, render_col), scene, prev_world)
-    return initial_state, lambda initial_state : restore_light_setup(initial_state, bake_info_group)
+        initial_state = (0, lights)
+    for light in lights:
+        render_col.objects.link(light)
+    return initial_state, lambda initial_state : restore_light_setup(initial_state, render_col, lights, scene, prev_world, bake_info_group)
 
 
-def restore_light_setup(initial_state, bake_info_group):
+def restore_light_setup(initial_state, render_col, lights, scene, prev_world, bake_info_group):
     """Restore state after setting up a light scenario for rendering
     """
-    if initial_state[0] == 2: # RGB led, restore colors
-        for obj, color in zip(initial_state[4], initial_state[5]): obj.data.color = color
-    vlm_collections.restore_all_col_links(initial_state[1])
-    initial_state[2].world = initial_state[3]
+    scene.world = prev_world
+    for light in lights:
+        render_col.objects.unlink(light)
     if bake_info_group:
         bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 0.0
         bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 0.0
+    if initial_state[0] == 2: # RGB led, restore colors
+        for obj, color in zip(initial_state[2], initial_state[3]): obj.data.color = color
 
     
 def render_all_groups(op, context):
@@ -310,9 +314,9 @@ def render_all_groups(op, context):
     scene.view_layers[0].use_pass_z = False
     scene.use_nodes = True
     if context.scene.use_nodes:
+        # FIXME
         scene.node_tree.nodes = context.scene.node_tree.nodes
         scene.node_tree.links = context.scene.node_tree.links
-        pass # FIXME
     else:
         nodes = scene.node_tree.nodes
         links = scene.node_tree.links
@@ -403,7 +407,6 @@ def render_all_groups(op, context):
         bpy.data.meshes.remove(pf_mesh)
         
     # Load the group masks to filter out the obviously non influenced scenarios
-    print(n_render_groups)
     mask_path = vlm_utils.get_bakepath(context, type='MASKS')
     group_masks = []
     for i in range(n_render_groups):
@@ -414,7 +417,9 @@ def render_all_groups(op, context):
     for group_index, group_mask in enumerate(group_masks):
         objects = [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == group_index]
         n_objects = len(objects)
-        initial_collections = vlm_collections.move_all_to_col(objects, render_col)
+        for obj in objects:
+            indirect_col.objects.unlink(obj)
+            render_col.objects.link(obj)
         loaded = mask = None
         for i, (name, scenario) in enumerate(light_scenarios.items(), start=1):
             render_path = f'{bakepath}{name} - Group {group_index}.exr'
@@ -422,37 +427,8 @@ def render_all_groups(op, context):
                 state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col, bake_info_group)
                 if state:
                     nodes['VLM.IsLightmap'].outputs[0].default_value = 1 if scenario[1] else 0
-                    # Disabled since there should not be any border issue and test don't show this as usefull
-                    if False and next((obj for obj in objects if obj.vlmSettings.bake_to is not None), None) is not None:
-                        # If we have objects that are baked to bake targets, we compute an alpha mask for the group and apply it to the renders
-                        # The alpha mask is the alpha channel of a render of the objects of the group, replacing the one which have bake targets with there targets (to get proper alpha blending on borders)
-                        if mask is None:
-                            mask_path = f'{bakepath}Group {group_index} Mask.exr'
-                            loaded, mask = vlm_utils.get_image_or_black(mask_path)
-                            if loaded == 'black':
-                                print(f". Rendering alpha mask for group #{group_index} for bake targets")
-                                restore_func(state)
-                                bake_sources = [obj for obj in objects if obj.vlmSettings.bake_to is not None]
-                                bake_targets = [obj.vlmSettings.bake_to for obj in bake_sources]
-                                initial_bake_target_collections = vlm_collections.move_all_to_col(bake_targets, tmp_col)
-                                for obj in bake_sources: obj.hide_render = True
-                                n_max_bounces = scene.cycles.max_bounces
-                                scene.use_nodes = False
-                                scene.render.filepath = mask_path
-                                scene.cycles.max_bounces = 1
-                                bpy.ops.render.render(write_still=True, scene=scene.name)
-                                scene.cycles.max_bounces = n_max_bounces
-                                scene.use_nodes = True
-                                vlm_collections.restore_all_col_links(initial_bake_target_collections)
-                                for obj in bake_sources: obj.hide_render = False
-                                loaded = 'loaded'
-                                mask = bpy.data.images.load(mask_path, check_existing=False)
-                                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col, bake_info_group)
-                        nodes['VLM.UseOverlay'].outputs[0].default_value = 1
-                        nodes['VLM.AlphaMask'].image = mask
-                    else:
-                        nodes['VLM.UseOverlay'].outputs[0].default_value = 0
-                        nodes['VLM.AlphaMask'].image = None
+                    nodes['VLM.UseOverlay'].outputs[0].default_value = 0
+                    nodes['VLM.AlphaMask'].image = None
                     print(f". {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%} Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}' ({i}/{n_lighting_situations})")
                     scene.render.filepath = render_path
                     bpy.ops.render.render(write_still=True, scene=scene.name)
@@ -463,7 +439,9 @@ def render_all_groups(op, context):
                     n_skipped += 1
             else:
                 n_existing += 1
-        vlm_collections.restore_all_col_links(initial_collections)
+        for obj in objects:
+            render_col.objects.unlink(obj)
+            indirect_col.objects.link(obj)
         if mask is not None and loaded == 'loaded':
             bpy.data.images.remove(mask)
 
