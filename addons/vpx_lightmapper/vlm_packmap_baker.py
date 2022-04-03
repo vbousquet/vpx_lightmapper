@@ -150,6 +150,12 @@ def render_packmaps_bake(op, context, sequential_baking):
     """Render all packmaps corresponding for the available current bake results.
     Implementation using Blender Cycle's builtin bake. This works perfectly but is rather slow.
     """
+
+    result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+    if not result_col:
+        op.report({'ERROR'}, "No 'VLM.Result' collection to process")
+        return {'CANCELLED'}
+
     opt_force_render = False # Force rendering even if cache is available
     opt_tex_factor = float(context.scene.vlmSettings.packmap_tex_factor)
     opt_padding = context.scene.vlmSettings.padding
@@ -158,17 +164,17 @@ def render_packmaps_bake(op, context, sequential_baking):
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
     
     cg = vlm_utils.push_render_settings(True)
-    col_state = vlm_collections.push_state()
 
     # FIXME setup color grading according to VPX tone mapping (experimental, to be improved)
     context.scene.view_settings.view_transform = 'Filmic'
-    context.scene.view_settings.look = 'Low Contrast'
-    context.scene.view_settings.exposure = -3
+    context.scene.view_settings.look = 'None'
+    context.scene.view_settings.exposure = 0
     context.scene.view_settings.gamma = 1
+    #context.scene.view_settings.look = 'Low Contrast'
+    #context.scene.view_settings.exposure = -3
+    #context.scene.view_settings.gamma = 1
 
     rlc = context.view_layer.layer_collection
-    result_col = vlm_collections.get_collection('BAKE RESULT')
-    vlm_collections.find_layer_collection(rlc, result_col).exclude = False
     bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
     vlm_utils.mkpath(bakepath)
     packmap_index = 0
@@ -197,7 +203,7 @@ def render_packmaps_bake(op, context, sequential_baking):
                 n_materials = len(obj.data.materials)
                 brightness = vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale) if obj.vlmSettings.bake_type == 'lightmap' else 1.0
                 print(f'  . {obj.name} => HDR Scale: {obj.vlmSettings.bake_hdr_scale:>7.2f} => Brightness factor: {brightness:>7.2f}')
-                if sequential_baking: # Bake each render gorup separately. Slow but nneded by low memory system
+                if sequential_baking: # Bake each render group separately. Slow but needed by low memory system
                     for i in range(n_materials):
                         if obj.vlmSettings.bake_type == 'playfield_fv': # FIXME reimplement Solid does not mean anything
                             path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}Solid - {obj.vlmSettings.bake_objects}.exr"
@@ -251,7 +257,6 @@ def render_packmaps_bake(op, context, sequential_baking):
 
         packmap_index += 1
 
-    vlm_collections.pop_state(col_state)
     vlm_utils.pop_render_settings(cg)
 
 

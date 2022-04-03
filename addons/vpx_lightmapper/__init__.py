@@ -800,6 +800,8 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                 if light_col and obj.name in light_col.all_objects:
                     layout.prop(obj.vlmSettings, 'is_rgb_led', expand=True)
                     layout.prop(obj.vlmSettings, 'enable_aoi', expand=True)
+                if vlm_utils.is_part_of_bake_category(obj, 'movable'):
+                    layout.prop(obj.vlmSettings, 'movable_influence', expand=True)
                 layout.separator()
             layout.label(text="Import options:")
             row = layout.row(align=True)
@@ -827,18 +829,21 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
             if len(bake_objects) == 1 and bake_col and bake_objects[0].name in bake_col.all_objects:
                 layout.prop(bake_objects[0].vlmSettings, 'bake_to')
             layout.separator()
-            single_group = -1
-            for obj in bake_objects:
-                if single_group == -1:
-                    single_group = obj.vlmSettings.render_group
-                elif single_group != obj.vlmSettings.render_group:
-                    single_group = -2
-            if single_group == -2:
-                layout.label(text="Multiple render groups")
-            elif single_group == -1:
-                layout.label(text="Undefined render groups")
+            if len(bake_objects) == 1:
+                layout.prop(obj.vlmSettings, 'render_group', text='Render Group', expand=True)
             else:
-                layout.label(text=f"Render group #{single_group}")
+                single_group = -1
+                for obj in bake_objects:
+                    if single_group == -1:
+                        single_group = obj.vlmSettings.render_group
+                    elif single_group != obj.vlmSettings.render_group:
+                        single_group = -2
+                if single_group == -2:
+                    layout.label(text="Multiple render groups")
+                elif single_group == -1:
+                    layout.label(text="Undefined render groups")
+                else:
+                    layout.label(text=f"Render Group #{single_group}")
             row = layout.row(align=True)
             row.operator(VLM_OT_clear_render_group_cache.bl_idname)
             row.operator(VLM_OT_select_render_group.bl_idname)

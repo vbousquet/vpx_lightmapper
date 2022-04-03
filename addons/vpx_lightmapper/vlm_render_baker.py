@@ -343,6 +343,8 @@ def render_all_groups(op, context):
     vlm_collections.find_layer_collection(scene.view_layers[0].layer_collection, indirect_col).indirect_only = True
     for obj in bake_col.all_objects:
         indirect_col.objects.link(obj)
+        if vlm_utils.is_part_of_bake_category(obj, 'movable'):
+            obj.hide_render = obj.vlmSettings.movable_influence != 'indirect'
     
     n_render_groups = vlm_utils.get_n_render_groups(context)
     light_scenarios = vlm_utils.get_lightings(context)

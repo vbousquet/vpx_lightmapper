@@ -203,12 +203,34 @@ def create_bake_meshes(op, context):
         
         if len(objects_to_join) == 0: continue
         
-        override = context.copy()
-        objects_to_join[0].name = 'VLM.Bake Target'
-        bake_target_name = objects_to_join[0].name
-        override["object"] = override["active_object"] = objects_to_join[0]
-        override["selected_objects"] = override["selected_editable_objects"] = objects_to_join
-        bpy.ops.object.join(override)
+        # Create joined mesh
+        bake_mesh = bpy.data.meshes.new('VLM.Bake Target')
+        bake_mesh.materials.clear()
+        for index in range(n_render_groups):
+            bake_mesh.materials.append(list(light_scenarios.values())[0][4][i])
+        bm = bmesh.new()
+        poly_start = 0
+        for obj in objects_to_join:
+            bm.from_mesh(obj.data)
+            bm.faces.ensure_lookup_table()
+            poly_end = len(bm.faces)
+            for poly in range(poly_start, poly_end):
+                bm.faces[poly].material_index  = obj.vlmSettings.render_group
+            poly_start = poly_end
+            result_col.objects.unlink(obj)
+        bm.to_mesh(bake_mesh)
+        bm.free()
+        bake_mesh.validate()
+        bake_target = bpy.data.objects.new('VLM.Bake Target', bake_mesh)
+        bake_target_name = bake_target.name
+        result_col.objects.link(bake_target)
+        
+        # override = context.copy()
+        # objects_to_join[0].name = 'VLM.Bake Target'
+        # bake_target_name = objects_to_join[0].name
+        # override["object"] = override["active_object"] = objects_to_join[0]
+        # override["selected_objects"] = override["selected_editable_objects"] = objects_to_join
+        # bpy.ops.object.join(override)
         
         bake_target = bpy.data.objects[bake_target_name]
         override["object"] = override["active_object"] = bake_target
@@ -443,7 +465,7 @@ def create_bake_meshes(op, context):
             bake_instance.vlmSettings.bake_hdr_scale = hdr_range
             bake_instance.vlmSettings.bake_name = name
             bake_instance.vlmSettings.bake_type = 'lightmap'
-            bake_instance.vlmSettings.bake_light = lights[0].vlmSettings.vpx_object
+            if lights: bake_instance.vlmSettings.bake_light = lights[0].vlmSettings.vpx_object
             bake_instance.vlmSettings.bake_tex_factor = compute_uvmap_density(bake_instance.data, bake_instance.data.uv_layers["UVMap"])
             bake_results.append(bake_instance)
         else:

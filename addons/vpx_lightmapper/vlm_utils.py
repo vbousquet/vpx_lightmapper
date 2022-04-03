@@ -34,6 +34,7 @@ def get_global_scale(context):
     if context.scene.vlmSettings.units_mode == 'vpx':
         return 0.01 # VPX units
     else:
+        # 50 VP units = 1 1/16" ball = 1.0625" = 2.69875 cm
         return 0.01 * 2.69875 / 50 # Metric scale (imperial is performed by blender itself)
 
 
@@ -243,11 +244,7 @@ def is_rgb_led(objects):
         
 
 def is_part_of_bake_category(obj, category):
-    is_movable = True
-    for col in obj.users_collection:
-        if col.vlmSettings.bake_mode != category:
-            is_movable = False
-    return is_movable
+    return next((col for col in obj.users_collection if col.vlmSettings.bake_mode == category), None) is not None
 
 
 def brightness_from_hdr(hdr_range):
@@ -269,9 +266,9 @@ def get_lightings(context):
         elif light_col.vlmSettings.light_mode == 'group': # Lightmap of a group of lights
             light_scenarios[light_col.name] = [light_col.name, True, light_col, lights, None]
         elif light_col.vlmSettings.light_mode == 'split': # Lightmaps for multiple VPX lights
-            for vpx_light in {l.vlmSettings.vpx_object for l in lights}:
-                light_group = [l for l in lights if l.vlmSettings.vpx_object == vpx_light]
-                name = f"{light_col.name}-{vpx_light}"
+            for vpx_lights in {tuple(sorted(set(l.vlmSettings.vpx_object.split(';')))) for l in lights}:
+                light_group = [l for l in lights if tuple(sorted(set(l.vlmSettings.vpx_object.split(';')))) == vpx_lights]
+                name = f"{light_col.name}-{vpx_lights[0]}"
                 light_scenarios[name] = [name, True, light_col, light_group, None]
     return light_scenarios
 

@@ -47,22 +47,24 @@ def export_vpx(op, context):
     if context.blend_data.filepath == '':
         op.report({'ERROR'}, 'You must save your project before exporting')
         return {'CANCELLED'}
-    vlmProps = context.scene.vlmSettings
-    result_col = vlm_collections.get_collection('BAKE RESULT')
-    bakepath = vlm_utils.get_bakepath(context)
-    vlm_utils.mkpath(f"{bakepath}Export/")
-    input_path = bpy.path.abspath(vlmProps.table_file)
-    export_mode = vlmProps.export_mode
-    export_image_type = vlmProps.export_image_type
-    bake_col = vlm_collections.get_collection('BAKE')
-    indirect_col = vlm_collections.get_collection('INDIRECT')
-    hide_col = vlm_collections.get_collection('HIDDEN')
-    light_col = vlm_collections.get_collection('LIGHTS')
-    global_scale = vlm_utils.get_global_scale(context)
+
+    input_path = bpy.path.abspath(context.scene.vlmSettings.table_file)
     if not os.path.isfile(input_path):
         op.report({'ERROR'}, f'{input_path} does not exist')
         return {'CANCELLED'}
-    
+
+    result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+    if not result_col:
+        op.report({'ERROR'}, "No 'VLM.Result' collection to process")
+        return {'CANCELLED'}
+
+    bakepath = vlm_utils.get_bakepath(context)
+    vlm_utils.mkpath(f"{bakepath}Export/")
+    export_mode = context.scene.vlmSettings.export_mode
+    export_image_type = context.scene.vlmSettings.export_image_type
+    bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+    light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
+    global_scale = vlm_utils.get_global_scale(context)
     output_path = bpy.path.abspath(f"//{os.path.splitext(bpy.path.basename(input_path))[0]} - VLM.vpx")
     print(f'\nExporting bake results to {bpy.path.basename(output_path)}')
 
@@ -105,7 +107,7 @@ def export_vpx(op, context):
     table_lights = []
     table_flashers = []
     baked_vpx_lights = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in light_col.all_objects))
-    baked_vpx_objects = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in itertools.chain(bake_col.all_objects, indirect_col.all_objects) if not vlm_utils.is_part_of_bake_category(o, 'movable')))
+    baked_vpx_objects = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in itertools.chain(bake_col.all_objects) if not vlm_utils.is_part_of_bake_category(o, 'movable')))
 
     # Remove previous baked models and append the new ones, also hide/remove baked items
     n_read_item = 0
@@ -495,6 +497,7 @@ def export_vpx(op, context):
                     
                     for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap']:
                         sync_color = False
+                        brightness = 1.0 / vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
                         if obj.vlmSettings.bake_light in light_col.children:
                             baked_lights = light_col.children[obj.vlmSettings.bake_light].objects
                             sync_color = vlm_utils.is_rgb_led(baked_lights)
@@ -503,13 +506,17 @@ def export_vpx(op, context):
                             baked_light = context.scene.objects[obj.vlmSettings.bake_light]
                             sync_color = vlm_utils.is_rgb_led([baked_light])
                             vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object.split(';')[0]
-                        brightness = 1.0 / vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
-                        if vpx_name in table_lights:
+                        else:
+                            vpx_name = None
+                        if not vpx_name:
+                            print(f". {obj.name} is not linked to a vpx light/flasher object to be synchronized on")
+                            updates.append((None, 2, elem_ref(export_name(obj.name)), False, brightness))
+                        elif vpx_name in table_lights:
                             updates.append((elem_ref(vpx_name), 0, elem_ref(export_name(obj.name)), sync_color, brightness))
                         elif vpx_name in table_flashers:
                             updates.append((elem_ref(vpx_name), 1, elem_ref(export_name(obj.name)), sync_color, brightness))
                         else:
-                            print(f". {obj.name} is missing a vpx light/flasher object to be synchronized on")
+                            print(f". {obj.name} is linked to the missing vpx light/flasher object {vpx_name}")
                             updates.append((None, 2, elem_ref(export_name(obj.name)), False, brightness))
 
                     in_block = 0 # Search and update existing block if any
@@ -574,7 +581,7 @@ def export_vpx(op, context):
                         code += "	light.FadeSpeedUp = light.Intensity / 50 '100\n"
                         code += "	light.FadeSpeedDown = light.Intensity / 200\n"
                         code += "	If sync_color Then lightmap.Color = light.Colorfull\n"
-                        code += "	Dim t: t = LightTemperature(light, light.GetInPlayStateBool(), light.GetCurrentIntensity() / light.Intensity)\n"
+                        code += "	Dim t: t = LightTemperature(light, light.GetInPlayStateBool(), light.GetInPlayIntensity() / light.Intensity)\n"
                         code += "	'Dim t: t = light.GetCurrentIntensity() / light.Intensity\n"
                         code += "	lightmap.Opacity = intensity_scale * light.IntensityScale * t\n"
                         code += "	lightmap.Visible = lightmap.Opacity > 0.1\n"
@@ -602,7 +609,7 @@ def export_vpx(op, context):
                 wr.write_float(0.0) # Edge
                 wr.write_u32(0x0c) # Thickness
                 wr.write_float(1.0) # Opacity
-                wr.write_u32(0x000000FE) # Active & edge alpha
+                wr.write_u32(0x00000000) # Active & edge alpha
                 pr.write_float(0.0)
                 pr.write_float(0.0)
                 pr.write_float(0.0)
@@ -621,7 +628,7 @@ def export_vpx(op, context):
                 wr.write_float(0.0) # Edge
                 wr.write_u32(0x0c) # Thickness
                 wr.write_float(1.0) # Opacity
-                wr.write_u32(0x000000FF) # Active & edge alpha
+                wr.write_u32(0x00000001) # Active & edge alpha
                 pr.write_float(0.0)
                 pr.write_float(0.0)
                 pr.write_float(0.0)
@@ -640,7 +647,7 @@ def export_vpx(op, context):
                 wr.write_float(0.0) # Edge
                 wr.write_u32(0x0c) # Thickness
                 wr.write_float(1.0) # Opacity
-                wr.write_u32(0x000000FF) # Active & edge alpha
+                wr.write_u32(0x00000001) # Active & edge alpha
                 pr.write_float(0.0)
                 pr.write_float(0.0)
                 pr.write_float(0.0)
