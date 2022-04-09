@@ -16,10 +16,27 @@
 import bpy
 import os
 import math
+import mathutils
 import time
 from . import vlm_utils
 from . import vlm_collections
 from PIL import Image # External dependency
+
+
+def projected_bounds_area(mvp_matrix, obj):
+    max_x = max_y = -10000000
+    min_x = min_y = 10000000
+    if obj.type == 'MESH':
+        corners = [mvp_matrix @ obj.matrix_world @ mathutils.Vector((v.co[0], v.co[1], v.co[2], 1)) for v in obj.data.vertices]
+    else:
+        corners = [mvp_matrix @ obj.matrix_world @ mathutils.Vector((corner[0], corner[1], corner[2], 1)) for corner in obj.bound_box]
+    proj_x = [o for o in map(lambda a: a.x / a.w, corners)]
+    proj_y = [o for o in map(lambda a: a.y / a.w, corners)]
+    min_x = min(min_x, min(proj_x))
+    min_y = min(min_y, min(proj_y))
+    max_x = max(max_x, max(proj_x))
+    max_y = max(max_y, max(proj_y))
+    return (max_x - min_x) * (max_y - min_y)
 
 
 def compute_render_groups(op, context):
@@ -67,33 +84,40 @@ def compute_render_groups(op, context):
     scene.eevee.taa_render_samples = 1
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
-    scene.world = bpy.data.worlds["VPX.Env.Black"]
+    scene.world = None
     scene.use_nodes = False
+
+    modelview_matrix = camera_object.matrix_basis.inverted()
+    projection_matrix = camera_object.calc_matrix_camera(context.evaluated_depsgraph_get(),
+        x = scene.render.resolution_x,
+        y = scene.render.resolution_y,
+        scale_x = scene.render.pixel_aspect_x,
+        scale_y = scene.render.pixel_aspect_y)
+    mvp_matrix = projection_matrix @ modelview_matrix
 
     object_masks = []
     bakepath = vlm_utils.get_bakepath(context, type='MASKS')
     vlm_utils.mkpath(bakepath)
-    all_objects = list(bake_col.all_objects)
-    i = 0 # FIXME count masks
-    while all_objects:
-        obj = all_objects.pop()
+    all_objects = list([o for o in bake_col.all_objects if not o.vlmSettings.indirect_only])
+    for obj in all_objects:
         obj.vlmSettings.render_group = -1
-        if vlm_utils.is_part_of_bake_category(obj, 'movable'):
-            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it is a movable object")
-            continue
+    object_surfaces = [projected_bounds_area(mvp_matrix, o) for o in all_objects]
+    all_objects = sorted(zip(object_surfaces, all_objects), key=lambda pair: pair[0], reverse=True)
+    for i, (area, obj) in enumerate(all_objects, start=1):
         if obj.vlmSettings.indirect_only:
             print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it is only indirectly influencing the scene")
             continue
+        if obj.vlmSettings.render_group != -1: # Render group already defined
+            continue
         if obj.vlmSettings.bake_to:
             scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(obj.vlmSettings.bake_to.name)}.png"
-            obj_group = [o for o in all_objects if o.vlmSettings.bake_to == obj.vlmSettings.bake_to]
+            obj_group = [o for _, o in all_objects if o.vlmSettings.bake_to == obj.vlmSettings.bake_to]
             obj_group.append(obj.vlmSettings.bake_to)
-            all_objects = [o for o in all_objects if o not in obj_group]
-            print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for bake target '{obj.vlmSettings.bake_to.name}' ({[o.name for o in obj_group]})")
+            print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for bake target '{obj.vlmSettings.bake_to.name}' ({[o.name for o in obj_group]} with a total projected area of {area})")
         else:
             scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(obj.name)}.png"
             obj_group = [obj]
-            print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}'")
+            print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}' (projected area of {area})")
         need_render = opt_force_render or not os.path.exists(bpy.path.abspath(scene.render.filepath))
         if not need_render:
             im = Image.open(bpy.path.abspath(scene.render.filepath))
@@ -112,15 +136,16 @@ def compute_render_groups(op, context):
         alpha = im.tobytes("raw", "A")
         n_groups = len(object_masks)
         g = n_groups
-        r = range(0, n_groups) if (i % 2) == 0 else range(n_groups-1, -1, -1)
-        for group_index in r:
+        for group_index in range(n_groups):
             ga = object_masks[group_index]
             if next((b for b in zip(alpha, ga) if b[0] > 0.0 and b[1] > 0.0), None) is None:
                 object_masks[group_index] = [max(b[0],b[1]) for b in zip(alpha, ga)]
                 g = group_index
                 break
-        if g == n_groups: object_masks.append(alpha)
-        for o in obj_group: o.vlmSettings.render_group = g
+        if g == n_groups:
+            object_masks.append(alpha)
+        for o in obj_group:
+            o.vlmSettings.render_group = g
     
     # Save group masks for later use
     for i, group in enumerate(object_masks):
