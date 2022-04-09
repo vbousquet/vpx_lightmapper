@@ -1,3 +1,28 @@
+TODO VPX
+- do not render primitive with alpha = 0 => RenderDynamic same as flasher
+- implement HDR for primitive (very simple, same as flasher)
+- implement unshaded render path for performance
+
+- implement visibility property of mesh_playfield primitive:
+. playfield_mesh is the rendered primitive, and the only one that supports reflections (rendered before)
+. playfield_mesh can be not collidable ?
+  => strangely playfield can't be a toy (see primitive.cpp GetHitShape)
+  => strangely playfield collidable is disabled (see primitive.cpp SetupHitObject)
+. another collidable could be set for the playfield ?
+
+. playfield is always rendered as static (except for camera mode) without depth (to allow mirrored reflections not to be clipped since they are below playfield), then reflections, then playfield depth pass (with alpha test), then other objects (eventually below, using depth test)
+
+Unify rendering, by rendering mirror overlay with playfield and considering playfield like other objects 
+- before hand, prepare static (process all objects the same, including playfield regarding depth)
+- prepare reflections texture (static + dynamic)
+- render static
+- render dynamic
+- render mirror overlay (with an equal depth test) when the playfield is rendered
+
+Better transparency: render from back to front, using blending, especially for playfield
+
+
+
 TODO
 - Implement surface positionning relative to a ramp
 - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)

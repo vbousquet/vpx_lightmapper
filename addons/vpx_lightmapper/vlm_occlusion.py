@@ -54,7 +54,7 @@ def select_occluded(op, context):
     scene.cycles.device = 'GPU'
     scene.cycles.samples = 1
     scene.cycles.use_denoising = False
-    scene.world = bpy.data.worlds["VPX.Env.Black"]
+    scene.world = None #bpy.data.worlds["VPX.Env.Black"]
     scene.use_nodes = True
     scene.view_layers[0].use_pass_combined = False
     scene.view_layers[0].use_pass_z = False

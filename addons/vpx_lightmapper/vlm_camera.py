@@ -134,7 +134,8 @@ def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_
         # adjust aspect ratio and compute camera shift to fill the render output
         modelview_matrix = camera_object.matrix_basis.inverted()
         projection_matrix = camera_object.calc_matrix_camera(context.evaluated_depsgraph_get())
-        max_x = max_y = min_x = min_y = 0
+        max_x = max_y = -10000000
+        min_x = min_y = 10000000
         for obj in bake_col.all_objects:
             if obj.type == 'MESH':
                 bbox_corners = [projection_matrix @ modelview_matrix @ obj.matrix_world @ layback @ mathutils.Vector((corner[0], corner[1], corner[2], 1)) for corner in obj.bound_box]

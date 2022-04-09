@@ -45,21 +45,24 @@ def get_light_influence_radius(light):
         return (None, None)
     if light.type == 'LIGHT':
         light_aois = {
-            0.01: [1.069, 2.019, 4.314, 10.00],
-            0.05: [1.093, 2.139, 4.434, 10.00],
-            0.10: [1.214, 2.223, 4.656, 10.00],
+            0.01: [0.200, 1.069, 2.019, 4.314, 10.00],
+            0.05: [1.093, 1.093, 2.139, 4.434, 10.00],
+            0.10: [1.214, 1.214, 2.223, 4.656, 10.00],
         }
-        emission_strength = 1
+        emission_strength = 0
+        has_emission = False
         if light.data.use_nodes:
             for n in [n for n in light.data.node_tree.nodes if n.bl_idname == 'ShaderNodeEmission']:
                 if n.inputs['Strength'].is_linked:
                     return (None, None) # Strength is not a constant (Unsupported)
+                has_emission = True
                 emission_strength += n.inputs['Strength'].default_value
+        if not has_emission: emission_strength = 1
         if light.data.type == 'POINT' or light.data.type == 'SPOT':
             radius = light.data.shadow_soft_size
             emission = emission_strength * light.data.energy
-            p = math.log10(emission)
-            if p < 3:
+            p = max(0, 1 + math.log10(emission))
+            if p < 4:
                 i = math.floor(p)
                 a = p - i
                 if radius <= 0.01:
@@ -123,7 +126,6 @@ def get_light_influence(scene, depsgraph, camera, light, group_mask):
     if center is None:
         return (0, 1, 0, 1)
     
-    camera_rotation = mathutils.Quaternion(camera.rotation_quaternion)
     modelview_matrix = camera.matrix_world.inverted()
     projection_matrix = camera.calc_matrix_camera(
         depsgraph,
@@ -134,25 +136,27 @@ def get_light_influence(scene, depsgraph, camera, light, group_mask):
     )
     proj = projection_matrix @ modelview_matrix
 
-    light_center = project_point(proj, center)
-    light_xr = (project_point(proj, center + Vector((radius, 0, 0))) - light_center).x # projected radius on x axis
-    light_yr = (project_point(proj, center + camera_rotation @ Vector((0, radius, 0))) - light_center).length # projected radius on y axis
+    aoi = (
+        max(0, project_point(proj, center + Vector((-radius, 0, 0))).x),
+        min(1, project_point(proj, center + Vector(( radius, 0, 0))).x),
+        max(0, project_point(proj, center + camera.rotation_quaternion @ Vector((0,  radius, 0))).y), 
+        min(1, project_point(proj, center + camera.rotation_quaternion @ Vector((0, -radius, 0))).y))
 
-    if light_xr <= 0 or light_yr <= 0:
+    if aoi[1] <= aoi[0] or aoi[3] <= aoi[2]:
         return None
-    min_x = max(  0, int((light_center.x - light_xr) * (w-1)))
-    max_x = min(w-1, int((light_center.x + light_xr) * (w-1)))
-    min_y = max(  0, int((light_center.y - light_yr) * (h-1)))
-    max_y = min(h-1, int((light_center.y + light_yr) * (h-1)))
-    aoi = (max(0, light_center.x-light_xr), min(1, light_center.x+light_xr), max(0, light_center.y-light_yr), min(1, light_center.y+light_yr))
-    # print(f'{light.name} {light.matrix_world} {light.location} {center} => {radius} / {light_center} {light_xr} {light_yr}')
     
     if not mask: # No mask, just return the bounds of the area of influence of the light
         return aoi
+
+    min_x = int(aoi[0] * (w-1))
+    max_x = int(aoi[1] * (w-1))
+    min_y = int(aoi[2] * (h-1))
+    max_y = int(aoi[3] * (h-1))
+    light_center = project_point(proj, center)
     light_center.x *= w - 1
     light_center.y *= h - 1
-    alpha_y = light_yr / light_xr
-    max_r2 = light_xr * (w-1) * light_xr * (w-1)
+    alpha_y = (max_y - min_y) / (max_x - min_x)
+    max_r2 = (max_x - min_x) * (max_x - min_x) / 4
     for y in range(min_y, max_y + 1):
         py = (y - light_center.y) * alpha_y
         py2 = py * py
@@ -271,16 +275,6 @@ def render_all_groups(op, context):
         op.report({'ERROR'}, 'Bake camera is missing')
         return {'CANCELLED'}
 
-    if context.scene.use_nodes and 'VLM.Overlay' not in bpy.data.node_groups:
-        context.scene.use_nodes = True
-        vlm_utils.load_library()
-        op.report({'ERROR'}, 'You must use the provided VLM.Overlay node group in your compositor setup')
-        return {'CANCELLED'}
-
-    if context.scene.use_nodes and not next((node for node in context.scene.node_tree.nodes if node.bl_idname == 'CompositorNodeGroup' and node.node_tree == bpy.data.node_groups['VLM.Overlay']), None):
-        op.report({'ERROR'}, 'You must use the provided VLM.Overlay node group in your compostor setup')
-        return {'CANCELLED'}
-
     start_time = time.time()
     bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
@@ -311,29 +305,8 @@ def render_all_groups(op, context):
     scene.render.film_transparent = True
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
-    scene.view_layers[0].use_pass_z = False
-    scene.use_nodes = True
-    if context.scene.use_nodes:
-        # FIXME
-        scene.node_tree.nodes = context.scene.node_tree.nodes
-        scene.node_tree.links = context.scene.node_tree.links
-    else:
-        nodes = scene.node_tree.nodes
-        links = scene.node_tree.links
-        nodes.clear()
-        links.clear()
-        rl = nodes.new("CompositorNodeRLayers")
-        rl.scene = scene
-        rl.location.x = -200
-        group = nodes.new('CompositorNodeGroup')
-        group.width = 300
-        group.node_tree = bpy.data.node_groups['VLM.Overlay']
-        out = nodes.new("CompositorNodeComposite")
-        out.location.x = 200
-        links.new(rl.outputs[0], group.inputs[0])
-        links.new(rl.outputs[1], group.inputs[1])
-        links.new(group.outputs[0], out.inputs[0])
-    nodes = bpy.data.node_groups['VLM.Overlay'].nodes
+    scene.view_layers[0].use_pass_z = True
+    scene.use_nodes = False
 
     # Setup the scene with all the bake objects with indirect render influence
     indirect_col = bpy.data.collections.new('Indirect')
@@ -342,9 +315,8 @@ def render_all_groups(op, context):
     scene.collection.children.link(render_col)
     vlm_collections.find_layer_collection(scene.view_layers[0].layer_collection, indirect_col).indirect_only = True
     for obj in bake_col.all_objects:
-        indirect_col.objects.link(obj)
-        if vlm_utils.is_part_of_bake_category(obj, 'movable'):
-            obj.hide_render = obj.vlmSettings.movable_influence != 'indirect'
+        if not vlm_utils.is_part_of_bake_category(obj, 'movable') or obj.vlmSettings.movable_influence == 'indirect':
+            indirect_col.objects.link(obj)
     
     n_render_groups = vlm_utils.get_n_render_groups(context)
     light_scenarios = vlm_utils.get_lightings(context)
@@ -420,38 +392,38 @@ def render_all_groups(op, context):
         objects = [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == group_index]
         n_objects = len(objects)
         for obj in objects:
-            indirect_col.objects.unlink(obj)
+            if not vlm_utils.is_part_of_bake_category(obj, 'movable') or obj.vlmSettings.movable_influence == 'indirect':
+                indirect_col.objects.unlink(obj)
             render_col.objects.link(obj)
-        loaded = mask = None
         for i, (name, scenario) in enumerate(light_scenarios.items(), start=1):
             render_path = f'{bakepath}{name} - Group {group_index}.exr'
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
                 state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col, bake_info_group)
+                
+                elapsed = time.time() - start_time
+                msg = f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+                if elapsed > 0 and n_render_performed > 0:
+                    elapsed_per_render = elapsed / n_render_performed
+                    remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
+                    msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
                 if state:
-                    nodes['VLM.IsLightmap'].outputs[0].default_value = 1 if scenario[1] else 0
-                    nodes['VLM.UseOverlay'].outputs[0].default_value = 0
-                    nodes['VLM.AlphaMask'].image = None
-                    print(f". {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%} Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}' ({i}/{n_lighting_situations})")
+                    print(msg)
                     scene.render.filepath = render_path
                     bpy.ops.render.render(write_still=True, scene=scene.name)
                     restore_func(state)
+                    print('\n')
                     n_render_performed += 1
                 else:
-                    print(f". {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%} Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}' ({i}/{n_lighting_situations}) - Skipped (no influence)")
+                    print(f'. {msg} - Skipped (no influence)')
                     n_skipped += 1
             else:
                 n_existing += 1
         for obj in objects:
             render_col.objects.unlink(obj)
-            indirect_col.objects.link(obj)
-        if mask is not None and loaded == 'loaded':
-            bpy.data.images.remove(mask)
+            if not vlm_utils.is_part_of_bake_category(obj, 'movable') or obj.vlmSettings.movable_influence == 'indirect':
+                indirect_col.objects.link(obj)
 
-    nodes['VLM.UseOverlay'].outputs[0].default_value = 0
-    nodes['VLM.IsLightmap'].outputs[0].default_value = 0
-    nodes['VLM.AlphaMask'].image = None
     bpy.data.scenes.remove(scene)
-
     length = time.time() - start_time
     print(f"\nRendering finished in a total time of {vlm_utils.format_time(length)}")
     if n_existing > 0: print(f". {n_existing:>3} renders were skipped since they were already existing")

@@ -426,7 +426,8 @@ def create_bake_meshes(op, context):
         bm.from_mesh(bake_mesh)
     coords = []
     for v in bm.verts:
-        coords.append(v.co + v.normal * shell_size * min(v.calc_shell_factor(), 10.0))
+        #coords.append(v.co + v.normal * shell_size * min(v.calc_shell_factor(), 10.0))
+        coords.append(v.co) # no shell, just use exactly the same coordinates
     for v, nv in zip(bm.verts, coords):
         v.co = nv
     bm.to_mesh(light_mesh)
@@ -481,6 +482,7 @@ def create_bake_meshes(op, context):
                     bake_instance.data.materials[index] = materials[index]
                 bake_instance.vlmSettings.bake_name = name
                 bake_instance.vlmSettings.bake_objects = bake_group_name
+                bake_instance.vlmSettings.bake_hdr_scale = 1.0
                 if bake_col.vlmSettings.bake_mode.startswith('playfield'):
                     uv_layer = bake_instance.data.uv_layers['UVMap']
                     uv_layer_packed = bake_instance.data.uv_layers['UVMap Packed']
@@ -528,26 +530,27 @@ def create_bake_meshes(op, context):
         bake_density = bake.vlmSettings.bake_tex_factor
         if bake.vlmSettings.bake_type == 'playfield':
             bake.vlmSettings.bake_packmap = len(packmaps)
-            packmaps.append(([bake], 1, int(opt_tex_size/2), opt_tex_size, True))
+            packmaps.append(([bake], 1, int(opt_tex_size/2), opt_tex_size, True, False))
             bake.vlmSettings.bake_packmap_width = int(opt_tex_size/2)
             bake.vlmSettings.bake_packmap_height = opt_tex_size
         elif bake.vlmSettings.bake_type == 'playfield_fv':
             bake.vlmSettings.bake_packmap = len(packmaps)
-            packmaps.append(([bake], 1, int(opt_tex_size * opt_ar), opt_tex_size, True))
+            packmaps.append(([bake], 1, int(opt_tex_size * opt_ar), opt_tex_size, True, False))
             bake.vlmSettings.bake_packmap_width = int(opt_tex_size * opt_ar)
             bake.vlmSettings.bake_packmap_height = opt_tex_size
         else:
-            for index, (bakes, density, _, _, is_playfield) in enumerate(packmaps):
-                if not is_playfield and density + bake_density <= 1:
+            is_bake_hdr = bake_instance.vlmSettings.bake_hdr_scale > 1.0
+            for index, (bakes, density, _, _, is_playfield, is_hdr) in enumerate(packmaps):
+                if not is_playfield and density + bake_density <= 1 and is_bake_hdr == is_hdr:
                     bake.vlmSettings.bake_packmap = index
-                    packmaps[index] = (bakes + [bake], density + bake_density, -1, -1, is_playfield)
+                    packmaps[index] = (bakes + [bake], density + bake_density, -1, -1, is_playfield, is_hdr)
                     bake_density = 0
                     break
             if bake_density > 0:
                 bake.vlmSettings.bake_packmap = len(packmaps)
-                packmaps.append(([bake], bake_density, -1, -1, False))
+                packmaps.append(([bake], bake_density, -1, -1, False, is_bake_hdr))
     max_level = max(0, opt_tex_size.bit_length() - 1)
-    for index, (bakes, density, w, h, is_playfield) in enumerate(packmaps):
+    for index, (bakes, density, w, h, is_playfield, is_hdr) in enumerate(packmaps):
         if not is_playfield:
             opt_n = 0
             for n in range(max_level, 0, -1):
@@ -558,7 +561,7 @@ def create_bake_meshes(op, context):
             w_n = opt_n - h_n
             tex_width = int(opt_tex_size / (1 << w_n))
             tex_height = int(opt_tex_size / (1 << h_n))
-            packmaps[index] = (bakes, density, tex_width, tex_height, is_playfield)
+            packmaps[index] = (bakes, density, tex_width, tex_height, is_playfield, is_hdr)
             for bake in bakes:
                 bake.vlmSettings.bake_packmap_width = tex_width
                 bake.vlmSettings.bake_packmap_height = tex_height
@@ -574,7 +577,7 @@ def create_bake_meshes(op, context):
                             uv_layer_packed.data[loop_index].uv = (u, v)
 
     print(f'. Bake/light maps merged into {len(packmaps)} packmaps:')
-    for index, (bakes, density, w, h, is_playfield) in enumerate(packmaps):
+    for index, (bakes, density, w, h, is_playfield, is_hdr) in enumerate(packmaps):
         if is_playfield:
             print(f'.  Packmap #{index}: {w:>4}x{h:>4} playfield render')
         else:
@@ -593,7 +596,7 @@ def create_bake_meshes(op, context):
             packed_density = 0
             for obj in bakes:
                 packed_density += compute_uvmap_density(obj.data, obj.data.uv_layers["UVMap Packed"])
-            print(f'.  Packmap #{index}: {density:>6.2%} target density for {len(bakes)} objects => {w:>4}x{h:>4} texture size with {packed_density:>6.2%} effective packed density')
+            print(f'.  Packmap #{index}: {density:>6.2%} target density for {len(bakes)} objects => {w:>4}x{h:>4} texture size with {packed_density:>6.2%} effective packed density, HDR: {is_hdr}')
 
     # Purge unlinked datas and clean up
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)

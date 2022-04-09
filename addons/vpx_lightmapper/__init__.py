@@ -109,6 +109,10 @@ if dependencies_installed:
         importlib.reload(vlm_packmap_baker)
     else:
         from . import vlm_packmap_baker
+    if "vlm_nest" in locals():
+        importlib.reload(vlm_nest)
+    else:
+        from . import vlm_nest
 
 
 def unit_update(self, context):
@@ -636,6 +640,68 @@ class VLM_OT_select_packmap_group(Operator):
         return {"FINISHED"}
 
 
+class VLM_OT_table_uv(Operator):
+    bl_idname = "vlm.set_table_uv"
+    bl_label = "Project Table UV"
+    bl_description = "Set UV to table coordinates"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        l, t, w, h = context.scene.vlmSettings.playfield_size
+        for obj in context.selected_objects:
+            uv_layer = obj.data.uv_layers.active
+            for loop in obj.data.loops:
+                pt = obj.matrix_world @ mathutils.Vector(obj.data.vertices[loop.vertex_index].co)
+                uv_layer.data[loop.index].uv = ((pt[0]-l) / w, (pt[1]-t+h) / h)
+        return {"FINISHED"}
+
+
+class VLM_OT_nest_test(Operator):
+    bl_idname = "vlm.nest_test"
+    bl_label = "Nest 2D"
+    bl_description = "Test Nest 2D algorithm"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        vlm_nest.nest(context)
+        return {"FINISHED"}
+
+
+class VLM_OT_apply_aoi(Operator):
+    bl_idname = "vlm.apply_aoi"
+    bl_label = "Apply AOI"
+    bl_description = "Setup area of influence of selected objects"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    @classmethod
+    def poll(cls, context):
+        camera_object = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+        return camera_object is not None and context.selected_objects
+
+    def execute(self, context):
+        camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+        influence = None
+        for light in context.selected_objects:
+            light_influence = vlm_render_baker.get_light_influence(context.scene, context.view_layer.depsgraph, camera, light, None)
+            if light_influence:
+                if influence:
+                    min_x, max_x, min_y, max_y = influence
+                    min_x2, max_x2, min_y2, max_y2 = light_influence
+                    influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
+                else:
+                    influence = light_influence
+        if influence:
+            min_x, max_x, min_y, max_y = influence
+            context.scene.render.border_min_x = min_x
+            context.scene.render.border_max_x = max_x
+            context.scene.render.border_min_y = 1 - max_y
+            context.scene.render.border_max_y = 1 - min_y
+            context.scene.render.use_border = True
+        else:
+            context.scene.render.use_border = False
+        return {"FINISHED"}
+
+
 class VLM_OT_load_render_images(Operator):
     bl_idname = "vlm.load_render_images_operator"
     bl_label = "Load/Unload Renders"
@@ -783,6 +849,7 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
     bl_category = "VLM"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
+    
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
@@ -850,6 +917,8 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
             if len(bake_objects) == 1 and bake_objects[0].type == 'CAMERA':
                 layout.separator()
                 layout.operator(VLM_OT_export_pov.bl_idname)
+            layout.separator()
+            layout.operator(VLM_OT_table_uv.bl_idname)
 
 
 class VLM_PT_3D_Bake_Result(bpy.types.Panel):
@@ -901,8 +970,8 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
             layout.operator(VLM_OT_export_bake.bl_idname, icon='EXPORT')
 
 
-class VLM_PT_3D_Selection(bpy.types.Panel):
-    bl_label = "Selection"
+class VLM_PT_3D_Tools(bpy.types.Panel):
+    bl_label = "Tools"
     bl_category = "VLM"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -912,6 +981,9 @@ class VLM_PT_3D_Selection(bpy.types.Panel):
         layout.prop(context.scene.vlmSettings, 'render_group_select', expand=True, text='R.Group', icon='RESTRICT_RENDER_OFF')
         layout.operator(VLM_OT_select_indirect.bl_idname)
         layout.operator(VLM_OT_select_occluded.bl_idname)
+        layout.separator()
+        layout.operator(VLM_OT_nest_test.bl_idname)
+        layout.operator(VLM_OT_apply_aoi.bl_idname)
 
 
 class VLM_PT_3D_warning_panel(bpy.types.Panel):
@@ -1008,7 +1080,7 @@ classes = (
     VLM_PT_Col_Props,
     VLM_PT_3D_Bake_Object,
     VLM_PT_3D_Bake_Result,
-    VLM_PT_3D_Selection,
+    VLM_PT_3D_Tools,
     VLM_OT_new,
     VLM_OT_new_from_vpx,
     VLM_OT_update,
@@ -1025,10 +1097,13 @@ classes = (
     VLM_OT_select_packmap_group,
     VLM_OT_select_indirect,
     VLM_OT_select_occluded,
+    VLM_OT_apply_aoi,
+    VLM_OT_table_uv,
     VLM_OT_load_render_images,
     VLM_OT_export_bake,
     VLM_OT_export_vpx,
     VLM_OT_export_pov,
+    VLM_OT_nest_test,
     )
 preference_classes = (VLM_PT_3D_warning_panel, VLM_PT_Props_warning_panel, VLM_OT_install_dependencies, VLM_preferences)
 registered_classes = []

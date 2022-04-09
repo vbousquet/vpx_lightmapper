@@ -165,15 +165,6 @@ def render_packmaps_bake(op, context, sequential_baking):
     
     cg = vlm_utils.push_render_settings(True)
 
-    # FIXME setup color grading according to VPX tone mapping (experimental, to be improved)
-    context.scene.view_settings.view_transform = 'Filmic'
-    context.scene.view_settings.look = 'None'
-    context.scene.view_settings.exposure = 0
-    context.scene.view_settings.gamma = 1
-    #context.scene.view_settings.look = 'Low Contrast'
-    #context.scene.view_settings.exposure = -3
-    #context.scene.view_settings.gamma = 1
-
     rlc = context.view_layer.layer_collection
     bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
     vlm_utils.mkpath(bakepath)
@@ -184,6 +175,7 @@ def render_packmaps_bake(op, context, sequential_baking):
             break
 
         basepath = f"{bakepath}Packmap {packmap_index}"
+        path_exr = bpy.path.abspath(basepath + '.exr')
         path_png = bpy.path.abspath(basepath + '.png')
         path_webp = bpy.path.abspath(basepath + ".webp")
         print(f'. Rendering packmap #{packmap_index} containing {len(objects)} bake/light map')
@@ -249,9 +241,16 @@ def render_packmaps_bake(op, context, sequential_baking):
                 for mat in obj.data.materials:
                     mat.node_tree.nodes["PackMap"].inputs[3].default_value = 1.0 # Preview
                     mat.blend_method = 'BLEND' if is_light else 'OPAQUE'
-            pack_image.filepath_raw = path_png
-            pack_image.file_format = 'PNG'
-            pack_image.save()
+            context.scene.render.image_settings.file_format = 'OPEN_EXR'
+            context.scene.render.image_settings.color_mode = 'RGBA'
+            #context.scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression which is big
+            context.scene.render.image_settings.exr_codec = 'DWAA' # Lossy compression (4x to 10x smaller on lightmaps)
+            context.scene.render.image_settings.color_depth = '16'
+            pack_image.save_render(path_exr, scene=context.scene)
+            context.scene.render.image_settings.file_format = 'PNG'
+            context.scene.render.image_settings.color_mode = 'RGBA'
+            context.scene.render.image_settings.color_depth = '8'
+            pack_image.save_render(path_png, scene=context.scene)
             bpy.data.images.remove(pack_image)
             Image.open(path_png).save(path_webp, 'WEBP')
 
