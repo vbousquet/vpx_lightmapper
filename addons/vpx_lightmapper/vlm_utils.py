@@ -205,12 +205,14 @@ def image_by_path(path):
     return None
 
 
-def get_image_or_black(path):
+def get_image_or_black(path, black_is_none=False):
     existing = image_by_path(path)
     if existing:
         return ('existing', existing)
     elif os.path.exists(bpy.path.abspath(path)):
         return ('loaded', bpy.data.images.load(path, check_existing=False))
+    elif black_is_none:
+        return ('black', None)
     else:
         black_image = bpy.data.images.get('VLM.NoTex')
         if not black_image:
