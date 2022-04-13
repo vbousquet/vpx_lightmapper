@@ -599,7 +599,7 @@ def export_vpx(op, context):
                 n_material_to_add += 1
                 wr.write_data(b'VLM.Bake.Solid\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
                 pr.write_data(b'VLM.Bake.Solid\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
-                wr.write_u32(0xFFFFFF) # Base color
+                wr.write_u32(0x7F7F7F) # Base color (it's white divided by 2 since VPX multiply it by 2 when rendering...)
                 wr.write_u32(0x000000) # Glossy color
                 wr.write_u32(0x000000) # Clearcoat color
                 wr.write_float(0.0) # Wrap lighting
@@ -618,7 +618,7 @@ def export_vpx(op, context):
                 n_material_to_add += 1
                 wr.write_data(b'VLM.Bake.Active\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
                 pr.write_data(b'VLM.Bake.Active\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
-                wr.write_u32(0xFFFFFF) # Base color
+                wr.write_u32(0x7F7F7F) # Base color (it's white divided by 2 since VPX multiply it by 2 when rendering...)
                 wr.write_u32(0x000000) # Glossy color
                 wr.write_u32(0x000000) # Clearcoat color
                 wr.write_float(0.0) # Wrap lighting
