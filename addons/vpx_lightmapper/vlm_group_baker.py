@@ -98,9 +98,9 @@ def compute_render_groups(op, context):
     object_masks = []
     bakepath = vlm_utils.get_bakepath(context, type='MASKS')
     vlm_utils.mkpath(bakepath)
-    all_objects = list([o for o in bake_col.all_objects if not o.vlmSettings.indirect_only])
-    for obj in all_objects:
+    for obj in bake_col.all_objects:
         obj.vlmSettings.render_group = -1
+    all_objects = list([o for o in bake_col.all_objects if not o.vlmSettings.indirect_only])
     object_surfaces = [projected_bounds_area(mvp_matrix, o) for o in all_objects]
     all_objects = sorted(zip(object_surfaces, all_objects), key=lambda pair: pair[0], reverse=True)
     for i, (area, obj) in enumerate(all_objects, start=1):

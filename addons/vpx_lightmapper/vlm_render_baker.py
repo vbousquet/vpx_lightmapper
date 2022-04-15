@@ -281,6 +281,12 @@ def render_all_groups(op, context):
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
     opt_force_render = False # Force rendering even if cache is available
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
+    n_render_groups = vlm_utils.get_n_render_groups(context)
+    light_scenarios = vlm_utils.get_lightings(context)
+    n_lighting_situations = len(light_scenarios)
+    n_render_performed = n_skipped = n_existing = 0
+    n_total_render = n_render_groups * n_lighting_situations
+    bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
 
     # Create temp render scene, using the user render settings and compositor setup if any
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
@@ -318,68 +324,6 @@ def render_all_groups(op, context):
         if not vlm_utils.is_part_of_bake_category(obj, 'movable') or obj.vlmSettings.movable_influence == 'indirect':
             indirect_col.objects.link(obj)
     
-    n_render_groups = vlm_utils.get_n_render_groups(context)
-    light_scenarios = vlm_utils.get_lightings(context)
-    n_lighting_situations = len(light_scenarios)
-    n_render_performed = n_skipped = n_existing = 0
-    n_total_render = n_render_groups * n_lighting_situations
-    bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
-
-
-    # FIXME this needs a full review and is unlikely to work (bake is not tied to the rgiht scene), 'Solid' scenario does not mean anything anymore
-    for col in [col for col in bake_col.children if col.vlmSettings.bake_mode == 'playfield_fv']:
-        print(f'\nBaking solid playfield with fixed view shading {col.name}')
-        playfield_left, playfield_top, playfield_width, playfield_height = scene.vlmSettings.playfield_size
-        playfield_right = playfield_width - playfield_left
-        playfield_bottom = playfield_height - playfield_top
-        pf_h = opt_tex_size
-        pf_w = int(pf_h * playfield_width / playfield_height)
-        pf_bake = bpy.data.images.new('Playfield.Bake.Image', pf_w, pf_h, alpha=True, float_buffer=True)
-        pf_mat = bpy.data.materials.new('Playfield.Bake.Mat')
-        pf_mat.use_nodes = True
-        pf_mat.node_tree.nodes.clear()
-        node_bake = pf_mat.node_tree.nodes.new(type='ShaderNodeTexImage')
-        node_bake.image = pf_bake
-        pf_mat.node_tree.nodes.active = node_bake
-        pf_verts = [(playfield_left, -playfield_bottom, 0.0), (playfield_right, -playfield_bottom, 0.0), (playfield_left, -playfield_top, 0.0), (playfield_right, -playfield_top, 0.0)]
-        pf_mesh = bpy.data.meshes.new("Playfield.Bake.Target")
-        pf_mesh.from_pydata(pf_verts, [], [(0, 1, 3, 2)])
-        pf_mesh.uv_layers.new()
-        pf_mesh.materials.append(pf_mat)
-        pf_obj = bpy.data.objects.new("Playfield.Bake.Temp", pf_mesh)
-        render_col.objects.link(pf_obj)
-        scene.render.bake.use_clear = True
-        scene.render.bake.use_selected_to_active = True
-        ax = scene.render.pixel_aspect_x
-        scene.render.pixel_aspect_x = 1
-        scene.render.bake.cage_extrusion = 10
-        print(f'\nBaking {col.name} to playfield texture under environment lighting')
-        n_total_render += 1
-        vlm_collections.find_layer_collection(rlc, col).indirect_only = False
-        bpy.ops.object.select_all(action='DESELECT')
-        for obj in col.all_objects:
-            obj.select_set(True)
-        scene.view_layers[0].objects.active = pf_obj
-        pf_obj.select_set(True)
-        scenario = light_scenarios['Solid']
-        path_exr = bpy.path.abspath(f'{bakepath}{scenario[0]} - {col.name}.exr')
-        if opt_force_render or not os.path.exists(path_exr):
-            state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, None, tmp_col, bake_info_group)
-            if state:
-                bpy.ops.object.bake(type='COMBINED', margin=0)
-                pf_bake.save_render(path_exr)
-                restore_func(state)
-                n_render_performed += 1
-            else:
-                n_skipped += 1
-        else:
-            n_existing += 1
-        vlm_collections.find_layer_collection(rlc, col).indirect_only = True
-        scene.render.pixel_aspect_x = ax
-        render_col.objects.unlink(pf_obj)
-        bpy.data.images.remove(pf_bake)
-        bpy.data.meshes.remove(pf_mesh)
-        
     # Load the group masks to filter out the obviously non influenced scenarios
     mask_path = vlm_utils.get_bakepath(context, type='MASKS')
     group_masks = []
@@ -395,8 +339,8 @@ def render_all_groups(op, context):
             if not vlm_utils.is_part_of_bake_category(obj, 'movable') or obj.vlmSettings.movable_influence == 'indirect':
                 indirect_col.objects.unlink(obj)
             render_col.objects.link(obj)
-        for i, (name, scenario) in enumerate(light_scenarios.items(), start=1):
-            render_path = f'{bakepath}{name} - Group {group_index}.exr'
+        for i, scenario in enumerate(light_scenarios, start=1):
+            render_path = f'{bakepath}{scenario[0]} - Group {group_index}.exr'
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
                 state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col, bake_info_group)
                 

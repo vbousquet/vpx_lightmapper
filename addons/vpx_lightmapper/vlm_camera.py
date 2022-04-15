@@ -124,7 +124,7 @@ def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_
         sy = s if aspect_ratio < 1.0 else s*aspect_ratio
         min_dist = 0
         for obj in bake_col.all_objects:
-            if obj.type == 'MESH':
+            if obj.type == 'MESH': # and not obj.hide_get() and not obj.hide_render:
                 bbox_corners = [modelview_matrix @ obj.matrix_world @ layback @ mathutils.Vector(corner) for corner in obj.bound_box]
                 proj_x = map(lambda a: abs(sx * a.x + a.z), bbox_corners)
                 proj_y = map(lambda a: abs(sy * a.y + a.z), bbox_corners)
@@ -137,7 +137,7 @@ def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_
         max_x = max_y = -10000000
         min_x = min_y = 10000000
         for obj in bake_col.all_objects:
-            if obj.type == 'MESH':
+            if obj.type == 'MESH': # and not obj.hide_get() and not obj.hide_render:
                 bbox_corners = [projection_matrix @ modelview_matrix @ obj.matrix_world @ layback @ mathutils.Vector((corner[0], corner[1], corner[2], 1)) for corner in obj.bound_box]
                 proj_x = [o for o in map(lambda a: a.x / a.w, bbox_corners)]
                 proj_y = [o for o in map(lambda a: a.y / a.w, bbox_corners)]

@@ -258,21 +258,21 @@ def get_lightings(context):
     """Return the list of lighting situations to be rendered as dictionary of tuples
         (name, is lightmap, light collection, lights, custom data)
     """
-    light_scenarios = {}
+    light_scenarios = []
     light_cols = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
     if light_cols is None: return light_scenarios
     for light_col in (l for l in light_cols.children if not l.hide_render):
         lights = light_col.all_objects
         if light_col.vlmSettings.light_mode == 'solid': # Base solid bake
-            light_scenarios[light_col.name] = [light_col.name, False, light_col, lights, None]
+            light_scenarios.append( [light_col.name, False, light_col, lights, None] )
         elif light_col.vlmSettings.light_mode == 'group': # Lightmap of a group of lights
-            light_scenarios[light_col.name] = [light_col.name, True, light_col, lights, None]
+            light_scenarios.append( [light_col.name, True, light_col, lights, None] )
         elif light_col.vlmSettings.light_mode == 'split': # Lightmaps for multiple VPX lights
             for vpx_lights in {tuple(sorted(set(l.vlmSettings.vpx_object.split(';')))) for l in lights}:
                 light_group = [l for l in lights if tuple(sorted(set(l.vlmSettings.vpx_object.split(';')))) == vpx_lights]
                 name = f"{light_col.name}-{vpx_lights[0]}"
-                light_scenarios[name] = [name, True, light_col, light_group, None]
-    return light_scenarios
+                light_scenarios.append( [name, True, light_col, light_group, None] )
+    return sorted(light_scenarios, key=lambda scenario: scenario[0])
 
 
 def get_n_lightings(context):

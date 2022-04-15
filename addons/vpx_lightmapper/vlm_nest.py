@@ -293,8 +293,6 @@ def nest(context, objects, render_size, tex_w, tex_h):
 
 
 
-
-
 def prepare_nesting(obj, render_size, padding):
     src_w, src_h = render_size
     print(f'Preparing nesting of {obj.name} from {src_w}x{src_h} renders')

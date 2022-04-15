@@ -200,34 +200,6 @@ class VLM_Scene_props(PropertyGroup):
     padding: IntProperty(name="Padding", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
     keep_pf_reflection_faces: BoolProperty(name="Keep playfield reflection", description="Keep faces only visible through playfield reflection", default = False)
-    uv_packer: EnumProperty(
-        items=[
-            ('blender', 'Blender', 'Use Blender internal UV island packing', '', 0),
-            ('uvpacker', 'UVPacker', 'Use UVPacker for packing islands', '', 1),
-        ],
-        name='UV Packer',
-        description='UV Packer to use',
-        default='uvpacker'
-    )
-    packmap_tex_factor: EnumProperty(
-        items=[
-            ('0.25', '1:4', 'Create packmap at a quarter of the render size', '', 0),
-            ('0.5', '1:2', 'Create packmap at half the render size', '', 1),
-            ('1.0', '1:1', 'Create packmap at the render size', '', 2),
-        ],
-        name="Packmap Tex Ratio",
-        default='1.0'
-    )
-    bake_packmap_mode: EnumProperty(
-        items=[
-            ('gpu', 'GPU', 'Render packmap on GPU, fast, low memory requirements, no HDR/padding support', '', 0),
-            ('eevee', 'Eevee', 'Render packmap with eevee ortho, speed is ok, HDR but no padding support', '', 1),
-            ('cycle_seq', 'Cycle Seq', 'Render packmap with Cycle bakes, one render at a time, utterly slow, HDR & padding support', '', 2),
-            ('cycle', 'Cycle', 'Render packmap with Cycle bakes, one bake at a time, rather slow, very high memory requirmeents, HDR & padding support', '', 3),
-        ],
-        name="Packmap mode",
-        default='cycle'
-    )
     # Exporter options
     enable_vpx_reflection: BoolProperty(name="Enable VPX reflection", description="Enable VPX playfield reflection for exported models and lightmaps", default = True)
     export_image_type: EnumProperty(
@@ -262,8 +234,6 @@ class VLM_Collection_props(PropertyGroup):
         items=[
             ('default', 'Default', 'Default bake process', '', 0),
             ('movable', 'Movable', 'Bake to a splitted movable mesh', '', 1),
-            ('playfield', 'Playfield', 'Bake to a dedicated orthographic playfield image', '', 2),
-            ('playfield_fv', 'Playfield Fixed View', 'Bake to a dedicated orthographic playfield image, using fixed view shaders', '', 3)
         ],
         name='Bake Mode',
         description='Bake mode for the selected collection',
@@ -297,35 +267,30 @@ class VLM_Object_props(PropertyGroup):
     enable_glow: BoolProperty(name="Enable Glow", description="Enable light glow", default = False)
     bake_to: PointerProperty(name="Bake To", type=bpy.types.Object, description="Target object used as bake mesh target")
     # Movable objects bake settings
-    movable_lightmap_threshold: FloatProperty(name="Lightmap threshold", description="Light threshold for generating a lightmap (1 for no lightmaps)", default = 1.0)
     movable_influence: EnumProperty(
         items=[
             ('indirect', 'Indirect', 'Allow indirect contribution of this object to other bakes', '', 0),
-            ('hide', 'Hide', 'Hide this object from the other bakes', '', 1),
+            ('hide', 'Hide', 'Hide this object from the other bakes. WARNING: this feature has limited support. see doc.', '', 1),
         ],
         default='indirect'
     )
     # Bake result properties
-    bake_name: StringProperty(name="Lighting", description="Lighting scenario", default="")
-    bake_objects: StringProperty(name="Bake", description="Object or collection of object included in this bake/lightmap", default="")
-    bake_light: StringProperty(name="Sync", description="Object to sync state on", default="")
+    bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
+    bake_objects: StringProperty(name="Bake", description="Object or collection of objects included in this bake/lightmap", default="")
+    bake_sync_light: StringProperty(name="Light", description="Object to sync light state on", default="")
+    bake_sync_trans: StringProperty(name="Trans", description="Object to sync transform on", default="")
     bake_type: EnumProperty(
         items=[
-            ('default', 'Default', "Default non static opaque bake", '', 0),
-            ('static', 'Static', 'Static bake', '', 1),
+            ('default', 'Default', "Default opaque bake", '', 0),
+            ('static', 'Static', 'Static opaque bake', '', 1),
             ('active', 'Active', "'Active', i.e. non opaque, bake", '', 2),
             ('lightmap', 'Lightmap', 'Additive lightmap bake', '', 3),
-            ('playfield', 'Playfield', 'Orthographic playfield sized bake', '', 4),
-            ('playfield_fv', 'Playfield Fixed View', 'Orthographic playfield sized bake, prerendered at target size', '', 5)
         ],
         name="Type",
         default='default'
     )
-    bake_hdr_scale: FloatProperty(name="HDR Scale", description="Light intensity factor to be applied for HDR correction", default=1)
-    bake_tex_factor: FloatProperty(name="Tex Ratio", description="Texture size factor", default=1)
+    bake_hdr_range: FloatProperty(name="HDR Range", description="HDR range of this bake", default=1)
     bake_packmap: IntProperty(name="Packmap", description="ID of output packmap (multiple bakes may share a packmap)", default = -1)
-    bake_packmap_width: IntProperty(name="Width", description="Packmap Texture width", default=1)
-    bake_packmap_height: IntProperty(name="Height", description="Packmap Texture height", default=1)
 
 
 class VLM_OT_new(Operator):
@@ -656,17 +621,6 @@ class VLM_OT_table_uv(Operator):
         return {"FINISHED"}
 
 
-class VLM_OT_nest_test(Operator):
-    bl_idname = "vlm.nest_test"
-    bl_label = "Nest 2D"
-    bl_description = "Test Nest 2D algorithm"
-    bl_options = {"REGISTER", "UNDO"}
-    
-    def execute(self, context):
-        vlm_nest.nest(context)
-        return {"FINISHED"}
-
-
 class VLM_OT_apply_aoi(Operator):
     bl_idname = "vlm.apply_aoi"
     bl_label = "Apply AOI"
@@ -803,9 +757,6 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         layout.prop(vlmProps, "padding")
         layout.prop(vlmProps, "remove_backface", text='Backface')
         layout.prop(vlmProps, "keep_pf_reflection_faces")
-        layout.prop(vlmProps, "uv_packer")
-        layout.prop(vlmProps, "packmap_tex_factor")
-        layout.prop(vlmProps, "bake_packmap_mode")
         layout.prop(vlmProps, "export_image_type")
         layout.prop(vlmProps, "export_mode")
         layout.prop(vlmProps, "enable_vpx_reflection")
@@ -982,7 +933,6 @@ class VLM_PT_3D_Tools(bpy.types.Panel):
         layout.operator(VLM_OT_select_indirect.bl_idname)
         layout.operator(VLM_OT_select_occluded.bl_idname)
         layout.separator()
-        layout.operator(VLM_OT_nest_test.bl_idname)
         layout.operator(VLM_OT_apply_aoi.bl_idname)
 
 
@@ -1103,7 +1053,6 @@ classes = (
     VLM_OT_export_bake,
     VLM_OT_export_vpx,
     VLM_OT_export_pov,
-    VLM_OT_nest_test,
     )
 preference_classes = (VLM_PT_3D_warning_panel, VLM_PT_Props_warning_panel, VLM_OT_install_dependencies, VLM_preferences)
 registered_classes = []
