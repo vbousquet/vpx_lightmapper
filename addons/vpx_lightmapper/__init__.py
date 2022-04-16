@@ -293,22 +293,6 @@ class VLM_Object_props(PropertyGroup):
     bake_packmap: IntProperty(name="Packmap", description="ID of output packmap (multiple bakes may share a packmap)", default = -1)
 
 
-class VLM_OT_new(Operator):
-    bl_idname = "vlm.new_operator"
-    bl_label = "New"
-    bl_description = "Start a new empty project"
-    bl_options = {"REGISTER", "UNDO"}
-    
-    def execute(self, context):
-        context.scene.render.engine = 'CYCLES'
-        context.scene.render.film_transparent = True
-        context.scene.vlmSettings.table_file = ""
-        context.scene.vlmSettings.last_bake_step = "unstarted"
-        unit_update(self, context)
-        vlm_utils.load_library()
-        return {'FINISHED'}
-
-
 class VLM_OT_new_from_vpx(Operator, ImportHelper):
     bl_idname = "vlm.new_from_vpx_operator"
     bl_label = "Import"
@@ -320,6 +304,7 @@ class VLM_OT_new_from_vpx(Operator, ImportHelper):
     def execute(self, context):
         context.scene.render.engine = 'CYCLES'
         context.scene.render.film_transparent = True
+        context.scene.cycles.film_transparent_glass = True
         context.scene.vlmSettings.table_file = ""
         context.scene.vlmSettings.last_bake_step = "unstarted"
         unit_update(self, context)
@@ -706,7 +691,6 @@ class VLM_PT_Importer(bpy.types.Panel):
         vlmProps = context.scene.vlmSettings
         row = layout.row()
         row.scale_y = 1.5
-        row.operator(VLM_OT_new.bl_idname)
         row.operator(VLM_OT_new_from_vpx.bl_idname)
         row.operator(VLM_OT_update.bl_idname)
         layout.prop(vlmProps, "table_file")
@@ -1031,7 +1015,6 @@ classes = (
     VLM_PT_3D_Bake_Object,
     VLM_PT_3D_Bake_Result,
     VLM_PT_3D_Tools,
-    VLM_OT_new,
     VLM_OT_new_from_vpx,
     VLM_OT_update,
     VLM_OT_compute_render_groups,

@@ -1,43 +1,36 @@
 TODO VPX
-- do not render primitive with alpha = 0 => RenderDynamic same as flasher
-- implement HDR for primitive (very simple, same as flasher)
-- implement unshaded render path for performance
-
-- implement visibility property of mesh_playfield primitive:
-. playfield_mesh is the rendered primitive, and the only one that supports reflections (rendered before)
-. playfield_mesh can be not collidable ?
-  => strangely playfield can't be a toy (see primitive.cpp GetHitShape)
-  => strangely playfield collidable is disabled (see primitive.cpp SetupHitObject)
-. another collidable could be set for the playfield ?
-
-. playfield is always rendered as static (except for camera mode) without depth (to allow mirrored reflections not to be clipped since they are below playfield), then reflections, then playfield depth pass (with alpha test), then other objects (eventually below, using depth test)
-
-Unify rendering, by rendering mirror overlay with playfield and considering playfield like other objects 
-- before hand, prepare static (process all objects the same, including playfield regarding depth)
-- prepare reflections texture (static + dynamic)
-- render static
-- render dynamic
-- render mirror overlay (with an equal depth test) when the playfield is rendered
-
-Better transparency: render from back to front, using blending, especially for playfield
-
+- do not render primitive with alpha = 0, nor additive primitives with color/alpha = 0 => RenderDynamic same as flasher
+- add options for tonemapping: Default (legacy modified Reihnart), Filmic, eventually others
+. https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
+. https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+. https://github.com/thefranke/dirtchamber/blob/master/shader/tonemapping.hlsl
 
 
 TODO
 - Implement surface positionning relative to a ramp
 - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 - JP's Star Trek has a wrong texture positionning (panel above ramp)
-- Identify static/active bake and export accordingly (done for opacity, missing for under playfield which, I think, need to be marked as active)
 - When importing plastics wall, create 2 meshes: one for the plastic with a plastic shader (enlarged for the bevelling to be visible), one for the image (bpy.ops.mesh.solidify(thickness=-0.01), invert selection and delete, then scale on z axis)
 - Support 'active' (i.e. non opaque bake) objects for the occluder selection
-- Unhide objects when creating packmaps to avoid error => won't be needed with pack nest
-- Rewrite VBS fader to apply a fading curve based on filament temperature, adapting color (K to RGB) and intensity (using the HDR part, to view filament cooling down in flashers :))
-- When baking, perform sanity checks: Check for collection off
-- Evaluate performing HDR with multiple lightmap (1 for 0-1, then 1 for 1-256)
 - Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled
+- When loading library, update existing node groups instead of skipping them
+- Include an asset folder, register it as an asset library when the plugin is activated, move the core assets to this asset library instead of loading them directly, populate with additional assets (screws, bulbs, posts, inserts, materials,...)
+- Add glow map baking (camera space post process bake)
 
-- Add support for basic UV projected movables that follow the same path but generate their own mesh even for lightmaps
-- Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin)
+
+
+
+
+Closed items:
+- Add support for UV projected movables that follow the same path but generate their own mesh even for lightmaps
+- Rewrite Packmap generation for higher quality (renders should stay untouched, since they guarantee the higher possible quality) => only possible with custom nesting algorithm
+  . Constrain rotation to 0/90/180/270
+  . Guarantee a scale of 1 (by iterative packing, disabling all scaling)
+  . Build packmap by data transfer (RGBA pixel data copy using a padded mask), not rendering which may cause bluriness (unaligned pixels and loose precision on borders)
+- When baking, perform sanity checks: Check for collection off => not needed anymore after rewrite
+- Simplify the core materials, they can be done with simple Principled BSDF => not that important (they are not supposed ot be really used, and they work)
+- Evaluate performing HDR with multiple lightmap (1 for 0-1, then 1 for 1-256) => moved lightmap to EXR
+- Implement 'Movable' bake mode (each object is baked to a separate mesh, keeping its origin) => not kept. For complex movables, manual adjusted baking will be required anyway. So don't go down a too complex path
   . Object must be UV unwrapped, and must have either a VLM.BakeTex node in its material (first slot) or has an imported VPX image (bake will be the same size as the image)
   . Light map are computed on the UV unwrapped model, filtered based on a custom threshold
   . Implementation progress:
@@ -46,26 +39,11 @@ TODO
     . At mesh step, copy the movables to bake result and generate a light mesh for each on the lightmap above threshold
     . At packmap step, copy bakes to export (with exr to png/webp conversion)
     . At export step, include them in the VPX and produce sync code
-
-- Rewrite Packmap generation for higher quality (renders should stay untouched, since they guarantee the higher possible quality) => only possible with custom nesting algorithm
-  . Constrain rotation to 0/90/180/270
-  . Guarantee a scale of 1 (by iterative packing, disabling all scaling)
-  . Build packmap by data transfer (RGBA pixel data copy using a padded mask), not rendering which may cause bluriness (unaligned pixels and loose precision on borders)
-
-
-- Allow the user to select the final tonemapping
-
-- Add glow map baking (camera space post process bake)
-- When loading library, update existing node groups instead of skipping them
-
-- Include an asset folder, register it as an asset library when the plugin is activated, move the core assets to this asset library instead of loading them directly, populate with additional assets (screws, bulbs, posts, inserts, materials,...)
-
-- Simplify the core materials, they can be done with simple Principled BSDF
-
-
-
-
-Closed items:
+- Rewrite VBS fader to apply a fading curve based on filament temperature, adapting color (K to RGB) and intensity (using the HDR part, to view filament cooling down in flashers :)) => just plug in Lampz or the table fading system
+- Unhide objects when creating packmaps to avoid error => won't be needed with pack nest
+- Allow the user to select the final tonemapping => not needed anymore, tonemapping removed (done by VPX)
+- Identify static/active bake and export accordingly (done for opacity, missing for under playfield which, I think, need to be marked as active)
+- VPX: implement HDR for primitive (very simple, same as flasher)
 - In a split light group, bake same VPX lights together
 - Occluder selection tools delete compositor nodes... Save them and restore them afterward
 - Add the ability to bake additional environment lighting as additive lighting (base bake = dark pub or even no IBL, then additional for lit up room)

@@ -519,19 +519,6 @@ def read_vpx(op, context, filepath):
         
         # Setup environment lighting
         env_image = f"VPX.Tex.{env_image.casefold()}" 
-        if "VPX.Env.Black" not in bpy.data.worlds:
-            mat = bpy.data.worlds.new("VPX.Env.Black")
-            mat.use_nodes = True
-            mat.use_fake_user = True
-            nodes = mat.node_tree.nodes
-            nodes.clear()
-            if env_image in bpy.data.images:
-                node_dif = nodes.new(type='ShaderNodeBackground')
-                node_output = nodes.new(type='ShaderNodeOutputWorld')   
-                node_output.location.x = 400
-                links = mat.node_tree.links
-                node_dif.inputs[0].default_value = (0.0, 0.0, 0.0, 1.0)
-                links.new(node_dif.outputs[0], node_output.inputs[0])
         if "VPX.Env.IBL" in bpy.data.worlds:
             mat = bpy.data.worlds["VPX.Env.IBL"]
         else:
@@ -1421,7 +1408,7 @@ def read_vpx(op, context, filepath):
                 position = (0.0, 0.0, 0.0)
                 size = (1.0, 1.0, 1.0)
                 n_sides = 8
-                skipped = ('PIID', 'LOCK', 'LAYR', 'LANR', 'LVIS', 'FALP', 'ADDB', 'PIDB', 'M3DN', 'OSNM', 'DIPT', 'OVPH', 'MAPH', 'EBFC', 'NRMA', 'SCOL', 'TVIS', 'DTXI', 'HTEV', 'THRS', 'ELAS', 'ELFO', 'RFCT', 'RSCT', 'EFUI', 'CORF', 'CLDR', 'ISTO', 'STRE', 'DILI', 'DILB', 'REEN')
+                skipped = ('PIID', 'LOCK', 'LAYR', 'LANR', 'LVIS', 'FALP', 'ADDB', 'PIDB', 'M3DN', 'OSNM', 'DIPT', 'OVPH', 'MAPH', 'EBFC', 'NRMA', 'SCOL', 'TVIS', 'DTXI', 'HTEV', 'THRS', 'ELAS', 'ELFO', 'RFCT', 'RSCT', 'EFUI', 'CORF', 'CLDR', 'ISTO', 'STRE', 'DILI', 'DILB', 'REEN', 'COLR')
                 while not item_data.is_eof():
                     item_data.next()
                     if item_data.tag == 'NAME':
@@ -1920,6 +1907,9 @@ def read_vpx(op, context, filepath):
             lights.children.link(light_col)
             light_col.name = "All Lights"
             light_col.vlmSettings.light_mode = 'split'
+            for sub_col in [c for c in light_col.children]:
+                light_col.children.unlink(sub_col)
+                lights.children.link(sub_col)
         statics = vlm_collections.get_collection(context.scene.collection, STATIC_COL, create=False)
         if statics:
             context.scene.collection.children.unlink(statics)

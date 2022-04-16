@@ -354,14 +354,17 @@ def create_bake_meshes(op, context):
             obj_name = f'{bake_name}.BM.{light_name}' if sync_obj else f'Table.BM.{light_name}.{bake_name}'
             bake_instance = bpy.data.objects.get(obj_name)
             bake_mesh = bake_mesh.copy()
-            if sync_obj:
-                dup = bpy.data.objects[sync_obj]
-                bake_mesh.transform(Matrix(dup.matrix_basis).inverted())
             if bake_instance:
                 vlm_collections.unlink(bake_instance)
                 bake_instance.data = bake_mesh
             else:
                 bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
+            if sync_obj:
+                dup = bpy.data.objects[sync_obj]
+                bake_mesh.transform(Matrix(dup.matrix_basis).inverted())
+                bake_instance.matrix_basis = dup.matrix_basis
+            else:
+                bake_instance.matrix_basis.identity()
             for index in range(n_render_groups):
                 bake_instance.data.materials[index] = materials[index]
             bake_instance.vlmSettings.bake_objects = bake_name
@@ -429,6 +432,9 @@ def create_bake_meshes(op, context):
             if sync_obj:
                 dup = bpy.data.objects[sync_obj]
                 bake_instance.data.transform(Matrix(dup.matrix_basis).inverted())
+                bake_instance.matrix_basis = dup.matrix_basis
+            else:
+                bake_instance.matrix_basis.identity()
             bake_instance.vlmSettings.bake_type = 'lightmap'
             bake_instance.vlmSettings.bake_hdr_range = hdr_range
             bake_instance.vlmSettings.bake_lighting = light_name
