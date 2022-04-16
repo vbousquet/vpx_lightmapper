@@ -97,18 +97,18 @@ if dependencies_installed:
         importlib.reload(vlm_group_baker)
     else:
         from . import vlm_group_baker
-    if "vlm_meshes_baker" in locals():
-        importlib.reload(vlm_meshes_baker)
-    else:
-        from . import vlm_meshes_baker
     if "vlm_render_baker" in locals():
         importlib.reload(vlm_render_baker)
     else:
         from . import vlm_render_baker
-    if "vlm_packmap_baker" in locals():
-        importlib.reload(vlm_packmap_baker)
+    if "vlm_meshes_baker" in locals():
+        importlib.reload(vlm_meshes_baker)
     else:
-        from . import vlm_packmap_baker
+        from . import vlm_meshes_baker
+    if "vlm_nestmap_baker" in locals():
+        importlib.reload(vlm_nestmap_baker)
+    else:
+        from . import vlm_nestmap_baker
     if "vlm_nest" in locals():
         importlib.reload(vlm_nest)
     else:
@@ -179,7 +179,7 @@ class VLM_Scene_props(PropertyGroup):
             ('groups', 'Groups', '', '', 1),
             ('renders', 'Rendered', '', '', 2),
             ('meshes', 'Meshes', '', '', 3),
-            ('packmaps', 'Packmaps', '', '', 4),
+            ('nestmaps', 'Nestmaps', '', '', 4),
         ],
         name='Last Bake Step',
         default='unstarted'
@@ -202,15 +202,6 @@ class VLM_Scene_props(PropertyGroup):
     keep_pf_reflection_faces: BoolProperty(name="Keep playfield reflection", description="Keep faces only visible through playfield reflection", default = False)
     # Exporter options
     enable_vpx_reflection: BoolProperty(name="Enable VPX reflection", description="Enable VPX playfield reflection for exported models and lightmaps", default = True)
-    export_image_type: EnumProperty(
-        items=[
-            ('png', 'PNG', 'Use PNG images', '', 0),
-            ('webp', 'WEBP', 'Use WebP images', '', 1),
-        ],
-        name='Image format',
-        description='Image format used in exported table',
-        default='png'
-    )
     export_mode: EnumProperty(
         items=[
             ('default', 'Default', 'Add bakes and lightmap to the table', '', 0),
@@ -276,12 +267,12 @@ class VLM_Object_props(PropertyGroup):
     )
     # Bake result properties
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
-    bake_objects: StringProperty(name="Bake", description="Object or collection of objects included in this bake/lightmap", default="")
-    bake_sync_light: StringProperty(name="Light", description="Object to sync light state on", default="")
-    bake_sync_trans: StringProperty(name="Trans", description="Object to sync transform on", default="")
+    bake_objects: StringProperty(name="Source", description="Object or collection of objects included in this bake/lightmap", default="")
+    bake_sync_light: StringProperty(name="Sync Light", description="Object to sync light state on", default="")
+    bake_sync_trans: StringProperty(name="Sync Trans", description="Object to sync transform on", default="")
     bake_type: EnumProperty(
         items=[
-            ('default', 'Default', "Default opaque bake", '', 0),
+            ('default', 'Default', 'Default opaque bake', '', 0),
             ('static', 'Static', 'Static opaque bake', '', 1),
             ('active', 'Active', "'Active', i.e. non opaque, bake", '', 2),
             ('lightmap', 'Lightmap', 'Additive lightmap bake', '', 3),
@@ -290,7 +281,7 @@ class VLM_Object_props(PropertyGroup):
         default='default'
     )
     bake_hdr_range: FloatProperty(name="HDR Range", description="HDR range of this bake", default=1)
-    bake_packmap: IntProperty(name="Packmap", description="ID of output packmap (multiple bakes may share a packmap)", default = -1)
+    bake_nestmap: IntProperty(name="Nestmap", description="ID of output nestmap (multiple bakes may share a nestmap)", default = -1)
 
 
 class VLM_OT_new_from_vpx(Operator, ImportHelper):
@@ -378,14 +369,19 @@ class VLM_OT_create_bake_meshes(Operator):
         return vlm_meshes_baker.create_bake_meshes(self, context)
 
 
-class VLM_OT_render_packmaps(Operator):
-    bl_idname = "vlm.render_packmaps_operator"
-    bl_label = "4. Packmaps"
-    bl_description = "Render all packmaps"
+class VLM_OT_render_nestmaps(Operator):
+    bl_idname = "vlm.render_nestmaps_operator"
+    bl_label = "4. Nestmaps"
+    bl_description = "Compute and render all nestmaps"
     bl_options = {"REGISTER", "UNDO"}
     
+    @classmethod
+    def poll(cls, context):
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        return result_col is not None and len(result_col.all_objects) > 0
+
     def execute(self, context):
-        return vlm_packmap_baker.render_packmaps(self, context)
+        return vlm_nestmap_baker.render_nestmaps(self, context)
 
 
 class VLM_OT_export_vpx(Operator):
@@ -406,7 +402,7 @@ class VLM_OT_export_bake(Operator):
 
     @classmethod
     def poll(cls, context):
-        return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap >= 0), None) is not None
+        return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_lighting != ''), None) is not None
 
     def execute(self, context):
         return vlm_export_obj.export_obj(self, context)
@@ -469,7 +465,7 @@ class VLM_OT_batch_bake(Operator):
         if 'FINISHED' not in result: return result
         result = vlm_meshes_baker.create_bake_meshes(self, context)
         if 'FINISHED' not in result: return result
-        result = vlm_packmap_baker.render_packmaps(self, context)
+        result = vlm_nestmap_baker.render_nestmaps(self, context)
         if 'FINISHED' not in result: return result
         result = vlm_export.export_vpx(self, context)
         if 'FINISHED' not in result: return result
@@ -572,20 +568,20 @@ class VLM_OT_select_render_group(Operator):
         return {"FINISHED"}
 
 
-class VLM_OT_select_packmap_group(Operator):
-    bl_idname = "vlm.select_packmap_group"
-    bl_label = "Select Packmap"
-    bl_description = "Select all object from this packmap"
+class VLM_OT_select_nestmap_group(Operator):
+    bl_idname = "vlm.select_nestmap_group"
+    bl_label = "Select Nestmap"
+    bl_description = "Select all object from this nestmap"
     bl_options = {"REGISTER", "UNDO"}
     
     @classmethod
     def poll(cls, context):
-        return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap >= 0), None) is not None
+        return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_nestmap >= 0), None) is not None
 
     def execute(self, context):
-        for obj in [obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap >= 0]:
+        for obj in [obj for obj in context.selected_objects if obj.vlmSettings.bake_nestmap >= 0]:
             for other in context.view_layer.objects:
-                if other.vlmSettings.bake_packmap == obj.vlmSettings.bake_packmap:
+                if other.vlmSettings.bake_nestmap == obj.vlmSettings.bake_nestmap:
                     other.select_set(True)
         return {"FINISHED"}
 
@@ -650,32 +646,25 @@ class VLM_OT_load_render_images(Operator):
     
     @classmethod
     def poll(cls, context):
-        return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap >= 0), None) is not None
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        if not result_col: return False
+        return next((obj for obj in context.selected_objects if obj.name in result_col.all_objects), None) is not None
 
     def execute(self, context):
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
-        for obj in [o for o in context.selected_objects if o.vlmSettings.bake_packmap >= 0]:
-            if obj.vlmSettings.bake_type == 'playfield_fv':
-                path = f'{bakepath}Solid - {obj.vlmSettings.bake_objects}.exr'
-                im = vlm_utils.image_by_path(path)
-                #if not os.path.exists(bpy.path.abspath(path)) or im is not None:
-                if self.is_unload:
+        for obj in [o for o in context.selected_objects if o.name in result_col.all_objects]:
+            paths = [f'{bakepath}{obj.vlmSettings.bake_lighting} - Group {i}.exr' for i,_ in enumerate(obj.data.materials)]
+            images = [vlm_utils.image_by_path(path) for path in paths]
+            all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
+            if self.is_unload:
+            #if all_loaded:
+                for im in images:
                     if im != None and im.name != 'VLM.NoTex': bpy.data.images.remove(im)
-                else:
-                    _, im = vlm_utils.get_image_or_black(path)
-                    obj.data.materials[0].node_tree.nodes["BakeTex"].image = im
             else:
-                paths = [f'{bakepath}{obj.vlmSettings.bake_name} - Group {i}.exr' for i,_ in enumerate(obj.data.materials)]
-                images = [vlm_utils.image_by_path(path) for path in paths]
-                all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
-                if self.is_unload:
-                #if all_loaded:
-                    for im in images:
-                        if im != None and im.name != 'VLM.NoTex': bpy.data.images.remove(im)
-                else:
-                    for path, mat in zip(paths, obj.data.materials):
-                        _, im = vlm_utils.get_image_or_black(path)
-                        mat.node_tree.nodes["BakeTex"].image = im
+                for path, mat in zip(paths, obj.data.materials):
+                    _, im = vlm_utils.get_image_or_black(path)
+                    mat.node_tree.nodes["BakeTex"].image = im
         return {"FINISHED"}
 
 
@@ -736,7 +725,7 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         if vlmProps.last_bake_step == 'groups': step = 1
         if vlmProps.last_bake_step == 'renders': step = 2
         if vlmProps.last_bake_step == 'meshes': step = 3
-        if vlmProps.last_bake_step == 'packmaps': step = 4
+        if vlmProps.last_bake_step == 'nestmaps': step = 4
         layout.prop(vlmProps, "tex_size")
         layout.prop(vlmProps, "padding")
         layout.prop(vlmProps, "remove_backface", text='Backface')
@@ -751,7 +740,7 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         row.operator(VLM_OT_create_bake_meshes.bl_idname, icon='MESH_MONKEY', text='Meshes', emboss=step>1)
         row = layout.row()
         row.scale_y = 1.5
-        row.operator(VLM_OT_render_packmaps.bl_idname, icon='TEXTURE_DATA', text='Packmaps', emboss=step>2)
+        row.operator(VLM_OT_render_nestmaps.bl_idname, icon='TEXTURE_DATA', text='Nestmaps', emboss=step>2)
         row.operator(VLM_OT_export_vpx.bl_idname, icon='EXPORT', text='Export', emboss=step>3)
         row.operator(VLM_OT_batch_bake.bl_idname)
 
@@ -792,7 +781,7 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
         light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         
-        bake_objects = [obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap < 0]
+        bake_objects = [obj for obj in context.selected_objects if obj.name not in result_col.all_objects]
         if bake_objects:
             if len(bake_objects) == 1:
                 obj = bake_objects[0]
@@ -864,40 +853,32 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
-        result_objects = [obj for obj in context.selected_objects if obj.vlmSettings.bake_packmap >= 0]
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        if not result_col: return
+        result_objects = [obj for obj in context.selected_objects if obj.name in result_col.all_objects]
         if result_objects:
             if len(result_objects) == 1:
                 props = result_objects[0].vlmSettings
-                layout.prop(props, 'bake_name')
+                layout.prop(props, 'bake_lighting')
                 layout.prop(props, 'bake_objects')
-                layout.prop(props, 'bake_light')
+                layout.prop(props, 'bake_sync_light')
+                layout.prop(props, 'bake_sync_trans')
                 layout.prop(props, 'bake_type')
-                layout.prop(props, 'bake_hdr_scale')
-                layout.prop(props, 'bake_tex_factor')
+                layout.prop(props, 'bake_hdr_range')
                 layout.separator()
-                layout.prop(props, 'bake_packmap')
-                layout.prop(props, 'bake_packmap_width')
-                layout.prop(props, 'bake_packmap_height')
-                layout.operator(VLM_OT_select_packmap_group.bl_idname)
+                layout.prop(props, 'bake_nestmap')
+                layout.operator(VLM_OT_select_nestmap_group.bl_idname)
             has_loaded = False
             has_unloaded = False
             bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
             for obj in result_objects:
-                if obj.vlmSettings.bake_type == 'playfield_fv':
-                    path = f'{bakepath}Solid - {obj.vlmSettings.bake_objects}.exr'
-                    im = vlm_utils.image_by_path(path)
-                    if not os.path.exists(bpy.path.abspath(path)) or im is not None:
-                        has_loaded = True
-                    else:
-                        has_unloaded = True
+                paths = [f'{bakepath}{obj.vlmSettings.bake_lighting} - Group {i}.exr' for i,_ in enumerate(obj.data.materials)]
+                images = [vlm_utils.image_by_path(path) for path in paths]
+                all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
+                if all_loaded:
+                    has_loaded = True
                 else:
-                    paths = [f'{bakepath}{obj.vlmSettings.bake_name} - Group {i}.exr' for i,_ in enumerate(obj.data.materials)]
-                    images = [vlm_utils.image_by_path(path) for path in paths]
-                    all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
-                    if all_loaded:
-                        has_loaded = True
-                    else:
-                        has_unloaded = True
+                    has_unloaded = True
             if has_loaded:
                 layout.operator(VLM_OT_load_render_images.bl_idname, text='Unload Renders', icon='RESTRICT_RENDER_ON').is_unload = True
             else:
@@ -913,7 +894,7 @@ class VLM_PT_3D_Tools(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
-        layout.prop(context.scene.vlmSettings, 'render_group_select', expand=True, text='R.Group', icon='RESTRICT_RENDER_OFF')
+        layout.prop(context.scene.vlmSettings, 'render_group_select', expand=True, text='Select Group', icon='RESTRICT_RENDER_OFF')
         layout.operator(VLM_OT_select_indirect.bl_idname)
         layout.operator(VLM_OT_select_occluded.bl_idname)
         layout.separator()
@@ -1020,14 +1001,14 @@ classes = (
     VLM_OT_compute_render_groups,
     VLM_OT_render_all_groups,
     VLM_OT_create_bake_meshes,
-    VLM_OT_render_packmaps,
+    VLM_OT_render_nestmaps,
     VLM_OT_batch_bake,
     VLM_OT_state_import_mesh,
     VLM_OT_state_import_transform,
     VLM_OT_state_indirect_only,
     VLM_OT_clear_render_group_cache,
     VLM_OT_select_render_group,
-    VLM_OT_select_packmap_group,
+    VLM_OT_select_nestmap_group,
     VLM_OT_select_indirect,
     VLM_OT_select_occluded,
     VLM_OT_apply_aoi,

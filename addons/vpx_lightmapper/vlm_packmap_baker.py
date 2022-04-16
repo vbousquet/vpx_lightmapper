@@ -125,7 +125,7 @@ def render_packmaps_gpu(context):
                     print(f'  . {obj.name:>15} => HDR Scale: {obj.vlmSettings.bake_hdr_scale:>7.2f} => Brightness factor: {brightness:>7.2f}')
                     for i,_ in enumerate(mesh.materials):
                         if pts[i]:
-                            path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr"
+                            path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_lighting} - Group {i}.exr"
                             unload = vlm_utils.image_by_path(path) is None
                             render = bpy.data.images.load(path, check_existing=True)
                             shader.uniform_sampler("render", gpu.texture.from_image(render))
@@ -200,7 +200,7 @@ def render_packmaps_bake(op, context, sequential_baking):
                         if obj.vlmSettings.bake_type == 'playfield_fv': # FIXME reimplement Solid does not mean anything
                             path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}Solid - {obj.vlmSettings.bake_objects}.exr"
                         else:
-                            path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr"
+                            path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_lighting} - Group {i}.exr"
                         loaded, render = vlm_utils.get_image_or_black(path)
                         for j, mat in enumerate(obj.data.materials):
                             mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
@@ -223,7 +223,7 @@ def render_packmaps_bake(op, context, sequential_baking):
                         if obj.vlmSettings.bake_type == 'playfield_fv': # FIXME reimplement Solid does not mean anything
                             path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}Solid - {obj.vlmSettings.bake_objects}.exr"
                         else:
-                            path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {i}.exr"
+                            path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_lighting} - Group {i}.exr"
                         loaded, render = vlm_utils.get_image_or_black(path)
                         if loaded == 'loaded': unloads.append(render)
                         mat.node_tree.nodes.active = mat.node_tree.nodes["PackTex"]
@@ -375,7 +375,7 @@ def render_packmaps_eevee(context):
             brightness = vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale) if obj.vlmSettings.bake_type == 'lightmap' else  1.0
             print(f'. {obj.name} => HDR Scale: {obj.vlmSettings.bake_hdr_scale:>7.2f} => Brightness factor: {brightness:>7.2f}')
             for mat_index,_ in enumerate(obj.data.materials):
-                path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_name} - Group {mat_index}.exr"
+                path = f"{vlm_utils.get_bakepath(context, type='RENDERS')}{obj.vlmSettings.bake_lighting} - Group {mat_index}.exr"
                 loaded, render = vlm_utils.get_image_or_black(path)
                 if loaded == 'loaded': unloads.append(render)
                 mat = bpy.data.materials.new(f'Tmp.Pack.{obj_index}.{mat_index}')
@@ -654,7 +654,7 @@ def render_packmaps_nest(op, context):
             print(f'. Exporting bake model {bake.name}')
             data.write(struct.pack("<I", len(bake.data.materials)))
             for i, mat in enumerate(bake.data.materials):
-                path = f'{bakepath}{bake.vlmSettings.bake_name} - Group {i}.exr'.encode('utf-8')
+                path = f'{bakepath}{bake.vlmSettings.bake_lighting} - Group {i}.exr'.encode('utf-8')
                 length = len(path)
                 while length > 0: # see https://docs.microsoft.com/en-us/dotnet/api/system.io.binaryreader.readstring
                     data.write(bytes([0x80 | (length & 0x7F)]) if length >= 128 else bytes([length]))

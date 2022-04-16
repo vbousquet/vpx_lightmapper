@@ -39,10 +39,10 @@ def export_vpx(op, context):
     """Export bakes by updating the reference VPX file
     . Remove all 'VLM.' prefixed objects from the source file
     . Disable rendering for all baked objects
-    . Add all packmaps as texture with 'VLM.' prefixed name
+    . Add all nestmaps as texture with 'VLM.' prefixed name
     . Add base materials with 'VLM.' prefixed name
     . Add all bakes as primitives with 'VLM.' prefixed name
-    . Update the table script with the needed light/lightmap sync code
+    . Update the table script with the needed light/lightmap and movable sync code
     """
     if context.blend_data.filepath == '':
         op.report({'ERROR'}, 'You must save your project before exporting')
@@ -61,7 +61,6 @@ def export_vpx(op, context):
     bakepath = vlm_utils.get_bakepath(context)
     vlm_utils.mkpath(f"{bakepath}Export/")
     export_mode = context.scene.vlmSettings.export_mode
-    export_image_type = context.scene.vlmSettings.export_image_type
     bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
     light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
     global_scale = vlm_utils.get_global_scale(context)
@@ -250,9 +249,8 @@ def export_vpx(op, context):
     # Add new bake models
     for obj in sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}'):
         is_light = obj.vlmSettings.bake_type == 'lightmap'
-        is_playfield = obj.vlmSettings.bake_type == 'playfield' or obj.vlmSettings.bake_type == 'playfield_fv'
         is_active = obj.vlmSettings.bake_type == 'active'
-        is_static = obj.vlmSettings.bake_type == 'static' or obj.vlmSettings.bake_type == 'playfield_fv'
+        is_static = obj.vlmSettings.bake_type == 'static'
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', 0, 0, 0)
@@ -266,13 +264,13 @@ def export_vpx(op, context):
         writer.write_tagged_float(b'RTV6', 0)
         writer.write_tagged_float(b'RTV7', 0)
         writer.write_tagged_float(b'RTV8', 0)
-        writer.write_tagged_string(b'IMAG', f'VLM.Packmap{obj.vlmSettings.bake_packmap}')
+        writer.write_tagged_string(b'IMAG', f'VLM.Packmap{obj.vlmSettings.bake_nestmap}')
         writer.write_tagged_string(b'NRMA', '')
         writer.write_tagged_u32(b'SIDS', 4)
         writer.write_tagged_wide_string(b'NAME', export_name(obj.name))
         writer.write_tagged_string(b'MATR', 'VLM.Lightmap' if is_light else 'VLM.Bake.Active' if is_active else 'VLM.Bake.Solid')
         writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
-        writer.write_tagged_bool(b'TVIS', not is_playfield)
+        writer.write_tagged_bool(b'TVIS', True)
         writer.write_tagged_bool(b'DTXI', False)
         writer.write_tagged_bool(b'HTEV', False)
         writer.write_tagged_float(b'THRS', 2.0)
@@ -299,7 +297,7 @@ def export_vpx(op, context):
         vertices = []
         vert_dict = {}
         n_vertices = 0
-        uv_layer_packed = obj.data.uv_layers["UVMap Packed"]
+        uv_layer_nested = obj.data.uv_layers["UVMap Nested"]
         for poly in obj.data.polygons:
             if len(poly.loop_indices) != 3:
                 continue
@@ -307,7 +305,7 @@ def export_vpx(op, context):
                 loop = obj.data.loops[loop_index]
                 x, y, z = obj.data.vertices[loop.vertex_index].co
                 nx, ny, nz = loop.normal
-                u, v = uv_layer_packed.data[loop_index].uv
+                u, v = uv_layer_nested.data[loop_index].uv
                 vertex = (x, -y, z, nx, -ny, nz, u, 1.0 - v)
                 existing_index = vert_dict.get(vertex, None)
                 if existing_index is None:
@@ -339,6 +337,7 @@ def export_vpx(op, context):
         writer.write_tagged_float(b'PIDB', -1000.0 if is_light else 1000.0)
         writer.write_tagged_bool(b'ADDB', is_light) # Additive blending VPX mod
         writer.write_tagged_float(b'FALP', 100) # Additive blending VPX mod
+        writer.write_tagged_u32(b'COLR', 0xFFFFFF)
         writer.write_tagged_bool(b'LOCK', True)
         writer.write_tagged_bool(b'LVIS', True)
         writer.write_tagged_u32(b'LAYR', 0)
@@ -349,17 +348,16 @@ def export_vpx(op, context):
         n_game_items += 1
             
     # Mark playfield image has removable
-    if next((obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'playfield' or obj.vlmSettings.bake_type == 'playfield_fv'), None) is not None:
-        br = biff_io.BIFF_reader(src_storage.openstream('GameStg/GameData').read())
-        while not br.is_eof():
-            br.next()
-            if br.tag == "IMAG":
-                playfield_image = br.get_string()
-                #FIXME removed_images[playfield_image]=True
-                break
-            br.skip_tag()
+    br = biff_io.BIFF_reader(src_storage.openstream('GameStg/GameData').read())
+    while not br.is_eof():
+        br.next()
+        if br.tag == "IMAG":
+            playfield_image = br.get_string()
+            #FIXME removed_images[playfield_image]=True
+            break
+        br.skip_tag()
 
-    # Remove previous packmaps and append the new ones
+    # Remove previous nestmaps
     n_images = 0
     n_read_images = 0
     while src_storage.exists(f'GameStg/Image{n_read_images}'):
@@ -384,41 +382,46 @@ def export_vpx(op, context):
         n_read_images = n_read_images + 1
 
     # Add new bake/lightmap textures
-    packmap_index = 0
+    nestmap_index = 0
     while True:
-        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_packmap == packmap_index]
+        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap == nestmap_index]
         if not objects:
             break
-        if export_image_type == 'webp':
-            packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.webp")
-        elif export_image_type == 'hdr':
-            packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.hdr")
+        is_hdr = next( (o for o in objects if o.vlmSettings.bake_hdr_range > 1.01), None) is not None
+        if is_hdr:
+            nestmap_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}.exr')
         else:
-            packmap_path = bpy.path.abspath(f"{bakepath}Export/Packmap {packmap_index}.png")
-        if not os.path.exists(packmap_path):
-            op.report({"ERROR"}, f'Error missing pack file {packmap_path}. Create packmaps before exporting')
+            #nestmap_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}.png')
+            nestmap_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}.webp')
+        if not os.path.exists(nestmap_path):
+            op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create packmaps before exporting')
             return {'CANCELLED'}
         img_writer = biff_io.BIFF_writer()
-        img_writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
-        img_writer.write_tagged_string(b'PATH', packmap_path)
-        with open(packmap_path, 'rb') as f:
+        img_writer.write_tagged_string(b'NAME', f'VLM.Packmap{nestmap_index}')
+        img_writer.write_tagged_string(b'PATH', nestmap_path)
+        with open(nestmap_path, 'rb') as f:
             img_data = f.read()
             img_writer.write_tagged_u32(b'SIZE', len(img_data))
             img_writer.write_tagged_data(b'DATA', img_data)
         img_writer.close()
+        loaded, image = vlm_utils.get_image_or_black(nestmap_path, black_is_none=True)
+        width = height = 0
+        if image:
+            width, height = image.size
+            if loaded == 'loaded': bpy.data.images.remove(image)
         writer = biff_io.BIFF_writer()
-        writer.write_tagged_string(b'NAME', f'VLM.Packmap{packmap_index}')
-        writer.write_tagged_string(b'PATH', packmap_path)
-        writer.write_tagged_u32(b'WDTH', int(objects[0].vlmSettings.bake_packmap_width))
-        writer.write_tagged_u32(b'HGHT', int(objects[0].vlmSettings.bake_packmap_height))
+        writer.write_tagged_string(b'NAME', f'VLM.Packmap{nestmap_index}')
+        writer.write_tagged_string(b'PATH', nestmap_path)
+        writer.write_tagged_u32(b'WDTH', width)
+        writer.write_tagged_u32(b'HGHT', height)
         writer.write_tagged_empty(b'JPEG') # Strangely, raw data are pushed outside of the JPEG tag (breaking the BIFF structure of the file)
         writer.write_data(img_writer.get_data())
-        writer.write_tagged_float(b'ALTV', 165.0 if 'playfield' in objects[0].vlmSettings.bake_type else 1.0)
+        writer.write_tagged_float(b'ALTV', 165.0) # Limit for pixel cut and z write
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
-        print(f'. Adding Packmap #{packmap_index} as a {objects[0].vlmSettings.bake_packmap_width:>4} x {objects[0].vlmSettings.bake_packmap_height:>4} image')
-        packmap_index += 1
+        print(f'. Adding Packmap #{nestmap_index} as a {width:>4} x {height:>4} image')
+        nestmap_index += 1
         n_images += 1
 
     # Copy reference file
@@ -497,15 +500,16 @@ def export_vpx(op, context):
                     
                     for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap']:
                         sync_color = False
-                        brightness = 1.0 / vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
-                        if obj.vlmSettings.bake_light in light_col.children:
-                            baked_lights = light_col.children[obj.vlmSettings.bake_light].objects
+                        #brightness = 1.0 / vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
+                        brightness = 1.0
+                        if obj.vlmSettings.bake_sync_light in light_col.children:
+                            baked_lights = light_col.children[obj.vlmSettings.bake_sync_light].objects
                             sync_color = vlm_utils.is_rgb_led(baked_lights)
                             vpx_name = baked_lights[0].vlmSettings.vpx_object.split(';')[0]
-                        elif obj.vlmSettings.bake_light in light_col.all_objects:
-                            baked_light = context.scene.objects[obj.vlmSettings.bake_light]
+                        elif obj.vlmSettings.bake_sync_light in light_col.all_objects:
+                            baked_light = context.scene.objects[obj.vlmSettings.bake_sync_light]
                             sync_color = vlm_utils.is_rgb_led([baked_light])
-                            vpx_name = context.scene.objects[obj.vlmSettings.bake_light].vlmSettings.vpx_object.split(';')[0]
+                            vpx_name = context.scene.objects[obj.vlmSettings.bake_sync_light].vlmSettings.vpx_object.split(';')[0]
                         else:
                             vpx_name = None
                         if not vpx_name:
@@ -637,7 +641,7 @@ def export_vpx(op, context):
                 n_material_to_add += 1
                 wr.write_data(b'VLM.Lightmap\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
                 pr.write_data(b'VLM.Lightmap\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
-                wr.write_u32(0xFFFFFF) # Base color
+                wr.write_u32(0x7F7F7F) # Base color
                 wr.write_u32(0x000000) # Glossy color
                 wr.write_u32(0x000000) # Clearcoat color
                 wr.write_float(0.0) # Wrap lighting
