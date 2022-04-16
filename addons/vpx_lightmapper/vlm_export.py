@@ -60,6 +60,7 @@ def export_vpx(op, context):
 
     bakepath = vlm_utils.get_bakepath(context)
     vlm_utils.mkpath(f"{bakepath}Export/")
+    playfield_col = context.scene.vlmSettings.playfield_col
     export_mode = context.scene.vlmSettings.export_mode
     bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
     light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
@@ -107,6 +108,7 @@ def export_vpx(op, context):
     table_flashers = []
     baked_vpx_lights = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in light_col.all_objects))
     baked_vpx_objects = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in itertools.chain(bake_col.all_objects) if not vlm_utils.is_part_of_bake_category(o, 'movable')))
+    if playfield_col: baked_vpx_objects.append('playfield_mesh')
 
     # Remove previous baked models and append the new ones, also hide/remove baked items
     n_read_item = 0
@@ -115,6 +117,7 @@ def export_vpx(op, context):
     removed_images = {}
     prefix = ['Wall', 'Flipper', 'Timer', 'Plunger', 'Text', 'Bumper', 'Trigger', 'Light', 'Kicker', '', 'Gate', 'Spinner', 'Ramp', 
         'Table', 'LightCenter', 'DragPoint', 'Collection', 'DispReel', 'LightSeq', 'Prim', 'Flasher', 'Rubber', 'Target']
+    needs_playfield_physics = True
     while src_storage.exists(f'GameStg/GameItem{n_read_item}'):
         data = src_storage.openstream(f'GameStg/GameItem{n_read_item}').read()
         data = bytearray(data)
@@ -146,7 +149,13 @@ def export_vpx(op, context):
             item_data.next()
             reflection_field = visibility_field = False
             is_part_baked = is_baked
-            if item_data.tag == 'REEN':
+            if item_data.tag == 'NAME':
+                if name == 'playfield_mesh' and playfield_col:
+                    item_data.skip(24) # Rename to playfield_phys and hide
+                    item_data.put_u32(0x00680070)
+                    item_data.put_u32(0x00730079)
+                    needs_playfield_physics = False
+            elif item_data.tag == 'REEN':
                 reflection_field = True
             elif item_data.tag == 'CLDR' or item_data.tag == 'CLDW': # Collidable for wall ramps and primitives
                 is_physics = item_data.get_bool()
@@ -247,10 +256,16 @@ def export_vpx(op, context):
     n_game_items += 1
 
     # Add new bake models
+    new_playfield_image = None
     for obj in sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}'):
         is_light = obj.vlmSettings.bake_type == 'lightmap'
         is_active = obj.vlmSettings.bake_type == 'active'
         is_static = obj.vlmSettings.bake_type == 'static'
+        is_movable = obj.vlmSettings.bake_sync_trans != ''
+        is_playfield = playfield_col and not is_light and obj.vlmSettings.bake_objects == playfield_col.name
+        if is_movable:
+            continue # FIXME implement exporting and syncing of movables
+        if is_playfield: new_playfield_image = f'VLM.Packmap{obj.vlmSettings.bake_nestmap}'
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', 0, 0, 0)
@@ -267,7 +282,7 @@ def export_vpx(op, context):
         writer.write_tagged_string(b'IMAG', f'VLM.Packmap{obj.vlmSettings.bake_nestmap}')
         writer.write_tagged_string(b'NRMA', '')
         writer.write_tagged_u32(b'SIDS', 4)
-        writer.write_tagged_wide_string(b'NAME', export_name(obj.name))
+        writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if is_playfield else export_name(obj.name))
         writer.write_tagged_string(b'MATR', 'VLM.Lightmap' if is_light else 'VLM.Bake.Active' if is_active else 'VLM.Bake.Solid')
         writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
         writer.write_tagged_bool(b'TVIS', True)
@@ -286,7 +301,7 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'STRE', is_static)
         writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
-        writer.write_tagged_bool(b'REEN', context.scene.vlmSettings.enable_vpx_reflection)
+        writer.write_tagged_bool(b'REEN', not is_playfield and context.scene.vlmSettings.enable_vpx_reflection)
         writer.write_tagged_bool(b'EBFC', False)
         writer.write_tagged_string(b'MAPH', '')
         writer.write_tagged_bool(b'OVPH', False)
@@ -333,8 +348,7 @@ def export_vpx(op, context):
             compressed_indices = zlib.compress(struct.pack(f'<{n_indices}H', *indices))
         writer.write_tagged_u32(b'M3CJ', len(compressed_indices))
         writer.write_tagged_data(b'M3CI', compressed_indices)
-        
-        writer.write_tagged_float(b'PIDB', -1000.0 if is_light else 1000.0)
+        writer.write_tagged_float(b'PIDB', 0 if is_playfield else -1000.0 if is_light else 1000.0)
         writer.write_tagged_bool(b'ADDB', is_light) # Additive blending VPX mod
         writer.write_tagged_float(b'FALP', 100) # Additive blending VPX mod
         writer.write_tagged_u32(b'COLR', 0xFFFFFF)
@@ -348,14 +362,18 @@ def export_vpx(op, context):
         n_game_items += 1
             
     # Mark playfield image has removable
-    br = biff_io.BIFF_reader(src_storage.openstream('GameStg/GameData').read())
-    while not br.is_eof():
-        br.next()
-        if br.tag == "IMAG":
-            playfield_image = br.get_string()
-            #FIXME removed_images[playfield_image]=True
-            break
-        br.skip_tag()
+    if new_playfield_image:
+        br = biff_io.BIFF_reader(src_storage.openstream('GameStg/GameData').read())
+        while not br.is_eof():
+            br.next()
+            if br.tag == "IMAG":
+                image = br.get_string()
+                if image not in removed_images:
+                    removed_images[image] = ['PF']
+                else:
+                    removed_images[image].append('PF')
+                break
+            br.skip_tag()
 
     # Remove previous nestmaps
     n_images = 0
@@ -447,14 +465,10 @@ def export_vpx(op, context):
                     masi_pos = br.pos
                     n_materials = br.get_u32()
                 elif br.tag == "IMAG": # Playfield image
-                    playfields = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'playfield' or obj.vlmSettings.bake_type == 'playfield_fv']
-                    if playfields:
-                        playfield_image = f'VLM.Packmap{playfields[0].vlmSettings.bake_packmap}'
-                        if len(playfields) > 1:
-                            print(f'. Warning: more than one playfield bake found. Using {playfields[0].name} for the playfield image')
+                    if new_playfield_image:
                         wr = biff_io.BIFF_writer()
                         wr.new_tag(b'IMAG')
-                        wr.write_string(playfield_image)
+                        wr.write_string(new_playfield_image)
                         wr.close(write_endb=False)
                         br.delete_tag()
                         br.insert_data(wr.get_data())
@@ -498,7 +512,7 @@ def export_vpx(op, context):
                         elif mode == 2:
                             return f'	{obj_ref}.Visible = False\n'
                     
-                    for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap']:
+                    for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_sync_trans == '']:
                         sync_color = False
                         #brightness = 1.0 / vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
                         brightness = 1.0
@@ -703,6 +717,9 @@ def export_vpx(op, context):
     print(f". {n_images} images exported in table files")
     print(". Images marked as used:", list(used_images.keys()))
     print(". Images marked as deletable:", list(removed_images.keys()))
+
+    if needs_playfield_physics:
+        print('WARNING: this table needs a playfield physics object. You need to add an invisible, full playfield sized, ramp (not yet automated here).')
 
     hash_size = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHSIZE)
     file_hash = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHVAL)

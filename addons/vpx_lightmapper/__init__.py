@@ -212,6 +212,7 @@ class VLM_Scene_props(PropertyGroup):
         name='Export mode',
         default='remove_all'
     )
+    playfield_col: PointerProperty(name="Playfield", type=bpy.types.Collection, description="Bake collection used for VPX playfield (object rendered with table reflections)")
     # Active table informations
     table_file: StringProperty(name="Table", description="Table filename", default="")
     playfield_size: FloatVectorProperty(name="Playfield size:", description="Size of the playfield in VP unit", default=(0, 0, 0, 0), size=4)
@@ -730,8 +731,8 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         layout.prop(vlmProps, "padding")
         layout.prop(vlmProps, "remove_backface", text='Backface')
         layout.prop(vlmProps, "keep_pf_reflection_faces")
-        layout.prop(vlmProps, "export_image_type")
         layout.prop(vlmProps, "export_mode")
+        layout.prop(vlmProps, "playfield_col")
         layout.prop(vlmProps, "enable_vpx_reflection")
         row = layout.row()
         row.scale_y = 1.5
