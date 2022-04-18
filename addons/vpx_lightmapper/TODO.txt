@@ -1,11 +1,3 @@
-TODO VPX
-- do not render primitive with alpha = 0, nor additive primitives with color/alpha = 0 => RenderDynamic same as flasher
-- add options for tonemapping: Default (legacy modified Reihnart), Filmic, eventually others
-. https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
-. https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
-. https://github.com/thefranke/dirtchamber/blob/master/shader/tonemapping.hlsl
-
-
 TODO
 - Implement surface positionning relative to a ramp
 - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
@@ -16,8 +8,6 @@ TODO
 - When loading library, update existing node groups instead of skipping them
 - Include an asset folder, register it as an asset library when the plugin is activated, move the core assets to this asset library instead of loading them directly, populate with additional assets (screws, bulbs, posts, inserts, materials,...)
 - Add glow map baking (camera space post process bake)
-
-
 
 
 

@@ -16,6 +16,7 @@
 import bpy
 import os
 import zlib
+import math
 import struct
 import re
 import itertools
@@ -263,16 +264,14 @@ def export_vpx(op, context):
         is_static = obj.vlmSettings.bake_type == 'static'
         is_movable = obj.vlmSettings.bake_sync_trans != ''
         is_playfield = playfield_col and not is_light and obj.vlmSettings.bake_objects == playfield_col.name
-        if is_movable:
-            continue # FIXME implement exporting and syncing of movables
         if is_playfield: new_playfield_image = f'VLM.Packmap{obj.vlmSettings.bake_nestmap}'
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
-        writer.write_tagged_padded_vector(b'VPOS', 0, 0, 0)
-        writer.write_tagged_padded_vector(b'VSIZ', 1.0/global_scale, 1.0/global_scale, 1.0/global_scale)
-        writer.write_tagged_float(b'RTV0', 0)
-        writer.write_tagged_float(b'RTV1', 0)
-        writer.write_tagged_float(b'RTV2', 0)
+        writer.write_tagged_padded_vector(b'VPOS', obj.location[0]/global_scale, -obj.location[1]/global_scale, obj.location[2]/global_scale)
+        writer.write_tagged_padded_vector(b'VSIZ', obj.scale[0]/global_scale, obj.scale[1]/global_scale, obj.scale[2]/global_scale)
+        writer.write_tagged_float(b'RTV0', math.degrees(obj.rotation_euler[0]))
+        writer.write_tagged_float(b'RTV1', math.degrees(obj.rotation_euler[1]))
+        writer.write_tagged_float(b'RTV2', math.degrees(obj.rotation_euler[2]))
         writer.write_tagged_float(b'RTV3', 0)
         writer.write_tagged_float(b'RTV4', 0)
         writer.write_tagged_float(b'RTV5', 0)
@@ -405,12 +404,9 @@ def export_vpx(op, context):
         objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap == nestmap_index]
         if not objects:
             break
-        is_hdr = next( (o for o in objects if o.vlmSettings.bake_hdr_range > 1.01), None) is not None
-        if is_hdr:
-            nestmap_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}.exr')
-        else:
-            #nestmap_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}.png')
-            nestmap_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}.webp')
+        is_hdr = next( (o for o in objects if o.vlmSettings.bake_hdr_range > 1.0), None) is not None
+        base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}')
+        nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.png'
         if not os.path.exists(nestmap_path):
             op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create packmaps before exporting')
             return {'CANCELLED'}
@@ -422,7 +418,7 @@ def export_vpx(op, context):
             img_writer.write_tagged_u32(b'SIZE', len(img_data))
             img_writer.write_tagged_data(b'DATA', img_data)
         img_writer.close()
-        loaded, image = vlm_utils.get_image_or_black(nestmap_path, black_is_none=True)
+        loaded, image = vlm_utils.get_image_or_black(f'{base_path}.png', black_is_none=True)
         width = height = 0
         if image:
             width, height = image.size
@@ -438,7 +434,7 @@ def export_vpx(op, context):
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
-        print(f'. Adding Packmap #{nestmap_index} as a {width:>4} x {height:>4} image')
+        print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (Format: {"EXR" if is_hdr else "Webp"})')
         nestmap_index += 1
         n_images += 1
 
@@ -497,6 +493,7 @@ def export_vpx(op, context):
                     code = br.get_string()
                     br.pos = code_pos
                     br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
+                    
                     updates = []
                     def elem_ref(name):
                         name = name[:31] if len(name) > 31 else name
@@ -512,6 +509,8 @@ def export_vpx(op, context):
                         elif mode == 2:
                             return f'	{obj_ref}.Visible = False\n'
                     
+                    lightmaps = sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light)
+                    movables = sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''], key=lambda x: x.vlmSettings.bake_sync_trans)
                     for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_sync_trans == '']:
                         sync_color = False
                         #brightness = 1.0 / vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
@@ -538,11 +537,17 @@ def export_vpx(op, context):
                             updates.append((None, 2, elem_ref(export_name(obj.name)), False, brightness))
 
                     in_block = 0 # Search and update existing block if any
+                    sync_updated = False
+                    lampz_updated = False
+                    move_updated = False
                     for line in code.splitlines():
                         line_stripped = line.strip()
-                        if in_block == 1:
+                        if in_block == 0 and line_stripped.startswith('Sub VLMTimer_Timer'):
+                            sync_updated = True
+                            in_block = 1
+                        elif in_block == 1:
                             if line_stripped.startswith('End Sub'):
-                                in_block = 2
+                                in_block = 0
                                 for upd in updates:
                                     code += push_update(upd[1], upd[0], upd[2], 100 * upd[4], upd[3])
                                 code += "End Sub\n"
@@ -566,9 +571,25 @@ def export_vpx(op, context):
                                         code += f"  ' {line_stripped}\n"
                                 else:
                                     code += f"{line}\n"
-                        elif in_block == 0 and line_stripped.startswith('Sub VLMTimer_Timer'):
-                            in_block = 1
-                    if in_block < 2: # Block need to be created
+                        elif in_block == 0 and line_stripped.startswith('Sub VLMLampzHelper'):
+                            lampz_updated = True
+                            in_block = 3
+                        elif in_block == 3:
+                            if line_stripped.startswith('End Sub'):
+                                for obj in lightmaps:
+                                    code += f'	Lampz.Callback(0) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100, "\n'
+                                code += 'End Sub\n'
+                                in_block = 0
+                        elif in_block == 0 and line_stripped.startswith('Sub VLMMovableHelper'):
+                            lampz_updated = True
+                            in_block = 4
+                        elif in_block == 4:
+                            if line_stripped.startswith('End Sub'):
+                                for obj in movables:
+                                    code += f'	{elem_ref(export_name(obj.name))}.RotZ = 0\n'
+                                code += 'End Sub\n'
+                                in_block = 0
+                    if not sync_updated:
                         code += "\n\n"
                         code += "' ===============================================================\n"
                         code += "' ZVLM       Virtual Pinball X Light Mapper generated code\n"
@@ -604,6 +625,16 @@ def export_vpx(op, context):
                         code += "	lightmap.Opacity = intensity_scale * light.IntensityScale * t\n"
                         code += "	lightmap.Visible = lightmap.Opacity > 0.1\n"
                         code += "End Sub\n\n"
+                    if not lampz_updated:
+                        code += '\n\nSub VLMLampzHelper\n'
+                        for obj in lightmaps:
+                            code += f'	Lampz.Callback(0) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100, "\n'
+                        code += 'End Sub\n'
+                    if not move_updated:
+                        code += '\n\nSub VLMMovableHelper\n'
+                        for obj in movables:
+                            code += f'	{elem_ref(export_name(obj.name))}.RotZ = 0\n'
+                        code += 'End Sub\n'
                     wr = biff_io.BIFF_writer()
                     wr.write_string(code)
                     br.insert_data(wr.get_data())

@@ -38,7 +38,9 @@ def render_nestmaps(op, context):
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
     render_size = (int(opt_tex_size * context.scene.vlmSettings.render_aspect_ratio), opt_tex_size)
 
-    # reset UV of target objects (2 layers: 1 for default view porjected, 1 for nested UV)
+    # reset UV of target objects (2 layers: 1 for default view projected, 1 for nested UV)
+    ldr_objects = []
+    hdr_objects = []
     for obj in [o for o in result_col.all_objects]:
         uvs = [uv for uv in obj.data.uv_layers]
         while uvs:
@@ -59,10 +61,20 @@ def render_nestmaps(op, context):
         bpy.ops.uv.project_from_view(override)
         bpy.ops.object.mode_set(mode='OBJECT')
         obj.data.uv_layers.new(name='UVMap')
+        if obj.vlmSettings.bake_hdr_range > 1.0:
+            hdr_objects.append(obj)
+        else:
+            ldr_objects.append(obj)
 
     # Perform the actual island nesting and nestmap generation
     max_tex_size = min(4096, 2 * opt_tex_size)
-    vlm_nest.nest(context, result_col.all_objects, render_size, max_tex_size, max_tex_size, 'Nestmap')
+    nestmap_offset = 0
+    if hdr_objects:
+        n_nestmap, splitted_objects = vlm_nest.nest(context, hdr_objects, render_size, max_tex_size, max_tex_size, 'Nestmap', nestmap_offset)
+        nestmap_offset = nestmap_offset + n_nestmap
+    if ldr_objects:
+        vlm_nest.nest(context, ldr_objects, render_size, max_tex_size, max_tex_size, 'Nestmap', nestmap_offset)
+        nestmap_offset = nestmap_offset + n_nestmap
 
     # Restore initial state
     bpy.ops.object.select_all(action='DESELECT')
@@ -70,5 +82,5 @@ def render_nestmaps(op, context):
         obj.select_set(True)
         context.view_layer.objects.active = obj
     context.scene.vlmSettings.last_bake_step = 'nestmaps'
-    print(f'Nestmap generation finished.')
+    print(f'Nestmap generation finished ({nestmap_offset - 1} nestmap generated).')
     return {'FINISHED'}

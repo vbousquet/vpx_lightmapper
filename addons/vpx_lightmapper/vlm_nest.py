@@ -86,7 +86,7 @@ def create_vert_face_db(faces, uv_layer):
 ## Code for 2D nesting algorithm
 
 
-def nest(context, objects, render_size, tex_w, tex_h, packmap_name):
+def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offset):
     '''Perform nesting of a group of objects to a minimal (not optimal) set of nestmaps
     Eventually splitting objects that can't fit into a single nestmap.
     '''
@@ -103,6 +103,7 @@ def nest(context, objects, render_size, tex_w, tex_h, packmap_name):
 
     # Nest groups of islands into nestmaps
     to_render = []
+    splitted_objects = []
     while islands_to_pack:
         # Sort from biggest to smallest
         islands_to_pack.sort(key=lambda p: p[3], reverse=True)
@@ -122,6 +123,9 @@ def nest(context, objects, render_size, tex_w, tex_h, packmap_name):
                 pixcount += block[3]
                 selected_islands.extend(block[2])
             selection_names = [block[0].name for block in selection]
+            print(f'Trying to nest in a single texture the {len(selected_islands)} islands ({pixcount/float(tex_w*tex_h):6.2%} fill with {pixcount} px / {tex_w*tex_h} content) of {selection_names}')
+
+            # Save UV for undoing nesting if needed
             uv_undo = []
             for island in selected_islands:
                 obj, bm = island['source']
@@ -130,38 +134,95 @@ def nest(context, objects, render_size, tex_w, tex_h, packmap_name):
                     for loop in face.loops:
                         uv_undo.append(Vector(loop[uv_layer].uv))
 
-            print(f'Trying to nest in a single texture the {len(selected_islands)} islands ({pixcount/float(tex_w*tex_h):6.2%} fill with {pixcount} px / {tex_w*tex_h} content) of {selection_names}')
-            nestmap = perform_nesting(selected_islands, src_w, src_h, tex_w, tex_h, padding, only_one_page=True)
+            nestmap = perform_nesting(selected_islands, src_w, src_h, tex_w, tex_h, padding, only_one_page=(len(selection) > 1))
             _, _, _, nested_islands, targets, _ = nestmap
             if len(targets) == 1:
                 print(f'Nesting of {selection_names} succeeded.')
-                # Success: apply UV and render packmap
+                # Success: store result for later nestmap render
                 to_render.append( (selection, nestmap) )
                 for block in selection:
                     islands_to_pack.remove(block)
-                    obj, bm, _, _ = block
+                    obj, bm, block_islands, block_pix_count = block
+                    for face in bm.faces:
+                        face.tag = True
+                    for island in block_islands:
+                        for face in island['faces']:
+                            face.tag = False
+                    faces_to_remove = []
+                    for face in bm.faces:
+                        if face.tag: faces_to_remove.append(face)
+                    if faces_to_remove: bmesh.ops.delete(bm, geom=faces_to_remove, context='FACES')
                     bm.to_mesh(obj.data)
                     bm.free()
                 break
             else:
-                print(f'Nesting of {selection_names} overflowed from a single texture page')
-                # reset uv
-                index = 0
-                for island in selected_islands:
-                    obj, bm = island['source']
-                    uv_layer = bm.loops.layers.uv.verify()
-                    for face in island['faces']:
-                        for loop in face.loops:
-                            loop[uv_layer].uv = uv_undo[index]
-                            index = index + 1
                 # remove last block and start again with a smaller group
                 if len(selection) > 1:
+                    print(f'Nesting of {selection_names} overflowed from a single texture page. Retrying with a smaller content.')
                     selection.pop()
+                    # reset uv
+                    index = 0
+                    for island in selected_islands:
+                        obj, bm = island['source']
+                        uv_layer = bm.loops.layers.uv.verify()
+                        for face in island['faces']:
+                            for loop in face.loops:
+                                loop[uv_layer].uv = uv_undo[index]
+                                index = index + 1
                 else:
-                    # it is the first block (the largest) of the selection then. We need to split the block's object between the parts on page 1 and the rest, keeping the page 1 (no big interest of re-nesting first page)
-                    print(f'Object {selection[0].name} does not fit on a single page. It needs to be splitted.')
-                    print('Not implemented yet')
-                    return {'FINISHED'}
+                    # This single block did not fit inside a single page. We have performed a full nest, so we can keep the first page, and split the other islands
+                    # to be nested with other blocks
+                    block = selection[0]
+                    islands_to_pack.remove(block)
+                    obj, bm, block_islands, block_pix_count = block
+                    src_w, src_h, padding, islands, targets, target_heights = nestmap
+                    print(f'Object {obj.name} does not fit on a single page. Splitting it.')
+                    # Consider the parts that fitted the first page as successfull
+                    obj_copy = obj.copy()
+                    obj_copy.data = obj_copy.data.copy()
+                    for col in obj.users_collection:
+                        col.objects.link(obj_copy)
+                    splitted_objects.append(obj_copy)
+                    bm_copy = bmesh.new()
+                    bm_copy.from_mesh(obj_copy.data)
+                    bm.faces.ensure_lookup_table()
+                    bm_copy.faces.ensure_lookup_table()
+                    uv_layer = bm.loops.layers.uv.verify()
+                    uv_layer_copy = bm_copy.loops.layers.uv.verify()
+                    for face in bm.faces:
+                        face_copy = bm_copy.faces[face.index]
+                        for loop_copy, loop in zip(face_copy.loops, face.loops):
+                            loop_copy[uv_layer_copy].uv = loop[uv_layer].uv
+                    faces_to_remove = []
+                    processed_islands = []
+                    remaining_islands = []
+                    index = 0
+                    processed_pix_count = 0
+                    for island in block_islands:
+                        n, x, y, rot = island['place']
+                        for face in island['faces']:
+                            for loop in face.loops:
+                                if n > 0: loop[uv_layer].uv = uv_undo[index] # Only reset UV of islands that we neeed to nest again
+                                index = index + 1
+                        if n > 0:
+                            remaining_islands.append(island)
+                            for face in island['faces']:
+                                faces_to_remove.append(bm_copy.faces[face.index])
+                        else:
+                            processed_islands.append(island)
+                            island['source'] = (obj_copy, None)
+                            block_pix_count = block_pix_count - island['pixcount']
+                            processed_pix_count = processed_pix_count + island['pixcount']
+                    bmesh.ops.delete(bm_copy, geom=faces_to_remove, context='FACES')
+                    bm_copy.to_mesh(obj_copy.data)
+                    bm_copy.free()
+                    nestmap = (src_w, src_h, padding, processed_islands, targets[0:1], target_heights[0:1])
+                    to_render.append( ([(obj_copy, None, processed_islands, processed_pix_count)], nestmap) ) # save them for nestmap rendering
+                    print(f'. {len(processed_islands)} islands were nested on the first page and kept.')
+                    # Continue nesting with all the remaining islands
+                    print(f'. {len(remaining_islands)} islands were splitted, and still need to be nested.')
+                    islands_to_pack.append( (obj, bm, remaining_islands, block_pix_count) )
+                    break
 
     # Free unprocessed data if any
     for (obj, bm, islands, obj_pixcount) in islands_to_pack:
@@ -201,13 +262,15 @@ def nest(context, objects, render_size, tex_w, tex_h, packmap_name):
                 mask_w = len(mask)
                 min_x, min_y = island['min_i']
                 island_render_group = island['render_group']
+                if n > 0: # Skip islands that were nested to secondary pages: they have been splitted to other objects
+                    continue
                 if island_render_group < 0 or island_render_group >= len(render_data) or render_data[island_render_group] is None:
                     print('. Missing render group, skipping island')
                     continue
-                if obj.vlmSettings.bake_nestmap != n:
+                if obj.vlmSettings.bake_nestmap != nestmap_index + nestmap_offset:
                     if obj.vlmSettings.bake_nestmap != -1:
                         print(f'ERROR: object {obj.name} was not splitted but has parts on multiple nestmaps')
-                    obj.vlmSettings.bake_nestmap = n
+                    obj.vlmSettings.bake_nestmap = nestmap_index + nestmap_offset
                 island_render = render_data[island_render_group]
                 target_mask = targets[n]
                 target_w = len(target_mask)
@@ -263,7 +326,7 @@ def nest(context, objects, render_size, tex_w, tex_h, packmap_name):
         scene = bpy.data.scenes.new('VLM.Tmp Scene')
         scene.view_settings.view_transform = 'Raw'
         scene.view_settings.look = 'None'
-        base_filepath = f'{vlm_utils.get_bakepath(context, type="EXPORT")}{packmap_name} {nestmap_index}'
+        base_filepath = f'{vlm_utils.get_bakepath(context, type="EXPORT")}{nestmap_name} {nestmap_offset + nestmap_index}'
         for i, target in enumerate(targets):
             target_w = len(target)
             target_h = target_heights[i]
@@ -304,6 +367,7 @@ def nest(context, objects, render_size, tex_w, tex_h, packmap_name):
             print(f'. Texture #{i} has a size of {target_w}x{target_h} for a fill rate of {1.0 - (filled/(target_w*target_h)):>6.2%} (alpha: {with_alpha})')
         bpy.data.scenes.remove(scene)
         print(f'Nest map generated and saved to {base_filepath}')
+    return (len(to_render), splitted_objects)
 
 
 def prepare_nesting(obj, render_size, padding):
