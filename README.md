@@ -24,7 +24,7 @@ This tool is just my attempt at building better tables. It is shared in the hope
 
 [Visual Pinball X](https://github.com/vpinball/vpinball) is a game engine dedicated to pinball game simulation. It is a great tool which has allowed a whole community to grow and produce incredible pinball tables ([VPForums](https://www.vpforums.com), [VPUniverse](https://www.vpuniverse.com), [Orbitalpin](https://www.orbitalpin.com), [Pinball Nirvana](https://www.pinballnirvana.com), [VPDB](https://www.vpdb.io), [PinSimDB](https://www.pinsimdb.org),...). For the graphic part, it includes a nice realtime rendering engine which allows great visual results. 
 
-To obtain the best visuals, table creators may choose to precompute part of the rendering of their table in a more advanced offline renderer like [Blender](www.blender.org), a.k.a. "baking" the rendering. This works especially nicely for pinball games since the game is played from a fixed point of view, allowing to efficently bake view dependent lighting effects. 
+To obtain the best visuals, table creators may choose to precompute parts of the rendering of their table in a more advanced offline renderer like [Blender](www.blender.org), a.k.a. "baking" the rendering. This works especially nicely for pinball games since the game is played from a fixed point of view, allowing to efficently bake view dependent lighting effects.
 
 The visual quality of a pinball simulation is also tighlty linked to the rendering of the many (up to hundred) lights that are used in a pinball. The texture baking approach can be extended regarding precomputing the effect of lighting by using "light maps", that is to say models with precomputed textures storing the effect of lights. These models are a shell around the table objects, with texture storing the lighting. When playing the pinball table, they are renderered by adding the lights contribution to the base model.
 
@@ -32,6 +32,10 @@ This tool aims at helping with the process of creating VPX tables by:
 - making importing/updating table a fast, simple and easy task,
 - easing camera setup,
 - automating the full bakemap/lightmap process, with a good level of optimization.
+
+![Property Panel](docs/Property-panel.png)
+
+The UI is available in the scene property panel, inside the "VPX Light Mapper" pane. Lots of informations and tools are also available in the information (N key) panel of the 3D view and the collection property panel (bake & light groups configuration).
 
 ## Features
 
@@ -41,8 +45,8 @@ This toolkit offers the following features:
 - Automatically detect occluded objects that can be exclude from bake meshes
 - Automatically setup groups of non overlapping objects
 - Batch render bakemap/lightmap, automatically optimizing renders
-- Generate mesh for baked mesh and lightmaps, optimizing them (subividing for limited prejection distortion, pruning of unneeded faces for lightmaps, limited dissolve, backface removal,...), generating optimized combined UV map accross the mesh set
-- Render packed texture combining all the bakemap/lightmap
+- Generate mesh for bake/lightmaps and optimize them (subividing for limited prejection distortion, pruning of unneeded faces for lightmaps, limited dissolve, backface removal,...)
+- Render nested texture combining all the bakemap/lightmap
 - Export directly playable VPX table file with updated geometry, textures and script
 
 ## Installation
@@ -64,53 +68,14 @@ Depending on your security configuration, this additional dependency installatio
 
 Additionnally, this tool needs the latest, not yet released, build of Visual Pinball X or Visual Pinball for VR. These are available [here for VPX](https://github.com/vpinball/vpinball/actions) and [here for VPVR](https://github.com/vpinball/vpvr/actions). Be aware that these builds are not release version but alpha build. Therefore you are likely to encounter bugs, and you should not use them without backing up your work first.
 
-### Better packing of UV maps
-
-At some points bake maps have to be tightly packed in a big UV map. For this, Blender offers a default operator called 'Pack Islands' which give not that good results. For better packing, you should install and use another UV map packing tools like:
-- [UV Packer](https://www.uv-packer.com/) which works great (far better than Blender's default) and is free,
-- [UV Pack master](https://uvpackmaster.com/) which is known to give very good results, but needs a paid license.
-
-This add-on natively supports the free [UV Packer](https://www.uv-packer.com/) and fully integrates with him for batch processing. To use this feature, you need to download the UVPacker exe and place it in the addon folder.
-
-## Overview
-
-![Property Panel](docs/Property-panel.png)
-
-This tool is splitted in 3 modules which are accessed through the usual Blender UI panes: a VPX file importer, a lightmap baker, and an exporter.
-
-The workflow can be whatever you want, but the tool was designed around the following one:
-1. Create a table in VPX
-2. Import the table in Blender (or update if this is done after the first iteration) 
-3. Adjust the generated baking configuration (light groups, bake groups, bake modes,...)
-4. Improve the materials and adjust the lights in Blender
-5. Bake
-6. Review the result direclty inside Blender
-7. Export an updated table with all the bakes and and updated script with lightmap synchronization integrated
-10. Test and adjust light factors in VPX, eventually go back to step 2, using update button
-
-
-The tool expects a scene using the following collections:
-- 'Setup': the generated camera and lattice object. Just uncheck it.
-- 'Trash': deleted objects, not rendered
-- 'Hidden': hidden objects, not rendered
-- 'Indirect': objects which are not baked (not included in the output meshes and textures) but *indirectly* influence the lighting. For example this can be used for trigger wires, gate wires,...
-- 'Bake Target': some objects may be defined to be baked to a 'bake target', that is to say that they will be rendered but the result will be projected on another simplified mesh wich will be used in VPX. These 'bake targets' are placed in this collection.
-- 'Light Groups': this collection hosts sub-collections which define each lighting situation (i.e. all the lighting, see below).
-- 'Bake Groups': this collection hosts sub-collections which define each bake group (i.e. what will be rendered, see below).
-
-The UI is available in the scene property panel, inside the "VPX Light Mapper" pane. Lots of informations and tools are also available in the information (N key) panel of the 3D view and the collection property panel (bake & light groups configuration).
-
 ## Import tool
 
-The import tool is used to create a scene setup (empty or from an existing table), then update it. The initial imports will create the default collections, loads everything and try to set up the right collections. A few things to note:
-- All flasher are imported initially hidden since they are mainly use for lighting effects. Additively blended flashers are also imported as lights in the 'Flashers' light sub collection.
-- Lights are imported as emitting geometry or point lights depending on the 'bulb' option in VPX. Lights which are likely inserts follow a specific process (generate a slightly reflective cup below playfield, generate a translucency map for the playfield)
-- Movable parts of gates, spinner, triggers and bumpers are placed in the indirect collection.
+The import tool is used to create a scene setup (empty or from an existing table), then update it. The initial imports will create the default collections, loads everything and try to set up the right collections. Lights are imported as emitting geometry or point lights depending on the 'bulb' option in VPX. Lights which are likely inserts follow a specific process (generate a slightly reflective cup below playfield, generate a translucency map for the playfield)
 
 When updating, the process is the following:
 - All textures are reloaded
-- Objects link to groups (Hidden/Bake/...) are left untouched except for deleted objects which are moved to Trash
-- World environments (IBL and Black) are (re)created if missing. The environment texture is updated in the shader node named 'VPX.Mat.Tex.IBL'
+- Objects link to groups (Hidden/Bake/...) are left untouched except for deleted objects which are moved to the 'Hidden' collection
+- World environment is (re)created if missing. The environment texture is updated in the shader node named 'VPX.Mat.Tex.IBL'
 - Objects are identified by their link to VPX object (look in 3D View side panel, there you can see/edit the VPX identifier, eventually associated to a subpart for multipart objects like bumpers). If object is not found, it is created like on initial import but if object is found, it is updated according to its configuration (available in the 3D View side panel):
 	- If not disabled, meshes/curves/light informations are replaced by the ones defined in the VPX table,
 	- If not disabled, position/rotation/scale are redefined to match the one of the VPX table
@@ -123,59 +88,56 @@ To take control of a material, either change the material to a non 'VPX.' named 
 
 ## Camera tool
 
-Since having a matching camera with the player view point is a key point for correct perspective projected baking, a dedicated tool allows you to manage it automatically. It will update the 'Bake Camera' according to your settings (which are imported from the VPX table).
+Since having a matching camera with the player view point is needed for correct perspective projected baking, a dedicated tool allows you to manage it automatically. It will update the camera according to your settings (which are imported from the VPX table).
 
 The tool always fit the camera to the objects to be baked, processing layback according to the selected mode:
 - Disable: don't take layback in account (this won't render well in VPX),
 - Deform: deform geometry by applying a layback lattice (this will somewhat break the shading but is the most faithfull to VPX rendering),
-- Camera: this will adjust camera inclination and rendering properties to correspond to VPX rendering without breaking the shading.
+- Camera: this will adjust camera inclination and rendering properties to correspond to VPX rendering without breaking the shading. This mode is the one recommended for good quality baking.
 
 ## Bakemap/Lightmap tool
 
+The workflow can be whatever you want, but the tool was designed around the following one:
+1. Create a table in VPX
+2. Import the table in Blender (or update if this is done after the first iteration) 
+3. Adjust the generated baking configuration (light groups, bake groups, bake modes,...)
+4. Improve the materials and adjust the lights in Blender
+5. Bake
+6. Review the result direclty inside Blender
+7. Export an updated table with all the bakes
+8. Adapt the table script, using the generated helper
+9. Test and adjust in VPX, eventually go back to step 2, using update button
+
 The texture baking is performed according to:
 - Light groups, which define each lighting situation to be computed,
-- Bake groups, which define groups of object to be rendered, baked together and exported into a single merged mesh.
+- Bake groups, which define groups of object to be rendered, baked together and exported.
+
+This tools performs baking using 'projected UV unwrapping'. This means that the baking is performed from the bake camera point of view, texture coordinates of the models are computed automatically by projecting them from the camera point of view. This method works well in the context of baking a pinball table:
+- you don't need to unwrap your models,
+- you can use default Blender's shading nodes,
+- the produced texture have uniform texel density (which is good for performance and visual quality).
+The drawback of this technique is that it is highly point of view dependent and won't work well on objects or ligths that can be moved. Alson this technique needs ad-hoc texture packing algorithm since normal uv-packing only works well if baking is performed after uv packing which is not the case here.
 
 The lightmap baker automates all the baking process according to the following workflow for each bake group:
 1. Identify non overlapping groups of objects from the camera point of view
 2. For each light situation, render each non overlapping object groups from the camera point of view and store these renders in a cache
-3. Generate a base optimized mesh from all the objects, suitable for fixed view baking (including preliminary mesh optimization, and automatically subdivision to avoid projection artefacts)
+3. Generate an optimized mesh for each bake group, suitable for fixed view baking (including preliminary mesh optimization, and automatically subdivision to avoid projection artefacts)
 4. For each light group, derive an optimized mesh by removing unlit faces
-5. For each of these meshes, prepare a packed bake map from the initial renders
-6. Combine all this packed bake/lightmap together, except for playfield bakemaps
+5. For all of these meshes, compute a texture map from the initial renders
 7. Export all this to an updated VPX file
 
 In the collection property panel, each bake groups has a 'bake mode' which determine how it will be processed:
-- Default
-	- Solid bake outputs splitted mesh per bake group
-	- Light map bake meshes are merged together (including the ones baked in playfield mode groups)
-- Playfield
-	- Solid bake outputs a splitted mesh per bake group, which is baked to a playfield size plane. This is a traditional bake (not a render with projective UV mapping) and requires to use view dependent shading. The toolkit provides material node group for view dependent shading with regards to the position of the camera.
-	- Light map behave exactly the same as in default mode and are merged together (including the ones from default mode groups)
-- *TODO* Movable
-	- Solid and light map bake outputs splitted mesh and image per object in the bake group, keeping each object origin
-
-This configuration is needed due to the fact that light bakes and solid bakes have different constraints:
-- Light bakes all end up with the same material in VPX (active, no lighting), they can be combined together to limit the number of draw calls, except for movable parts
-- Solid bakes are more complex:
-	- Static geometry is the best performance wise but is not applicable for non opaque parts, lower playfield, movable parts,...
-	- Non baked lights (classic inserts, playfield text and alpha inserts borders overlay) need a playfield mapped image (no perspective, ortho UV projection)
-	- Non opaque objects need an 'active' material, so should be baked to a separate mesh from static ones
-	- Obviously, movable objects (diverters,...) need to be moved during gameplay, so be baked separately (solid and light maps) keeping their own origin
+- Group: outputs a single mesh per bake group
+- Split: outputs a single mesh per object in the group, do not perform backface culling
+Additionally, each group must be marked as 'opaque' or 'non opaque'. This information is needed for VPX to correctly render transparent objects (they need to be rendered after opaque one, from back to front), to allow render optimization (static opaque objects are prerendered, giving a large performance boost), and to correctly process object border shading (transparency of borders of opaque objects is discarded).
 
 In the collection property panel, each light collection has a 'light mode' which determine how it will be processed:
+- Solid: content of the collection is used for the base bake (not a lightmap).
 - Group: all lights are treated as a group and generate a single lightmap,
 - Split: each light of the collection generate a lightmap,
-- World: content of the collection is used for the base bake.
-If your table have constantly emissive object or lamps, they need to be placed in the 'World' light group or they will influence each of the lightmap, creating ugly artefacts.
+Note that all lights or emissive objects must be placed in one of these collections or they will influence each of the lightmap, creating ugly artefacts.
 
-Finally, exporting consist in generating a new VPX table file with:
-- the new packed bake/lightmap images,
-- the bake/lightmap primitives,
-- an updated script for lightmap synchronization,
-- a timer to drive the script.
-
-The exporter has an option to decide what to do with the initial items of the table that have been baked:
+Exporting consist in generating a new VPX table file with the new packed bake/lightmap images, and the bake/lightmap primitives. The exporter has an option to decide what to do with the initial items of the table that have been baked:
 - Default: don't touh them,
 - Hide: hide items that have been baked,
 - Remove: remove items that have been baked and do not have physics, hide the one that have been baked but are needed for physics,
@@ -190,33 +152,26 @@ This little guide gives you the step to create your first lightmap baked table:
 4. In the scene panel, press the 'Import' button, and select the saved default VPX table
 5. Press 0 for camera point of view
 6. In the 3D view, in the right panel (N shotcut), select the VLM pane
-7. In the 3D view, select the primitives on the left and right side of the table, then click 'Hide' in the VLM side panel
-8. In the 'Active' collection, select all shadow objects ('FlipperRsh', 'BallShadow1',...) and press the 'Hide' button of the VLM side panel
+7. In the 3D view, select the primitives on the left and right side of the table, then move them to the 'Hidden' collection
+8. In the 'Active' collection, select all shadow objects ('FlipperRsh', 'BallShadow1',...) and move them to the 'Hidden' collection
 9. Move the remaining primitive of the 'Active' collection to the 'Default' collection
 10. Save your scene
 11. In the scene panel, select a target resolution (start with very low for an ugly but fast preview), then press 'Batch'
 12. Wait (this may be long depending on your computer and the resolution), watching in the console what is happening
-13. Open the new VPX table with the version of VPX that supports additive blended primitive and play!
-14 You can also preview/inspect the result directly in blender: select 'Rendered' mode for the 3D View, you now have a pink table! Select it, and press 'Load/Unload Renders' in the VLM panel to view it with the baked textures. Do the same for the different bake/light mesh you want to inspect.
+13 You can preview/inspect the result directly in blender: select 'Rendered' mode for the 3D View, you now have a pink table! Select it, and press 'Load/Unload Renders' in the VLM panel to view it with the baked textures. Do the same for the different bake/light mesh you want to inspect.
+14. Open the new VPX table and play! You will the see the baked objects. Though, lights won't be synchronnized until you update your table script.
 
 ## Usefull hints
 
 ### Optimizing the bake mesh (and render time)
 
-As much as possible, you should avoid including occluded (not directly visible) geometry from your bakes. To help you in doing so, the add-on offers a small tool that will identify occluded geometry from the camera view point. You can then choose to mark is as 'Indirect' (it will influence the image but won't be part of the bake mesh). This tool can be accessed from the 3D view, by clicking the button 'Select Occluded'. Note that this can be a lengthy operation. Another side benefit of tagging as indirect the occluded geometry is that this will help limiting the number of render groups, and therefore limit the render time.
+As much as possible, you should avoid including occluded (not directly visible) geometry from your bakes. To help you in doing so, the add-on offers a small tool that will identify occluded geometry from the camera point of view. You can then choose to mark them as 'Indirect' (it will influence the image but won't be part of the bake mesh). This tool can be accessed from the 3D view, by clicking the button 'Select Occluded'. Note that this can be a lengthy operation. Another side benefit of tagging as indirect the occluded geometry is that this will help limiting the number of render groups, and therefore limit the render time.
 
 Beside this user action, to avoid ending up with very large meshes (in terms of number of faces, as well as overdraw when rendering in VPX), all produced meshes are optimized by:
 - pruning duplicate vertices,
 - performing a limited dissolve of the mesh (see Blender doc),
 - performing backface culling,
 - removing unlit faces from lightmaps.
-
-### Plastics
-
-The importer has an option to detect plastic walls and process them accordingly. If set, all thin walls will be processed like this:
-- place the top material at the bottom, and set it to be shaded as translucent instead of diffuse,
-- set side and top material to a predefined transparent plastic material,
-- bevel the edges of the resulting mesh (only for baking, the bevel is not exported).
 
 ### Inserts
 
@@ -225,48 +180,13 @@ The importer has an option to detect inserts (lights placed on the playfield, wi
 - generate a cup mesh, opened on the top side, corresponding to the VPX light shape, with a core reflective material,
 - adjust the playfield material to be partly translucent for the inserts, using an automatically generated translucency map.
 
-A better way of baking inserts is:
-- Cut hole in the playfield texture (transparent areas),
-- Place in the 'Bake Target' collection a little, black shaded, cup corresponding to their shape to give them some depth. 
-- Place the detailled model of the the insert in the bake collection (with a plastic shader) specifying its 'Bake To' parameter to the little cup previously created. 
-- For the lighting, an emitter mesh is placed inside the model, as well as a spot light slightly above the playfield, all of them grouped together in a light collection to be baked together.
-- Place a glass for the pinball cabinet which should be transparent for camera rays, and classic glass otherwise.
-This will allow inserts with detailled lighting (thanks to the emitter mesh and its nice texture), wich lights its surrounding (thanks to the spot light), and also has large indirect lighting influence (thanks to the pincab glass), with somme fake depth (thanks to the little insert cup), and with limited performance impact (in the end, only the little cup is exported and rendered by VPX).
-
 ### Transparent objects (plastic ramps, bumper caps,...) and alpha blending
 
-Visual Pinball X performs alpha blending of transparent objects. This means that the object is rendered on top of objects behing it, blending the color between them according to the alpha channel of the used texture. This can be compared to the shading of a transparent glass with an indice of refraction of 1 (i.e. non refractive glass).
+Visual Pinball X performs alpha blending of transparent objects. This means that the object is rendered on top of objects behind it, blending the color between them according to the alpha channel of the used texture. This can be compared to the shading of a transparent glass with an indice of refraction of 1 (i.e. non refractive glass). Alpha blending needs the opaque objects to be rendered first, then the alpha blended parts, rendering the ones in the back first, then the ones in the front.
 
-Blender can render glass, outputing to the alpha channel the amount of escaping rays, that is to say rays that are transmitted through the glass and reaching the background. This is great since it gives full control on what is rendered to the user. To enable this, in 'Render Properties > Film > Transparent' check 'Transparent Glass' and increase 'Roughness Threshold'. In the case of a pinball table, transparent objects usually have other objects behind them, therefore rays are not escaping but reaching other elements. If we want to view a ball passing behind 2 elements, they have to be rendered as 2 layers: a background one, and an alpha blended one. To let Blender knows about this separation between the 2 layers, we need to place a mesh with an holdout shader.
-
-Separating the layers for rendering is mandatory for the baked mesh which are rendered as a solid (opaque or alpha blended). For lightmaps, which are rendered as additively blended (added to the rest), this is not needed. Therefore the holdout shaded mesh is not needed for lightmaps. The toolkit provided a shader node group named 'VLM.Bake Info' that provides this shading, along with other baking information taht can be used in a custom shader.
+Blender can render glass, outputing to the alpha channel the amount of escaping rays, that is to say rays that are transmitted through the glass and reaching the background. This is great since it gives full control on what is rendered to the user. To enable this, in 'Render Properties > Film > Transparent' check 'Transparent Glass' and increase 'Roughness Threshold'. In the case of a pinball table, transparent objects usually have other objects behind them, therefore rays are not escaping but reaching other elements. If we want to view a ball passing behind 2 elements, they have to be rendered as 2 layers: a background opaque one, and an alpha blended one. To let Blender knows about this separation between the 2 layers, we need to place a mesh between them with an holdout shader.
 
 Note that, with this setup, there won't be any shadowing, since there is no shadowing support inside VPX. So a ball passing under a transparent object will not occlude light coming from behind it.
-
-### Lightmap emission range
-
-*TODO* This feature is under heavy developpement
-
-To be rendered correctly, lightmaps need to have a color range outside the traditional 0 to 1 range supported by most image files (especially Png/WebP). VPX supports HDR for this, but it is not a suitable solution as it leads to huge files and low performance. The usual way (with regards to how it is done in VPX with flasher or light objects) of doing is to have a color/texture using a normal range of 0-1 but multiplied by a >1 intensity factor when rendered.
-
-To account for this, when rendering lightmaps, the toolkit evaluate its 'HDR range', that is to say the highest (averaged) value colors reach in its render. This range is then used when exporting rendering lightmap to the packmap to apply as a scaling factor to lower birghtness and restrict the light range value in the exported image. This scaling factor is used as an intensity scale factor when rendering in VPX, giving back its full brightness to the lights.
-
-WebP files use high compression in the lower lights since. This can lead to artefacts if using high brightness factors. Ifn this case, using Png texture should solve the problem (the toolkit always generates both of them, just replace the WebP by importing the Png one).
-
-### Movable objects
-
-*TODO* This feature is under heavy developpement
-
-Perspective projection baking is only suitable for fixed view point (the one the projection is performed). Therefore, it is not suitable for movable objects. To handle them, you need to place them in a bake group with a bake mode defined to 'Movable'. The objects in these groups are processed differently:
-- At 'Group' step, they are just skipped
-- At 'Render' step:
-  - For the bake of other objects: depending on the settings selected per object, they are either hide or kept as indirect contributor to the scene
-  - To generate their bake/lightmaps:
-    - Their first material slot is searched for a 'VLM.BakeTex' named image node with a target bake texture, if not found and the object has an image node 'VPX.Tex' (imported image texture from VPX), the  'VLM.BakeTex' node is created with the same size as the VPX texture.
-	- A bake/lightmap is then performed for each lighting situation and cached, computing for each of the lightmap bakes the influence level.
-- At 'Meshes' step, their original mesh is copied untouched to the result collection. For each of the lighting situation with an influence level above the choosen threshold, a lightmap shell mesh is also generated.
-- At 'Packmap' step, they are just skipped.
-- At 'Export' step, they are included (replacing the initial object) and the script to sync their position/lighting is generated
 
 ### Managing the cache
 
@@ -275,5 +195,3 @@ For the moment, this cache is manually managed. Inside it, you will find 3 folde
 - Object Masks: contains the mask computed for each object during the 'Group' step. You need to manually delete elements (or the whole folder) when objects are moved
 - Renders: contains the actual renders. This needs to be manually cleared for render to actually happen (or if you know what you do, clear the only the elements you want to rerender)
 - Export: contains the packmaps in Png and WebP format. As for the other folders, this needs to be manually cleared for packmaps to be regenerated
-
-
