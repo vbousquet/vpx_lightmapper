@@ -69,11 +69,11 @@ def render_nestmaps(op, context):
     # Perform the actual island nesting and nestmap generation
     max_tex_size = min(4096, 2 * opt_tex_size)
     nestmap_offset = 0
+    if ldr_objects:
+        n_nestmap, splitted_objects = vlm_nest.nest(context, ldr_objects, render_size, max_tex_size, max_tex_size, 'Nestmap', nestmap_offset)
+        nestmap_offset = nestmap_offset + n_nestmap
     if hdr_objects:
         n_nestmap, splitted_objects = vlm_nest.nest(context, hdr_objects, render_size, max_tex_size, max_tex_size, 'Nestmap', nestmap_offset)
-        nestmap_offset = nestmap_offset + n_nestmap
-    if ldr_objects:
-        vlm_nest.nest(context, ldr_objects, render_size, max_tex_size, max_tex_size, 'Nestmap', nestmap_offset)
         nestmap_offset = nestmap_offset + n_nestmap
 
     # Restore initial state
