@@ -7,11 +7,35 @@ TODO
 - Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled
 - When loading library, update existing node groups instead of skipping them
 - Include an asset folder, register it as an asset library when the plugin is activated, move the core assets to this asset library instead of loading them directly, populate with additional assets (screws, bulbs, posts, inserts, materials,...)
-- Add glow map baking (camera space post process bake)
+- Add glow map baking (camera space post process bake) => now that light HDR is clean, can't we just live with VPX bloom ?
+- Add a user configurable way of stopping modifier application when baking (for the moment hardcoded to stop on fine bevelling)
+- Hide lights (make them not visible, needs VPX update since fading is only performed on visible light at the moment)
 
+Layers
+- Playfield with inserts cups => static (splitted from the rest in order to be rendered with reflections in VPX)
+- Solid parts => static
+- Movable parts => opaque but not static
+- Translucent parts (Insert overlays and borders, Plastic ramps, decals, under playfield glass): blended due to transparency
 
+Optimizations 
+- Lights are always rendered (eventually bulb, then additive bulb). Discards: not visible, intensity = 0, color & color2 = Black
+- Unshaded path can be more efficient (single tex fetch)
+- HDR texture should be half float (48b instead of 96b) to improve cache hit and limit memory bandwidth consumption
+
+VPX render path
+0. Render (apart) mirror from static prerendered and dynamic parts
+0. Render (apart) light buffer from lights flagged as transmitting (bulb checked with transmit > 0)
+1. Copy static playfield without depth, and static parts with depth
+2. Copy mirror without depth (depth tested to static parts, since they are the only one in the depth buffer)
+3. Render playfield depth
+4. Render dynamic opaque parts (objects, balls, DMDs)
+5. Render dynamic translucent parts (objects and DMDs)
 
 Closed items:
+- Add clean nestmap padding for opaque objects using the nearest opaque color
+- Compute and use the HDR range of the used part of the render, not the one of the full render
+- Lights are rendered to the light buffer if they have transmission scale => turn it to 0 on export
+- Generate an helper vbs file (instead of putting it inside the script
 - Add support for UV projected movables that follow the same path but generate their own mesh even for lightmaps
 - Rewrite Packmap generation for higher quality (renders should stay untouched, since they guarantee the higher possible quality) => only possible with custom nesting algorithm
   . Constrain rotation to 0/90/180/270
