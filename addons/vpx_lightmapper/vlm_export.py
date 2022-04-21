@@ -202,15 +202,19 @@ def export_vpx(op, context):
                 item_images.append(item_data.get_string())
             elif item_type == 0 and item_data.tag == 'VSBL': # for wall top (0)
                 visibility_field = True
-            elif item_type == 6 and item_data.tag == 'VSBL': # for triggers (6), don't hide since they are all movable parts
-                visibility_field = False
+            elif item_type == 6 and item_data.tag == 'VSBL': # for triggers (6)
+                visibility_field = True
             elif item_type == 0 and item_data.tag == 'SVBL': # for wall sides (0)
                 visibility_field = True
             elif (item_type == 12 or item_type == 21) and item_data.tag == 'RVIS': # for ramps (12) and rubbers (21)
                 visibility_field = True
+            elif item_type == 10 and item_data.tag == 'GVSB': # for gate (10): overall gate (wire and bracket)
+                visibility_field = True
             elif item_type == 10 and item_data.tag == 'GSUP': # for gate (10) bracket, combined with GVSB
                 if f'VPX.Gate.Bracket.{name}' in bake_col.all_objects:
                     item_data.put_bool(False)
+            elif item_type == 11 and item_data.tag == 'SVIS': # for spinner (11): overall spinner (wire and bracket)
+                visibility_field = True
             elif item_type == 11 and item_data.tag == 'SSUP': # for spinner bracket (11) combined with SVIS
                 if f'VPX.Spinner.Bracket.{name}' in bake_col.all_objects:
                     item_data.put_bool(False)
@@ -232,9 +236,6 @@ def export_vpx(op, context):
                 visibility_field = True
             elif item_type == 8 and item_data.tag == 'TYPE': # for kicker (8), type 0 is invisible
                 pass # FIXME implement
-            # Not needed since we do not bake wires / movable part of spinners
-            # elif item_type == 10 and item_data.tag == 'GVSB': # for gate (10): overall gate (wire and bracket)
-            # elif item_type == 11 and item_data.tag == 'SVIS': # for spinner (11): overall spinner (wire and bracket)
             if item_type == 7:
                 table_lights.append(name)
                 if is_baked_light:
@@ -242,8 +243,10 @@ def export_vpx(op, context):
                         is_reflect_on_ball = item_data.get_bool()
                     elif item_data.tag == 'BULT':
                         is_bulb = item_data.get_bool()
+                    elif item_data.tag == 'SHBM': # Hide bulb mesh
+                        item_data.put_bool(False)
                     elif item_data.tag == 'BHHI': # Move under playfield to make it invisible
-                        item_data.put_float(-2800)
+                        item_data.put_float(-50)
                     elif item_data.tag == 'TRMS':
                         item_data.put_float(0) # Set transmission to 0 to skip rendering this light to transmission buffer
             if item_type == 20:
