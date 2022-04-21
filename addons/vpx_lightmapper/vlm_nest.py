@@ -251,8 +251,9 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                 else:
                     render_data.append(None)
             # Render to the packed nest map
-            is_lightmap = obj.vlmSettings.bake_type == 'lightmap'
-            with_alpha = with_alpha or not is_lightmap
+            #is_lightmap = obj.vlmSettings.bake_type == 'lightmap'
+            is_opaque = obj.vlmSettings.bake_type != 'active'
+            with_alpha = with_alpha or not is_opaque
             for island in islands:
                 island_obj, _ = island['source']
                 if island_obj != obj: continue
@@ -278,21 +279,22 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                 target_tex = nestmaps[n]
 
                 # Identify opaque islands to process padding accordingly by fixing alpha on rendered borders (lightmaps are always opaque)
-                if is_lightmap:
-                    is_opaque = True
-                else:
-                    alpha = 0
-                    n_alpha = 0
-                    for px, col_mask in enumerate(unpadded_mask):
-                        for span in col_mask:
-                            for py in range(span[0] + 1, span[1]):
-                                dx = px + min_x - padding
-                                dy = py + min_y - padding
-                                if 0 <= dx and dx < src_w and 0 <= dy and dy < src_h:
-                                    alpha = alpha + island_render[4*(dx + dy*src_w) + 3]
-                                    n_alpha = n_alpha + 1
-                    is_opaque = alpha/n_alpha > 0.98 if n_alpha >= 32 else False
-                    #if n_alpha > 64: print(f'. Translucency: {alpha/n_alpha:>6.1%} for {n_alpha} points')
+                # Changed opaque is determined by the user (see is_opaque above, taken from the bake type)
+                # if is_lightmap:
+                    # is_opaque = True
+                # else:
+                    # alpha = 0
+                    # n_alpha = 0
+                    # for px, col_mask in enumerate(unpadded_mask):
+                        # for span in col_mask:
+                            # for py in range(span[0] + 1, span[1]):
+                                # dx = px + min_x - padding
+                                # dy = py + min_y - padding
+                                # if 0 <= dx and dx < src_w and 0 <= dy and dy < src_h:
+                                    # alpha = alpha + island_render[4*(dx + dy*src_w) + 3]
+                                    # n_alpha = n_alpha + 1
+                    # is_opaque = alpha/n_alpha > 0.98 if n_alpha >= 32 else False
+                    # #if n_alpha > 64: print(f'. Translucency: {alpha/n_alpha:>6.1%} for {n_alpha} points')
                     
                 for px, col_mask in enumerate(mask):
                     for span in col_mask:
@@ -315,12 +317,43 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                                 if 0 <= dx and dx < src_w and 0 <= dy and dy < src_h:
                                     p  = 4 * ((x+px) + (y+py) * target_w)
                                     p2 = 4 * (   dx  +    dy  * src_w   )
-                                    for j in range(4):
-                                        target_tex[p+j] = island_render[p2+j]
-                                        # target_tex[p+j] = 1
                                     if is_opaque and island_render[p2+3] < 1:
-                                        # TODO find nearest opaque color and replace (blended)
+                                        # border point: search nearest opaque (non border) color
+                                        best_alpha = island_render[p2+3]
+                                        best_pos = p2
+                                        for d in range(1, padding + 1):
+                                            for sx in range(dx-d, dx+d+1):
+                                                if 0 <= sx and sx < src_w:
+                                                    if 0 <= dy-d and dy-d < src_h:
+                                                        p3 = 4 * (sx + (dy-d) * src_w)
+                                                        if island_render[p3+3] > best_alpha:
+                                                            best_alpha = island_render[p3+3]
+                                                            best_pos = p3
+                                                    if 0 <= dy+d and dy+d < src_h:
+                                                        p3 = 4 * (sx + (dy+d) * src_w)
+                                                        if island_render[p3+3] > best_alpha:
+                                                            best_alpha = island_render[p3+3]
+                                                            best_pos = p3
+                                            for sy in range(dy-d +1, dy+d+1 -1):
+                                                if 0 <= sy and sy < src_h:
+                                                    if 0 <= dx-d and dx-d < src_w:
+                                                        p3 = 4 * ((dx-d) + sy * src_w)
+                                                        if island_render[p3+3] > best_alpha:
+                                                            best_alpha = island_render[p3+3]
+                                                            best_pos = p3
+                                                    if 0 <= dx+d and dx+d < src_w:
+                                                        p3 = 4 * ((dx+d) + sy * src_w)
+                                                        if island_render[p3+3] > best_alpha:
+                                                            best_alpha = island_render[p3+3]
+                                                            best_pos = p3
+                                            if best_alpha >= 1: break
+                                        for j in range(4):
+                                            target_tex[p+j] = island_render[best_pos+j]
                                         target_tex[p+3] = 1
+                                    else:
+                                        for j in range(4):
+                                            target_tex[p+j] = island_render[p2+j]
+                                            # target_tex[p+j] = 1
 
         # Save the rendered nestmaps
         scene = bpy.data.scenes.new('VLM.Tmp Scene')
@@ -357,7 +390,7 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
             scene.render.image_settings.exr_codec = 'DWAA'
             scene.render.image_settings.color_depth = '16'
             pack_image.save_render(path_exr, scene=scene)
-            # Saving through save_render would save a linear PNG, not an sRGB one which is needed by VPX
+            # Saving through save_render would save a linear PNG, not an sRGB one which is required by VPX
             pack_image.filepath_raw = path_png
             pack_image.file_format = 'PNG'
             pack_image.save()

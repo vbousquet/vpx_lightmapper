@@ -36,14 +36,46 @@ def export_name(object_name):
     return object_name.replace(".", "_").replace(" ", "_").replace("-", "_")
 
 
+def elem_ref(name):
+    name = name[:31] if len(name) > 31 else name
+    if ' ' in name or '.' in name:
+        return f'GetElementByName("{name}")'
+    else:
+        return name
+
+
+def common_member(a, b):
+    a_set = set(a)
+    b_set = set(b)
+    a_set.remove('')
+    b_set.remove('')
+    print(a_set, ' / ', b_set)
+    if len(a_set.intersection(b_set)) > 0:
+        return True
+    return False
+
+
+def get_vpx_sync_light(obj, context, light_col):
+    vpx_lights = []
+    for l in obj.vlmSettings.bake_sync_light.split(';'):
+        light = bpy.data.objects.get(l)
+        if light: vpx_lights.extend(light.vlmSettings.vpx_object.split(';'))
+    if '' in vpx_lights: vpx_lights.remove('')
+    baked_lights = [l for l in light_col.objects if common_member(vpx_lights, l.vlmSettings.bake_sync_light.split(';'))]
+    sync_color = vlm_utils.is_rgb_led(baked_lights) if baked_lights else False
+    vpx_name = vpx_lights[0] if vpx_lights else None
+    return (vpx_name, sync_color)
+
+
 def export_vpx(op, context):
-    """Export bakes by updating the reference VPX file
-    . Remove all 'VLM.' prefixed objects from the source file
-    . Disable rendering for all baked objects
+    """Export bakes by updating the reference VPX file:
+    . Remove all items in 'VLM.Visuals' layer
+    . Disable rendering for all baked objects, eventually removing them
     . Add all nestmaps as texture with 'VLM.' prefixed name
     . Add base materials with 'VLM.' prefixed name
-    . Add all bakes as primitives with 'VLM.' prefixed name
-    . Update the table script with the needed light/lightmap and movable sync code
+    . Add all bakes as primitives in the 'VLM.Visuals' layer
+    . Create a helper script file with the light/lightmap and movable sync code
+    . If a playfield_mesh exists, hide it and rename it to playfield_phys
     """
     if context.blend_data.filepath == '':
         op.report({'ERROR'}, 'You must save your project before exporting')
@@ -108,7 +140,7 @@ def export_vpx(op, context):
     table_lights = []
     table_flashers = []
     baked_vpx_lights = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in light_col.all_objects))
-    baked_vpx_objects = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in itertools.chain(bake_col.all_objects) if not vlm_utils.is_part_of_bake_category(o, 'movable')))
+    baked_vpx_objects = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in bake_col.all_objects))
     if playfield_col: baked_vpx_objects.append('playfield_mesh')
 
     # Remove previous baked models and append the new ones, also hide/remove baked items
@@ -146,6 +178,8 @@ def export_vpx(op, context):
             item_data.skip_tag()
         item_data = biff_io.BIFF_reader(data)
         item_type = item_data.get_32()
+        layer_name = ''
+        is_bulb = is_reflect_on_ball = False
         while not item_data.is_eof():
             item_data.next()
             reflection_field = visibility_field = False
@@ -156,6 +190,8 @@ def export_vpx(op, context):
                     item_data.put_u32(0x00680070)
                     item_data.put_u32(0x00730079)
                     needs_playfield_physics = False
+            elif item_data.tag == 'LANR':
+                layer_name = item_data.get_string()
             elif item_data.tag == 'REEN':
                 reflection_field = True
             elif item_data.tag == 'CLDR' or item_data.tag == 'CLDW': # Collidable for wall ramps and primitives
@@ -202,10 +238,14 @@ def export_vpx(op, context):
             if item_type == 7:
                 table_lights.append(name)
                 if is_baked_light:
-                    if item_data.tag == 'BULT':
-                        item_data.put_bool(True)
-                    elif item_data.tag == 'BHHI':
+                    if item_data.tag == 'SHRB':
+                        is_reflect_on_ball = item_data.get_bool()
+                    elif item_data.tag == 'BULT':
+                        is_bulb = item_data.get_bool()
+                    elif item_data.tag == 'BHHI': # Move under playfield to make it invisible
                         item_data.put_float(-2800)
+                    elif item_data.tag == 'TRMS':
+                        item_data.put_float(0) # Set transmission to 0 to skip rendering this light to transmission buffer
             if item_type == 20:
                 table_flashers.append(name)
                 if is_baked_light:
@@ -215,8 +255,19 @@ def export_vpx(op, context):
             if is_part_baked and (visibility_field or reflection_field):
                 item_data.put_bool(False)
             item_data.skip_tag()
-        remove = (export_mode == 'remove' or export_mode == 'remove_all') and is_baked and not is_physics
-        remove = remove or name.startswith('VLM.') or name == 'VLMTimer'
+        # Filters out objects
+        remove = layer_name == 'VLM.Visuals'
+        if export_mode == 'remove' or export_mode == 'remove_all':
+            # Baked objects are only kept if contributing to physics
+            if is_baked and not is_physics: remove = True
+            # Baked lights are only usefull for synchronization and reflection on ball
+            if is_baked_light and item_type == 7 and (not is_bulb or not is_reflect_on_ball): remove = True
+        if remove:
+            print(f'. Item {name:>21s} was removed from export table')
+        else:
+            dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+            dst_stream.Write(data)
+            n_game_items += 1
         # Mark images as used or not (if baked)
         if remove or ((export_mode == 'remove' or export_mode == 'remove_all') and is_baked):
             for image in item_images:
@@ -230,31 +281,7 @@ def export_vpx(op, context):
                     used_images[image] = [name]
                 else:
                     used_images[image].append(name)
-        # Filters out object
-        if remove:
-            print(f'. Item {name:>21s} was removed from export table')
-        else:
-            dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-            dst_stream.Write(data)
-            n_game_items += 1
         n_read_item = n_read_item + 1
-
-    # Add the sync timer
-    writer = biff_io.BIFF_writer()
-    writer.write_u32(2)
-    writer.write_tagged_vec2(b'VCEN', 0, 0)
-    writer.write_tagged_bool(b'TMON', True)
-    writer.write_tagged_32(b'TMIN', -1)
-    writer.write_tagged_wide_string(b'NAME', 'VLMTimer')
-    writer.write_tagged_bool(b'BGLS', False)
-    writer.write_tagged_bool(b'LOCK', True)
-    writer.write_tagged_u32(b'LAYR', 0)
-    writer.write_tagged_string(b'LANR', 'VLM.Visuals')
-    writer.write_tagged_bool(b'LVIS', True)
-    writer.close()
-    dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-    dst_stream.Write(writer.get_data())
-    n_game_items += 1
 
     # Add new bake models
     new_playfield_image = None
@@ -264,7 +291,7 @@ def export_vpx(op, context):
         is_static = obj.vlmSettings.bake_type == 'static'
         is_movable = obj.vlmSettings.bake_sync_trans != ''
         is_playfield = playfield_col and not is_light and obj.vlmSettings.bake_objects == playfield_col.name
-        if is_playfield: new_playfield_image = f'VLM.Packmap{obj.vlmSettings.bake_nestmap}'
+        if is_playfield: new_playfield_image = f'VLM.Nestmap{obj.vlmSettings.bake_nestmap}'
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', obj.location[0]/global_scale, -obj.location[1]/global_scale, obj.location[2]/global_scale)
@@ -278,7 +305,7 @@ def export_vpx(op, context):
         writer.write_tagged_float(b'RTV6', 0)
         writer.write_tagged_float(b'RTV7', 0)
         writer.write_tagged_float(b'RTV8', 0)
-        writer.write_tagged_string(b'IMAG', f'VLM.Packmap{obj.vlmSettings.bake_nestmap}')
+        writer.write_tagged_string(b'IMAG', f'VLM.Nestmap{obj.vlmSettings.bake_nestmap}')
         writer.write_tagged_string(b'NRMA', '')
         writer.write_tagged_u32(b'SIDS', 4)
         writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if is_playfield else export_name(obj.name))
@@ -330,7 +357,7 @@ def export_vpx(op, context):
                 else:
                     indices.append(existing_index)
         n_indices = len(indices)
-        print(f'. Adding {obj.name:<15} with {n_vertices:>6} vertices for {int(n_indices/3):>5} faces')
+        print(f'. Adding {n_vertices:>6} vertices, {int(n_indices/3):>6} faces for {obj.name}')
         
         writer.write_tagged_u32(b'M3VN', n_vertices)
         #writer.write_tagged_data(b'M3DX', struct.pack(f'<{len(vertices)}f', *vertices))
@@ -387,7 +414,7 @@ def export_vpx(op, context):
                 name = br.get_string()
                 break
             br.skip_tag()
-        remove = name.startswith('VLM.')
+        remove = name.startswith('VLM.Nestmap')
         remove = remove or (export_mode=='remove_all' and name not in used_images and name in removed_images)
         if remove:
             print(f'. Image {name:>20s} was removed from export table')
@@ -408,10 +435,10 @@ def export_vpx(op, context):
         base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}')
         nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.png'
         if not os.path.exists(nestmap_path):
-            op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create packmaps before exporting')
+            op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
             return {'CANCELLED'}
         img_writer = biff_io.BIFF_writer()
-        img_writer.write_tagged_string(b'NAME', f'VLM.Packmap{nestmap_index}')
+        img_writer.write_tagged_string(b'NAME', f'VLM.Nestmap{nestmap_index}')
         img_writer.write_tagged_string(b'PATH', nestmap_path)
         with open(nestmap_path, 'rb') as f:
             img_data = f.read()
@@ -424,7 +451,7 @@ def export_vpx(op, context):
             width, height = image.size
             if loaded == 'loaded': bpy.data.images.remove(image)
         writer = biff_io.BIFF_writer()
-        writer.write_tagged_string(b'NAME', f'VLM.Packmap{nestmap_index}')
+        writer.write_tagged_string(b'NAME', f'VLM.Nestmap{nestmap_index}')
         writer.write_tagged_string(b'PATH', nestmap_path)
         writer.write_tagged_u32(b'WDTH', width)
         writer.write_tagged_u32(b'HGHT', height)
@@ -438,7 +465,7 @@ def export_vpx(op, context):
         nestmap_index += 1
         n_images += 1
 
-    # Copy reference file
+    # Copy data from reference file
     for src_path, mode, hashed in file_structure:
         if not src_storage.exists(src_path):
             continue
@@ -488,156 +515,6 @@ def export_vpx(op, context):
                         br.skip(11 * 4)
                 elif br.tag == "PHMA":
                     phma_pos = br.pos
-                if br.tag == "CODE":
-                    code_pos = br.pos
-                    code = br.get_string()
-                    br.pos = code_pos
-                    br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
-                    
-                    updates = []
-                    def elem_ref(name):
-                        name = name[:31] if len(name) > 31 else name
-                        if ' ' in name or '.' in name:
-                            return f'GetElementByName("{name}")'
-                        else:
-                            return name
-                    def push_update(mode, vpx_ref, obj_ref, intensity, sync_color):
-                        if mode == 0:
-                            return f'	UpdateLightMapFromLight {vpx_ref}, {obj_ref}, {intensity}, {"True" if sync_color else "False"}\n'
-                        elif mode == 1:
-                            return f'	UpdateLightMapFromFlasher {vpx_ref}, {obj_ref}, {intensity}, {"True" if sync_color else "False"}\n'
-                        elif mode == 2:
-                            return f'	{obj_ref}.Visible = False\n'
-                    
-                    lightmaps = sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light)
-                    movables = sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''], key=lambda x: x.vlmSettings.bake_sync_trans)
-                    for obj in [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_sync_trans == '']:
-                        sync_color = False
-                        #brightness = 1.0 / vlm_utils.brightness_from_hdr(obj.vlmSettings.bake_hdr_scale)
-                        brightness = 1.0
-                        if obj.vlmSettings.bake_sync_light in light_col.children:
-                            baked_lights = light_col.children[obj.vlmSettings.bake_sync_light].objects
-                            sync_color = vlm_utils.is_rgb_led(baked_lights)
-                            vpx_name = baked_lights[0].vlmSettings.vpx_object.split(';')[0]
-                        elif obj.vlmSettings.bake_sync_light in light_col.all_objects:
-                            baked_light = context.scene.objects[obj.vlmSettings.bake_sync_light]
-                            sync_color = vlm_utils.is_rgb_led([baked_light])
-                            vpx_name = context.scene.objects[obj.vlmSettings.bake_sync_light].vlmSettings.vpx_object.split(';')[0]
-                        else:
-                            vpx_name = None
-                        if not vpx_name:
-                            print(f". {obj.name} is not linked to a vpx light/flasher object to be synchronized on")
-                            updates.append((None, 2, elem_ref(export_name(obj.name)), False, brightness))
-                        elif vpx_name in table_lights:
-                            updates.append((elem_ref(vpx_name), 0, elem_ref(export_name(obj.name)), sync_color, brightness))
-                        elif vpx_name in table_flashers:
-                            updates.append((elem_ref(vpx_name), 1, elem_ref(export_name(obj.name)), sync_color, brightness))
-                        else:
-                            print(f". {obj.name} is linked to the missing vpx light/flasher object {vpx_name}")
-                            updates.append((None, 2, elem_ref(export_name(obj.name)), False, brightness))
-
-                    in_block = 0 # Search and update existing block if any
-                    sync_updated = False
-                    lampz_updated = False
-                    move_updated = False
-                    for line in code.splitlines():
-                        line_stripped = line.strip()
-                        if in_block == 0 and line_stripped.startswith('Sub VLMTimer_Timer'):
-                            sync_updated = True
-                            in_block = 1
-                        elif in_block == 1:
-                            if line_stripped.startswith('End Sub'):
-                                in_block = 0
-                                for upd in updates:
-                                    code += push_update(upd[1], upd[0], upd[2], 100 * upd[4], upd[3])
-                                code += "End Sub\n"
-                            else:
-                                updl = re.match("UpdateLightMapFromLight\s*([^,]*),\s*([^,]*),\s*(\d*),\s*(True|False)\s*", line_stripped)
-                                updf = re.match("UpdateLightMapFromFlasher\s*([^,]*),\s*([^,]*),\s*(\d*),\s*(True|False)\s*", line_stripped)
-                                if updl: 
-                                    vpx_ref, obj_ref, intensity, sync_color = updl.groups()
-                                elif updf:
-                                    vpx_ref, obj_ref, intensity, sync_color = updf.groups()
-                                else:
-                                    vpx_ref = obj_ref = intensity = sync_color = None
-                                if vpx_ref:
-                                    upd = next((u for u in updates if u[0] == vpx_ref), None)
-                                    if upd:
-                                        updates.remove(upd)
-                                        if upd[2] != obj_ref: print(f'. Warning: for {vpx_ref}, lightmap changed from {obj_ref} to {upd[2]}')
-                                        if math.abs(intensity - 100 * upd[4]) > 0.1: print(f'. Custom intensity for {vpx_ref} is {intensity}. It does not match the computed one of {100*upd[4]}')
-                                        code += push_update(upd[1], upd[0], upd[2], intensity, upd[3])
-                                    else:
-                                        code += f"  ' {line_stripped}\n"
-                                else:
-                                    code += f"{line}\n"
-                        elif in_block == 0 and line_stripped.startswith('Sub VLMLampzHelper'):
-                            lampz_updated = True
-                            in_block = 3
-                        elif in_block == 3:
-                            if line_stripped.startswith('End Sub'):
-                                for obj in lightmaps:
-                                    code += f'	Lampz.Callback(0) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100, "\n'
-                                code += 'End Sub\n'
-                                in_block = 0
-                        elif in_block == 0 and line_stripped.startswith('Sub VLMMovableHelper'):
-                            lampz_updated = True
-                            in_block = 4
-                        elif in_block == 4:
-                            if line_stripped.startswith('End Sub'):
-                                for obj in movables:
-                                    code += f'	{elem_ref(export_name(obj.name))}.RotZ = 0\n'
-                                code += 'End Sub\n'
-                                in_block = 0
-                    if not sync_updated:
-                        code += "\n\n"
-                        code += "' ===============================================================\n"
-                        code += "' ZVLM       Virtual Pinball X Light Mapper generated code\n"
-                        code += "' ===============================================================\n"
-                        code += "' Warning: Only intensity will be preserved if edited and re-exported\n"
-                        code += "Sub VLMTimer_Timer\n"
-                        for upd in updates:
-                            code += push_update(upd[1], upd[0], upd[2], 100 * upd[4], upd[3])
-                        code += "End Sub\n\n"
-                        code += "Function LightTemperature(light, is_on, percent)\n"
-                        code += "	If is_on Then\n"
-                        code += "		LightTemperature = percent*percent*(3 - 2*percent) ' Smoothstep\n"
-                        code += "	Else\n"
-                        code += "		LightTemperature = 1 - Sqr(1 - percent*percent) ' \n"
-                        code += "	End If\n"
-                        code += "End Function\n\n"
-                        code += "Sub UpdateLightMapFromFlasher(flasher, lightmap, intensity_scale, sync_color)\n"
-                        code += "	If flasher.Visible Then\n"
-                        code += "		If sync_color Then lightmap.Color = flasher.Color\n"
-                        code += "		lightmap.Opacity = intensity_scale * flasher.IntensityScale * flasher.Opacity / 1000.0\n"
-                        code += "	    lightmap.Visible = lightmap.Opacity > 0.1\n"
-                        code += "	Else\n"
-                        code += "		lightmap.Opacity = 0\n"
-                        code += "	    lightmap.Visible = False\n"
-                        code += "	End If\n"
-                        code += "End Sub\n\n"
-                        code += "Sub UpdateLightMapFromLight(light, lightmap, intensity_scale, sync_color)\n"
-                        code += "	light.FadeSpeedUp = light.Intensity / 50 '100\n"
-                        code += "	light.FadeSpeedDown = light.Intensity / 200\n"
-                        code += "	If sync_color Then lightmap.Color = light.Colorfull\n"
-                        code += "	Dim t: t = LightTemperature(light, light.GetInPlayStateBool(), light.GetInPlayIntensity() / light.Intensity)\n"
-                        code += "	'Dim t: t = light.GetCurrentIntensity() / light.Intensity\n"
-                        code += "	lightmap.Opacity = intensity_scale * light.IntensityScale * t\n"
-                        code += "	lightmap.Visible = lightmap.Opacity > 0.1\n"
-                        code += "End Sub\n\n"
-                    if not lampz_updated:
-                        code += '\n\nSub VLMLampzHelper\n'
-                        for obj in lightmaps:
-                            code += f'	Lampz.Callback(0) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100, "\n'
-                        code += 'End Sub\n'
-                    if not move_updated:
-                        code += '\n\nSub VLMMovableHelper\n'
-                        for obj in movables:
-                            code += f'	{elem_ref(export_name(obj.name))}.RotZ = 0\n'
-                        code += 'End Sub\n'
-                    wr = biff_io.BIFF_writer()
-                    wr.write_string(code)
-                    br.insert_data(wr.get_data())
                 else:
                     br.skip_tag()
             # modify existing data to add missing VLM materials
@@ -745,13 +622,6 @@ def export_vpx(op, context):
                 else:
                     br.skip_tag()
 
-    print(f". {n_images} images exported in table files")
-    print(". Images marked as used:", list(used_images.keys()))
-    print(". Images marked as deletable:", list(removed_images.keys()))
-
-    if needs_playfield_physics:
-        print('WARNING: this table needs a playfield physics object. You need to add an invisible, full playfield sized, ramp (not yet automated here).')
-
     hash_size = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHSIZE)
     file_hash = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHVAL)
     data_hash.CryptDestroyHash()
@@ -760,7 +630,119 @@ def export_vpx(op, context):
     dst_stream.Write(file_hash)
     dst_storage.Commit(storagecon.STGC_DEFAULT)
     src_storage.close()
+
+    # Create the script helper file
+    code = ''
+    code += "' ===============================================================\n"
+    code += "' ZVLM       Virtual Pinball X Light Mapper generated code\n"
+    code += "'\n"
+    code += "' This file provide default implementation and template to add bakemap\n"
+    code += "' & lightmap synchronization for position and lighting.\n"
+    code += "'\n"
+
+    code += "\n"
+    code += "\n"
+    code += "' ===============================================================\n"
+    code += "' The following code can be copy/pasted if using Lampz fading system\n"
+    code += "' It links each Lampz lamp/flasher to the corresponding light and lightmap\n"
+    code += "\n"
+    code += "Sub UpdateLightMap(lightmap, intensity, ByVal aLvl)\n"
+    code += "   if Lampz.UseFunction then aLvl = Lampz.FilterOut(aLvl)	'Callbacks don't get this filter automatically\n"
+    code += "   lightmap.Opacity = aLvl * intensity\n"
+    code += "End Sub\n"
+    code += "\n"
+    code += 'Sub LampzHelper\n'
+    lightmaps = sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light)
+    light_processed = []
+    for obj in lightmaps:
+        vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
+        lampz_id = '0'
+        # try to identify lights and flashers with the pattern 'l11' or 'f11'
+        if vpx_name:
+            id = re.fullmatch(r'[lfLF]([0-9]+)', vpx_name)
+            if id:
+                lampz_id = id[1]
+                if lampz_id not in light_processed:
+                    code += f'	Lampz.MassAssign({lampz_id}) = {vpx_name}\n'
+                    light_processed.append(lampz_id)
+            else:
+                if vpx_name not in light_processed:
+                    code += f"	' Sync on {vpx_name}\n"
+                    light_processed.append(vpx_name)
+        code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100, "\n'
+    code += 'End Sub\n'
+
+    code += "\n"
+    code += "\n"
+    code += "' ===============================================================\n"
+    code += "' The following code can serve as a base for movable position synchronization.\n"
+    code += "' You will need to adapt the part of the transform you want to synchronize\n"
+    code += "' and the source on which you want it to be synchronized.\n"
+    code += "\n"
+    code += 'Sub MovableHelper\n'
+    movables = sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''], key=lambda x: x.vlmSettings.bake_sync_trans)
+    for obj in movables:
+        code += f'	{elem_ref(export_name(obj.name))}.RotZ = 0\n'
+    code += 'End Sub\n'
+
+    code += "\n"
+    code += "\n"
+    code += "' ===============================================================\n"
+    code += "' The following provides a basic synchronization mechanism were\n"
+    code += "' lightmaps are synchronized to corresponding VPX light or flasher,\n"
+    code += "' using a simple realtime timer called VLMTimer. This works great\n"
+    code += "' as a starting point but Lampz direct lightmap fading shoudl be prefered.\n"
+    code += "\n"
+    code += "Sub VLMTimer_Timer\n"
+    for obj in lightmaps:
+        vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
+        obj_ref = elem_ref(export_name(obj.name))
+        if not vpx_name:
+            code += f'	{obj_ref}.Visible = False\n'
+        elif vpx_name in table_lights:
+            code += f'	UpdateLightMapFromLight {elem_ref(vpx_name)}, {obj_ref}, 100, {"True" if sync_color else "False"}\n'
+        elif vpx_name in table_flashers:
+            code += f'	UpdateLightMapFromFlasher {elem_ref(vpx_name)}, {obj_ref}, 100, {"True" if sync_color else "False"}\n'
+        else:
+            code += f'	{obj_ref}.Visible = False\n'
+    code += "End Sub\n"
+    code += "\n"
+    code += "Function LightFade(light, is_on, percent)\n"
+    code += "	If is_on Then\n"
+    code += "		LightFade = percent*percent*(3 - 2*percent) ' Smoothstep\n"
+    code += "	Else\n"
+    code += "		LightFade = 1 - Sqr(1 - percent*percent) ' \n"
+    code += "	End If\n"
+    code += "End Function\n"
+    code += "\n"
+    code += "Sub UpdateLightMapFromFlasher(flasher, lightmap, intensity_scale, sync_color)\n"
+    code += "	If flasher.Visible Then\n"
+    code += "		If sync_color Then lightmap.Color = flasher.Color\n"
+    code += "		lightmap.Opacity = intensity_scale * flasher.IntensityScale * flasher.Opacity / 1000.0\n"
+    code += "	Else\n"
+    code += "		lightmap.Opacity = 0\n"
+    code += "	End If\n"
+    code += "End Sub\n"
+    code += "\n"
+    code += "Sub UpdateLightMapFromLight(light, lightmap, intensity_scale, sync_color)\n"
+    code += "	light.FadeSpeedUp = light.Intensity / 50 '100\n"
+    code += "	light.FadeSpeedDown = light.Intensity / 200\n"
+    code += "	If sync_color Then lightmap.Color = light.Colorfull\n"
+    code += "	Dim t: t = LightFade(light, light.GetInPlayStateBool(), light.GetInPlayIntensity() / (light.Intensity * light.IntensityScale))\n"
+    code += "	lightmap.Opacity = intensity_scale * light.IntensityScale * t\n"
+    code += "End Sub\n"
+
+    with open(bpy.path.abspath('//VLM Script Helper.vbs'), 'w') as f:
+        f.write(code)
+    print(f'Helper script was saved to {bpy.path.abspath("//VLM Script Helper.vbs")}.')
     
-    print(f"\nExport finished.")
+    print(f". {n_images} images exported in table files")
+    print(". Images marked as used:", list(used_images.keys()))
+    print(". Images marked as deletable:", list(removed_images.keys()))
+
+    if needs_playfield_physics:
+        print('WARNING: this table needs a playfield physics object. You need to add an invisible, full playfield sized, ramp (not yet automated here).')
+
+    print(f'\nExport finished.')
     return {"FINISHED"}
     

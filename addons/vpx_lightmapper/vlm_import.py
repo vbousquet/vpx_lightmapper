@@ -197,6 +197,9 @@ def update_object(context, vpx_name, vpx_subpart, data, col_name):
     obj_name = vpx_name if vpx_subpart == '' else f'{vpx_name}.{vpx_subpart}'
     for existing in vlm_utils.get_vpx_item(context, vpx_name, vpx_subpart): # We may find more than one
         existing.name = obj_name
+        for col in existing.users_collection:
+            lc = vlm_collections.find_layer_collection(context.view_layer.layer_collection, col)
+            if lc: lc.exclude = False
         # Disable data import flagged or found object merges more than one VPX object => don't import geometry
         if not existing.vlmSettings.import_mesh or ';' in existing.vlmSettings.vpx_object:
             return False, existing
@@ -219,7 +222,10 @@ def update_object(context, vpx_name, vpx_subpart, data, col_name):
     obj.vlmSettings.vpx_object = vpx_name
     obj.vlmSettings.vpx_subpart = vpx_subpart
     print(f". Creating VPX object: '{obj_name}', subpart: '{vpx_subpart}' (Blender object name: '{obj.name}')")
-    vlm_collections.get_collection(context.scene.collection, col_name).objects.link(obj)
+    col = vlm_collections.get_collection(context.scene.collection, col_name)
+    col.objects.link(obj)
+    lc = vlm_collections.find_layer_collection(context.view_layer.layer_collection, col)
+    if lc: lc.exclude = False
     return True, obj
 
 
@@ -1155,7 +1161,7 @@ def read_vpx(op, context, filepath):
                         item_data.skip_tag()
                 obj = add_core_mesh(created_objects, name, 'Bracket', "VPX.Core.Spinnerbracket", STATIC_COL if visible and show_bracket else HIDDEN_COL, materials, material, "", x, y, height, length, length, length, orientation, global_scale)
                 shifted_objects.append((obj, surface))
-                obj = add_core_mesh(created_objects, name, 'Wire', "VPX.Core.Spinnerplate", movable_col if visible else HIDDEN_COL, materials, material, image, x, y, height, length, length, length, orientation, global_scale)
+                obj = add_core_mesh(created_objects, name, 'Wire', "VPX.Core.Spinnerplate", MOVABLE_COL if visible else HIDDEN_COL, materials, material, image, x, y, height, length, length, length, orientation, global_scale)
                 shifted_objects.append((obj, surface))
             
             elif item_type == 12: # Ramp
@@ -1914,22 +1920,22 @@ def read_vpx(op, context, filepath):
         if statics:
             context.scene.collection.children.unlink(statics)
             bakes.children.link(statics)
-            statics.vlmSettings.bake_mode = 'default'
-            statics.vlmSettings.is_active_mat = False
+            statics.vlmSettings.bake_mode = 'group'
+            statics.vlmSettings.is_opaque = True
             statics.name = "Layer 1"
         actives = vlm_collections.get_collection(context.scene.collection, ACTIVE_COL, create=False)
         if actives:
             context.scene.collection.children.unlink(actives)
             bakes.children.link(actives)
-            actives.vlmSettings.bake_mode = 'default'
-            actives.vlmSettings.is_active_mat = True
+            actives.vlmSettings.bake_mode = 'group'
+            actives.vlmSettings.is_opaque = False
             actives.name = "Layer 2"
         movables = vlm_collections.get_collection(context.scene.collection, MOVABLE_COL, create=False)
         if movables:
             context.scene.collection.children.unlink(movables)
             bakes.children.link(movables)
-            movables.vlmSettings.bake_mode = 'movable'
-            movables.vlmSettings.is_active_mat = True
+            movables.vlmSettings.bake_mode = 'split'
+            movables.vlmSettings.is_opaque = True
             movables.name = "Movables"
         
     # Setup the bake camera. Computation happens in the update method of these properties
@@ -1954,9 +1960,10 @@ def read_vpx(op, context, filepath):
         
     # Output warnings for split normals
     for obj_name in created_objects:
-        obj = bpy.data.objects[obj_name]
-        if obj.type == 'MESH' and not obj.data.has_custom_normals:
-            print(f". Warning '{obj.name}' does not have split normals. This will break normals on the final bake mesh.")
+        if obj_name in bpy.data.objects:
+            obj = bpy.data.objects[obj_name]
+            if obj.type == 'MESH' and not obj.data.has_custom_normals:
+                print(f". Warning '{obj.name}' does not have split normals. This will break normals on the final bake mesh.")
 
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)

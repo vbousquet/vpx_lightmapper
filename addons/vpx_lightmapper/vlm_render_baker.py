@@ -27,7 +27,6 @@ from mathutils import Vector
 from gpu_extras.batch import batch_for_shader
 from . import vlm_utils
 from . import vlm_collections
-from . import vlm_uvpacker
 from PIL import Image # External dependency
 
 
@@ -321,7 +320,7 @@ def render_all_groups(op, context):
     scene.collection.children.link(render_col)
     vlm_collections.find_layer_collection(scene.view_layers[0].layer_collection, indirect_col).indirect_only = True
     for obj in bake_col.all_objects:
-        if not vlm_utils.is_part_of_bake_category(obj, 'movable') or obj.vlmSettings.movable_influence == 'indirect':
+        if not obj.vlmSettings.hide_from_others:
             indirect_col.objects.link(obj)
     
     # Load the group masks to filter out the obviously non influenced scenarios
@@ -336,7 +335,7 @@ def render_all_groups(op, context):
         objects = [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == group_index]
         n_objects = len(objects)
         for obj in objects:
-            if not vlm_utils.is_part_of_bake_category(obj, 'movable') or obj.vlmSettings.movable_influence == 'indirect':
+            if not obj.vlmSettings.hide_from_others:
                 indirect_col.objects.unlink(obj)
             render_col.objects.link(obj)
         for i, scenario in enumerate(light_scenarios, start=1):
@@ -364,7 +363,7 @@ def render_all_groups(op, context):
                 n_existing += 1
         for obj in objects:
             render_col.objects.unlink(obj)
-            if not vlm_utils.is_part_of_bake_category(obj, 'movable') or obj.vlmSettings.movable_influence == 'indirect':
+            if not obj.vlmSettings.hide_from_others:
                 indirect_col.objects.link(obj)
 
     bpy.data.scenes.remove(scene)

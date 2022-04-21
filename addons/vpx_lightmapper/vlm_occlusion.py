@@ -77,7 +77,7 @@ def select_occluded(op, context):
 
     bake_objects = []
     for col in bake_col.children:
-        if not col.vlmSettings.is_active_mat and col.vlmSettings.bake_mode == 'default': # playfield and movable are not considered as occluder
+        if col.vlmSettings.is_opaque and col.vlmSettings.bake_mode == 'group': # playfield and movable are not considered as occluder
             bake_objects.extend(col.all_objects)
     initial_pass_ids = [o.pass_index for o in bake_objects]
     for i, o in enumerate(bake_objects, start=1):
