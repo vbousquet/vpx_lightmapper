@@ -15,7 +15,7 @@ Layers
 - Playfield with inserts cups => static (splitted from the rest in order to be rendered with reflections in VPX)
 - Solid parts => static
 - Movable parts => opaque but not static
-- Translucent parts (Insert overlays and borders, Plastic ramps, decals, under playfield glass): blended due to transparency
+- Translucent parts (Insert overlays and borders, Plastic ramps, decals, under playfield glass): blended due to transparency, sorted back to front
 
 Optimizations 
 - Lights are always rendered (eventually bulb, then additive bulb). Discards: not visible, intensity = 0, color & color2 = Black
@@ -30,6 +30,9 @@ VPX render path
 3. Render playfield depth
 4. Render dynamic opaque parts (objects, balls, DMDs)
 5. Render dynamic translucent parts (objects and DMDs)
+
+
+
 
 Closed items:
 - Add clean nestmap padding for opaque objects using the nearest opaque color

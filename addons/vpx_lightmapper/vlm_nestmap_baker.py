@@ -14,6 +14,8 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>
 
 import bpy
+import time
+import datetime
 from . import vlm_nest
 from . import vlm_utils
 from . import vlm_collections
@@ -32,6 +34,7 @@ def render_nestmaps(op, context):
         op.report({'ERROR'}, 'No bake result to process')
         return {'CANCELLED'}
     
+    start_time = time.time()
     bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
     vlm_utils.mkpath(bakepath)
     selected_objects = list(context.selected_objects)
@@ -82,5 +85,5 @@ def render_nestmaps(op, context):
         obj.select_set(True)
         context.view_layer.objects.active = obj
     context.scene.vlmSettings.last_bake_step = 'nestmaps'
-    print(f'Nestmap generation finished ({nestmap_offset - 1} nestmap generated).')
+    print(f'Nestmap generation finished ({nestmap_offset} nestmap generated) in {str(datetime.timedelta(seconds=time.time() - start_time))}.')
     return {'FINISHED'}

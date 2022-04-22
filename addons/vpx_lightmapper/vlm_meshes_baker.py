@@ -451,7 +451,7 @@ def create_bake_meshes(op, context):
 
     # Purge unlinked datas and clean up
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
-    print(f"\nbake meshes created in {str(datetime.timedelta(seconds=time.time() - start_time))}")
+    print(f'\nbake meshes created in {str(datetime.timedelta(seconds=time.time() - start_time))}')
 
     context.scene.vlmSettings.last_bake_step = 'meshes'
     return {'FINISHED'}
