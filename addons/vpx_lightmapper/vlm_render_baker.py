@@ -18,6 +18,7 @@ import math
 import mathutils
 import bmesh
 import os
+import re
 import time
 import gpu
 import datetime
@@ -176,7 +177,7 @@ def check_min_render_size(scene):
     return True
 
 
-def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_col, bake_info_group):
+def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_col):
     """Apply a light scenario for rendering, returning the previous state and a lambda to restore it
     """
     name, is_lightmap, light_col, lights, _ = scenario
@@ -185,9 +186,6 @@ def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_
         scene.render.use_border = True
         scene.world = light_col.vlmSettings.world
         scene.render.image_settings.color_mode = 'RGB'
-        if bake_info_group:
-            bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 0.0
-            bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 1.0
         if light_col.vlmSettings.world:
             scene.render.border_min_x = 0
             scene.render.border_max_x = 1
@@ -226,24 +224,18 @@ def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_
         scene.render.use_border = False
         scene.world = light_col.vlmSettings.world
         scene.render.image_settings.color_mode = 'RGBA'
-        if bake_info_group:
-            bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 1.0
-            bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 0.0
         initial_state = (0, lights)
     for light in lights:
         render_col.objects.link(light)
-    return initial_state, lambda initial_state : restore_light_setup(initial_state, render_col, lights, scene, prev_world, bake_info_group)
+    return initial_state, lambda initial_state : restore_light_setup(initial_state, render_col, lights, scene, prev_world)
 
 
-def restore_light_setup(initial_state, render_col, lights, scene, prev_world, bake_info_group):
+def restore_light_setup(initial_state, render_col, lights, scene, prev_world):
     """Restore state after setting up a light scenario for rendering
     """
     scene.world = prev_world
     for light in lights:
         render_col.objects.unlink(light)
-    if bake_info_group:
-        bake_info_group.nodes['IsBakeMap'].outputs["Value"].default_value = 0.0
-        bake_info_group.nodes['IsLightMap'].outputs["Value"].default_value = 0.0
     if initial_state[0] == 2: # RGB led, restore colors
         for obj, color in zip(initial_state[2], initial_state[3]): obj.data.color = color
 
@@ -286,6 +278,8 @@ def render_all_groups(op, context):
     n_render_performed = n_skipped = n_existing = 0
     n_total_render = n_render_groups * n_lighting_situations
     bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
+    if bake_info_group:
+        bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 1.0
 
     # Create temp render scene, using the user render settings and compositor setup if any
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
@@ -302,15 +296,10 @@ def render_all_groups(op, context):
     scene.render.use_crop_to_border = False
     scene.render.resolution_y = opt_tex_size
     scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio)
-    scene.render.image_settings.file_format = 'OPEN_EXR'
-    scene.render.image_settings.color_mode = 'RGBA'
-    scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression which is big
-    #scene.render.image_settings.exr_codec = 'DWAA' # Lossy compression (4x to 10x smaller on lightmaps)
-    scene.render.image_settings.color_depth = '16'
     scene.render.film_transparent = True
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
-    scene.view_layers[0].use_pass_z = True
+    scene.view_layers[0].use_pass_z = False
     scene.use_nodes = False
 
     # Setup the scene with all the bake objects with indirect render influence
@@ -329,19 +318,154 @@ def render_all_groups(op, context):
     for i in range(n_render_groups):
         im = Image.open(bpy.path.abspath(f"{mask_path}Group {i}.png"))
         group_masks.append((im.size[0], im.size[1], im.tobytes("raw", "L")))
+    
+    # In Blender 3.2, we can render multiple lights at once and save there data separately using light groups for way faster rendering. This needs to use the compositor to performs denoising and save to split file outputs.
+    batched_scenarios = []
+    if False and bpy.app.version >= (3, 2, 0):
+        print('. Performing batch light rendering (Blender 3.2+)')
+        prev_world = scene.world
+        render_world = None
+        n_scenarios = 0
+        scene.use_nodes = True
+        scene.view_layers[0].cycles.denoising_store_passes = True
+        scene.render.use_file_extension = False
 
-    print(f'\nRendering {n_render_groups} render groups for {n_lighting_situations} lighting situations')
+        nodes = scene.node_tree.nodes
+        links = scene.node_tree.links
+        nodes.clear()
+        links.clear()
+        rl = nodes.new("CompositorNodeRLayers")
+        rl.scene = scene
+        rl.location.x = -200
+        dec = len(light_scenarios) / 2.0
+        for i, scenario in enumerate(light_scenarios, start=1):
+            name, is_lightmap, light_col, lights, _ = scenario
+            if next((l for l in lights if l.type != 'LIGHT'), None):
+                print(f". {name} lighting scenario use emitter/occluder meshes. It can't be batched rendered.")
+                continue
+            if light_col.vlmSettings.world != None:
+                if render_world is None:
+                    render_world = light_col.vlmSettings.world
+                    render_world.lightgroup = name
+                else:
+                    print(f". {name} lighting scenario has a custom world. It can't be batched rendered.")
+                    continue
+            scene.view_layers[0].lightgroups.add(name=name)
+            initial_state = (0, None)
+            if vlm_utils.is_rgb_led(lights):
+                colored_lights = [o for o in lights if o.type=='LIGHT']
+                prev_colors = [o.data.color for o in colored_lights]
+                for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
+                initial_state = (1, zip(colored_lights, prev_colors))
+            for light in lights:
+                light.lightgroup = name
+                render_col.objects.link(light)
+            denoise = nodes.new("CompositorNodeDenoise")
+            denoise.location.x = 200
+            denoise.location.y = -(i-dec) * 200
+            links.new(rl.outputs[3     -1], denoise.inputs[1])
+            links.new(rl.outputs[4     -1], denoise.inputs[2])
+            links.new(rl.outputs[6+i-1 -1], denoise.inputs[0])
+            out = nodes.new("CompositorNodeOutputFile")
+            out.location.x = 600
+            out.location.y = -(i-dec) * 200
+            if is_lightmap:
+                links.new(denoise.outputs[0], out.inputs[0])
+            else:
+                alpha = nodes.new("CompositorNodeSetAlpha")
+                alpha.location.x = 400
+                alpha.location.y = -(i-dec) * 200
+                links.new(denoise.outputs[0], alpha.inputs[0])
+                links.new(rl.outputs[1], alpha.inputs[1])
+                links.new(alpha.outputs[0], out.inputs[0])
+            batched_scenarios.append((scenario, denoise, out, initial_state))
+
+        scene.world = render_world
+
+        for group_index, group_mask in enumerate(group_masks):
+            need_render = False
+            for scenario, denoise, out, _ in batched_scenarios:
+                name, is_lightmap, light_col, lights, _ = scenario
+                render_path = f'{bakepath}{name} - Group {group_index}.exr'
+                if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
+                    need_render = True
+                    break
+            if not need_render:
+                n_existing += len(batched_scenarios)
+            else:
+                objects = [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == group_index]
+                n_objects = len(objects)
+                for obj in objects:
+                    if not obj.vlmSettings.hide_from_others:
+                        indirect_col.objects.unlink(obj)
+                    if obj.vlmSettings.bake_mask:
+                        render_col.objects.link(obj.vlmSettings.bake_mask)
+                    render_col.objects.link(obj)
+                
+                for scenario, denoise, out, _ in batched_scenarios:
+                    name, is_lightmap, light_col, lights, _ = scenario
+                    out.base_path = f'{bakepath}'
+                    out.file_slots[0].path = f'{name} - Group {group_index}.exr'
+                    out.file_slots[0].use_node_format = True
+                    out.format.file_format = 'OPEN_EXR'
+                    out.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
+                    out.format.exr_codec = 'ZIP'
+                    out.format.color_depth = '16'
+                
+                elapsed = time.time() - start_time
+                msg = f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for {len(batched_scenarios)} lighting scenarios. Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+                if elapsed > 0 and n_render_performed > 0:
+                    elapsed_per_render = elapsed / n_render_performed
+                    remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
+                    msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
+                print(msg)
+                
+                bpy.ops.render.render(write_still=False, scene=scene.name)
+                n_render_performed += len(batched_scenarios)
+
+                # Rename files since blender will append a render index number to the filename
+                for file in os.listdir(bpy.path.abspath(f'{bakepath}')):
+                    match = re.fullmatch(r"(.*exr)\d\d\d\d", file)
+                    if match:
+                        outRenderFileName = bpy.path.abspath(f'{bakepath}{match[1]}')
+                        if os.path.exists(outRenderFileName):
+                            os.remove(outRenderFileName)
+                        os.rename(bpy.path.abspath(f'{bakepath}{file}'), outRenderFileName)
+
+                for obj in objects:
+                    if not obj.vlmSettings.hide_from_others:
+                        indirect_col.objects.link(obj)
+                    if obj.vlmSettings.bake_mask:
+                        render_col.objects.unlink(obj.vlmSettings.bake_mask)
+                    render_col.objects.unlink(obj)
+
+        for scenario, denoise, out, initial_state in batched_scenarios:
+            if initial_state[0] == 1:
+                for o, c in initial_state[1]: o.data.color = c
+            bpy.ops.scene.view_layer_remove_lightgroup({'scene':scene})
+        nodes.clear()
+        links.clear()
+        scene.use_nodes = False
+        scene.world = prev_world
+        scene.view_layers[0].cycles.denoising_store_passes = False
+    
+    print(f'\nEvaluating {n_total_render-n_existing-n_render_performed} out of {n_total_render} renders ({n_render_groups} render groups for {n_lighting_situations} lighting situations)')
     for group_index, group_mask in enumerate(group_masks):
         objects = [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == group_index]
         n_objects = len(objects)
         for obj in objects:
             if not obj.vlmSettings.hide_from_others:
                 indirect_col.objects.unlink(obj)
+            if obj.vlmSettings.bake_mask:
+                render_col.objects.link(obj.vlmSettings.bake_mask)
             render_col.objects.link(obj)
         for i, scenario in enumerate(light_scenarios, start=1):
+            name, is_lightmap, light_col, lights, _ = scenario
+            if next((done for done in batched_scenarios if name == done[0][0]), None):
+                continue # This scenario was already processed by Blender 3.2+ batch rendering
             render_path = f'{bakepath}{scenario[0]} - Group {group_index}.exr'
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
-                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col, bake_info_group)
+                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col)
                 
                 elapsed = time.time() - start_time
                 msg = f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
@@ -352,6 +476,10 @@ def render_all_groups(op, context):
                 if state:
                     print(msg)
                     scene.render.filepath = render_path
+                    scene.render.image_settings.file_format = 'OPEN_EXR'
+                    scene.render.image_settings.color_mode = 'RGB' if is_lightmap else 'RGBA'
+                    scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
+                    scene.render.image_settings.color_depth = '16'
                     bpy.ops.render.render(write_still=True, scene=scene.name)
                     restore_func(state)
                     print('\n')
@@ -362,9 +490,14 @@ def render_all_groups(op, context):
             else:
                 n_existing += 1
         for obj in objects:
-            render_col.objects.unlink(obj)
             if not obj.vlmSettings.hide_from_others:
                 indirect_col.objects.link(obj)
+            if obj.vlmSettings.bake_mask:
+                render_col.objects.unlink(obj.vlmSettings.bake_mask)
+            render_col.objects.unlink(obj)
+
+    if bake_info_group:
+        bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 0.0
 
     bpy.data.scenes.remove(scene)
     length = time.time() - start_time
