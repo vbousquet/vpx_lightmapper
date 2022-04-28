@@ -139,7 +139,7 @@ def export_vpx(op, context):
 
     table_lights = []
     table_flashers = []
-    baked_vpx_lights = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in light_col.all_objects))
+    baked_vpx_lights = set(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in light_col.all_objects))
     baked_vpx_objects = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in bake_col.all_objects))
     if playfield_col: baked_vpx_objects.append('playfield_mesh')
 
@@ -242,11 +242,13 @@ def export_vpx(op, context):
                     if item_data.tag == 'SHRB':
                         is_reflect_on_ball = item_data.get_bool()
                     elif item_data.tag == 'BULT':
-                        is_bulb = item_data.get_bool()
+                        item_data.put_bool(True)
+                        is_bulb = True # item_data.get_bool()
                     elif item_data.tag == 'SHBM': # Hide bulb mesh
                         item_data.put_bool(False)
-                    elif item_data.tag == 'BHHI': # Move under playfield to make it invisible
-                        item_data.put_float(-50)
+                    # Don't move under playfield, it makes the ball reflection wrong. Instead let the table creator hide the lamps
+                    #elif item_data.tag == 'BHHI': # Move under playfield to make it invisible
+                    #    item_data.put_float(-2800)
                     elif item_data.tag == 'TRMS':
                         item_data.put_float(0) # Set transmission to 0 to skip rendering this light to transmission buffer
             if item_type == 20:
@@ -264,7 +266,7 @@ def export_vpx(op, context):
             # Baked objects are only kept if contributing to physics
             if is_baked and not is_physics: remove = True
             # Baked lights are only usefull for synchronization and reflection on ball
-            if is_baked_light and item_type == 7 and (not is_bulb or not is_reflect_on_ball): remove = True
+            #if is_baked_light and item_type == 7 and (not is_bulb or not is_reflect_on_ball): remove = True
         if remove:
             print(f'. Item {name:>21s} was removed from export table')
         else:
@@ -293,15 +295,17 @@ def export_vpx(op, context):
         is_active = obj.vlmSettings.bake_type == 'active'
         is_static = obj.vlmSettings.bake_type == 'static'
         is_movable = obj.vlmSettings.bake_sync_trans != ''
-        is_playfield = playfield_col and not is_light and obj.vlmSettings.bake_objects == playfield_col.name
+        is_playfield = playfield_col and not is_light and obj.vlmSettings.bake_objects == playfield_col
         if is_playfield: new_playfield_image = f'VLM.Nestmap{obj.vlmSettings.bake_nestmap}'
+        depth_bias = obj.vlmSettings.bake_objects.vlmSettings.depth_bias
+        if is_light: depth_bias = depth_bias - 10
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', obj.location[0]/global_scale, -obj.location[1]/global_scale, obj.location[2]/global_scale)
         writer.write_tagged_padded_vector(b'VSIZ', obj.scale[0]/global_scale, obj.scale[1]/global_scale, obj.scale[2]/global_scale)
         writer.write_tagged_float(b'RTV0', math.degrees(obj.rotation_euler[0]))
         writer.write_tagged_float(b'RTV1', math.degrees(obj.rotation_euler[1]))
-        writer.write_tagged_float(b'RTV2', math.degrees(obj.rotation_euler[2]))
+        writer.write_tagged_float(b'RTV2', -math.degrees(obj.rotation_euler[2]))
         writer.write_tagged_float(b'RTV3', 0)
         writer.write_tagged_float(b'RTV4', 0)
         writer.write_tagged_float(b'RTV5', 0)
@@ -377,7 +381,7 @@ def export_vpx(op, context):
             compressed_indices = zlib.compress(struct.pack(f'<{n_indices}H', *indices))
         writer.write_tagged_u32(b'M3CJ', len(compressed_indices))
         writer.write_tagged_data(b'M3CI', compressed_indices)
-        writer.write_tagged_float(b'PIDB', 0 if is_playfield else -1000.0 if is_light else 1000.0)
+        writer.write_tagged_float(b'PIDB', depth_bias)
         writer.write_tagged_bool(b'ADDB', is_light) # Additive blending VPX mod
         writer.write_tagged_float(b'FALP', 100) # Additive blending VPX mod
         writer.write_tagged_u32(b'COLR', 0xFFFFFF)
@@ -436,7 +440,8 @@ def export_vpx(op, context):
             break
         is_hdr = next( (o for o in objects if o.vlmSettings.bake_hdr_range > 1.0), None) is not None
         base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}')
-        nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.png'
+        #nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.png' # VPX does not support HDR...
+        nestmap_path = f'{base_path}.png'
         if not os.path.exists(nestmap_path):
             op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
             return {'CANCELLED'}
@@ -460,11 +465,12 @@ def export_vpx(op, context):
         writer.write_tagged_u32(b'HGHT', height)
         writer.write_tagged_empty(b'JPEG') # Strangely, raw data are pushed outside of the JPEG tag (breaking the BIFF structure of the file)
         writer.write_data(img_writer.get_data())
-        writer.write_tagged_float(b'ALTV', 165.0) # Limit for pixel cut and z write
+        writer.write_tagged_float(b'ALTV', 1.0) # Limit for pixel cut and z write
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
-        print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (Format: {"EXR" if is_hdr else "Webp"})')
+        #print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (Format: {"EXR" if is_hdr else "PNG"})')
+        print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image')
         nestmap_index += 1
         n_images += 1
 
@@ -664,7 +670,7 @@ def export_vpx(op, context):
         if vpx_name:
             id = re.fullmatch(r'[lfLF]([0-9]+)', vpx_name)
             if id:
-                lampz_id = id[1]
+                lampz_id = f'1{id[1]}' if vpx_name.startswith('f') else id[1]
                 if lampz_id not in light_processed:
                     code += f'	Lampz.MassAssign({lampz_id}) = {vpx_name}\n'
                     light_processed.append(lampz_id)
@@ -672,7 +678,20 @@ def export_vpx(op, context):
                 if vpx_name not in light_processed:
                     code += f"	' Sync on {vpx_name}\n"
                     light_processed.append(vpx_name)
-        code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100, "\n'
+        hdr_scale = vlm_utils.get_hdr_scale(obj.vlmSettings.bake_hdr_range)
+        code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, {100.0/hdr_scale:6.2f}, "\n'
+    code += 'End Sub\n'
+
+    code += "\n"
+    code += "\n"
+    code += "' ===============================================================\n"
+    code += "' The following code can be copy/pasted to disable baked lights\n"
+    code += "' Lights are not removed on export since they are needed for ball\n"
+    code += "' reflections and may be used for lightmap synchronisation.\n"
+    code += "\n"
+    code += 'Sub HideLightHelper\n'
+    for light in sorted(baked_vpx_lights):
+        code += f'	{light}.Visible = False\n'
     code += 'End Sub\n'
 
     code += "\n"
@@ -685,7 +704,9 @@ def export_vpx(op, context):
     code += 'Sub MovableHelper\n'
     movables = sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''], key=lambda x: x.vlmSettings.bake_sync_trans)
     for obj in movables:
-        code += f'	{elem_ref(export_name(obj.name))}.RotZ = 0\n'
+        sync = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
+        if sync and sync.vlmSettings.movable_script != '':
+            code += f'	{elem_ref(export_name(obj.name))}{sync.vlmSettings.movable_script}\n'
     code += 'End Sub\n'
 
     code += "\n"
@@ -700,14 +721,15 @@ def export_vpx(op, context):
     for obj in lightmaps:
         vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
         obj_ref = elem_ref(export_name(obj.name))
+        hdr_scale = vlm_utils.get_hdr_scale(obj.vlmSettings.bake_hdr_range)
         if not vpx_name:
-            code += f'	{obj_ref}.Visible = False\n'
+            code += f"	{obj_ref}.Visible = False ' {100.0/hdr_scale:6.2f} HDR scaling\n"
         elif vpx_name in table_lights:
-            code += f'	UpdateLightMapFromLight {elem_ref(vpx_name)}, {obj_ref}, 100, {"True" if sync_color else "False"}\n'
+            code += f'	UpdateLightMapFromLight {elem_ref(vpx_name)}, {obj_ref}, {100.0/hdr_scale:6.2f}, {"True" if sync_color else "False"}\n'
         elif vpx_name in table_flashers:
-            code += f'	UpdateLightMapFromFlasher {elem_ref(vpx_name)}, {obj_ref}, 100, {"True" if sync_color else "False"}\n'
+            code += f'	UpdateLightMapFromFlasher {elem_ref(vpx_name)}, {obj_ref}, {100.0/hdr_scale:6.2f}, {"True" if sync_color else "False"}\n'
         else:
-            code += f'	{obj_ref}.Visible = False\n'
+            code += f"	{obj_ref}.Visible = False ' {100.0/hdr_scale:6.2f} HDR scaling\n"
     code += "End Sub\n"
     code += "\n"
     code += "Function LightFade(light, is_on, percent)\n"

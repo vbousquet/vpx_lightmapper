@@ -9,22 +9,24 @@ TODO
 - Include an asset folder, register it as an asset library when the plugin is activated, move the core assets to this asset library instead of loading them directly, populate with additional assets (screws, bulbs, posts, inserts, materials,...)
 - Add glow map baking (camera space post process bake) => now that light HDR is clean, can't we just live with VPX bloom ?
 - Add a user configurable way of stopping modifier application when baking (for the moment hardcoded to stop on fine bevelling)
-- Hide lights (make them not visible, needs VPX update since fading is only performed on visible light at the moment)
 
-Layers
-- Playfield with inserts cups => static (splitted from the rest in order to be rendered with reflections in VPX)
-- Solid parts => static
-- Movable parts => opaque but not static
-- Translucent parts (Insert overlays and borders, Plastic ramps, decals, under playfield glass): blended due to transparency, sorted back to front
-
-Optimizations 
-- Lights are always rendered (eventually bulb, then additive bulb). Discards: not visible, intensity = 0, color & color2 = Black
+VPX Optimizations 
 - Unshaded path can be more efficient (single tex fetch)
-- HDR texture should be half float (48b instead of 96b) to improve cache hit and limit memory bandwidth consumption
+- HDR texture should be half float (64b instead of 128b) to improve cache hit and limit memory bandwidth consumption (but HDR is not working anyway due to DX9 downscaling the texture)
 
-VPX render path
+
+
+
+
+
+Overlapping of translucent parts is a nightmare by design:  each overlap must result in a model split for correct rendering. Overlaps are POV dependent.
+- perform fixed view baking/lightmap baking of translucent parts ? with this approach, lightmap can't be rendered with depth test => how to render them ? disable depth write of translucent parts (VPX modification) ? Result can't be right (blending is not additive and is order of rendering dependent).
+. just drop lightmaps in favor of basic VPX's light transmission (i.e. don't improve ramps) ? It will be difficult to make them look right
+- perform automatic model splitting from render POV ? rendering will be wrong as soon as the POV will change
+
+VPX render path (for reference)
 0. Render (apart) mirror from static prerendered and dynamic parts
-0. Render (apart) light buffer from lights flagged as transmitting (bulb checked with transmit > 0)
+0. Render (apart) light buffer from lights flagged as transmitting (bulb checked, with transmit > 0)
 1. Copy static playfield without depth, and static parts with depth
 2. Copy mirror without depth (depth tested to static parts, since they are the only one in the depth buffer)
 3. Render playfield depth
@@ -32,9 +34,11 @@ VPX render path
 5. Render dynamic translucent parts (objects and DMDs)
 
 
-
-
 Closed items:
+- Layer separator must be hidden when not rendering its translucent object => add a link to it and implement => implemented in 'Bake Mask' feature
+- Hide lights (make them not visible, VPX updated commited => needs VPX update since fading is only performed on visible light at the moment) => included in the helper script, not added to the export since it is not in VPX UI and can be quite confusing
+- VPX Optimizations: Lights are always rendered (eventually bulb, then additive bulb). Discards: not visible, intensity = 0, color & color2 = Black
+- Use Blender 3.2 light groups to render all the light scenario at once. This does not support multiple world (world can set to a light group though), and this has to be looked more deeply for light scenario using meshes (emitters or occluders). This could decrease the render time by a factor 10.
 - Add clean nestmap padding for opaque objects using the nearest opaque color
 - Compute and use the HDR range of the used part of the render, not the one of the full render
 - Lights are rendered to the light buffer if they have transmission scale => turn it to 0 on export

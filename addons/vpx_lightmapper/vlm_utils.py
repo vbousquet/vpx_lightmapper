@@ -58,7 +58,7 @@ def load_library():
     if not os.path.isfile(librarypath):
         print(f'{librarypath} does not exist')
     # Core materials, Compositing, Fixed view shading & miscellaneous nodes
-    nodegroups = ('VLM.BakeInfo', 'VPX.Material', 'VPX.Flasher', 'VLM.Overlay', 'VLM.Fixed View Glass', 'VLM.Fixed View Specular', 'VLM.Fixed View Incoming', 'Metal Colors')
+    nodegroups = ('VLM.BakeInfo', 'VPX.Material', 'VPX.Flasher', 'VPX.Light', 'VLM.Fixed View Glass', 'VLM.Fixed View Specular', 'VLM.Fixed View Incoming')
     with bpy.data.libraries.load(librarypath, link=False) as (data_from, data_to):
         data_to.objects = [name for name in data_from.objects if name.startswith("VPX.Core.")]
         data_to.images = [name for name in data_from.images if name.startswith("VPX.Core.")]
@@ -70,15 +70,11 @@ def load_library():
     bpy.data.node_groups.get('VLM.BakeInfo').use_fake_user = True
     bpy.data.node_groups.get('VPX.Material').use_fake_user = True
     bpy.data.node_groups.get('VPX.Flasher').use_fake_user = True
+    bpy.data.node_groups.get('VPX.Light').use_fake_user = True
     # Fixed view shading
     bpy.data.node_groups.get('VLM.Fixed View Glass').use_fake_user = True
     bpy.data.node_groups.get('VLM.Fixed View Specular').use_fake_user = True
     bpy.data.node_groups.get('VLM.Fixed View Incoming').use_fake_user = True
-    # Compositing
-    bpy.data.node_groups.get('VLM.Overlay').use_fake_user = True
-    # Miscellaneous nodes
-    bpy.data.node_groups.get('Metal Colors').use_fake_user = True
-    bpy.data.node_groups.get('Color Dispersion').use_fake_user = True
 
 
 def clean_filename(filename):
@@ -249,9 +245,13 @@ def is_part_of_bake_category(obj, category):
     return next((col for col in obj.users_collection if col.vlmSettings.bake_mode == category), None) is not None
 
 
-def brightness_from_hdr(hdr_range):
-    return 1.0 / max(0.1, min(2, hdr_range))
-    #return 1.0 / min( 1 + (hdr_range - 1) / 10, 10)
+def get_hdr_scale(hdr_range):
+    '''Compute HDR scaling to fit in a LDR texture (VPX does not support HDR images)
+    '''
+    hdr_scale = 1.0 / hdr_range if hdr_range > 0.0 else 1.0
+    if hdr_scale < 0.25: hdr_scale = 0.25
+    if hdr_scale > 1.0: hdr_scale = 1.0
+    return hdr_scale
 
 
 def get_lightings(context):

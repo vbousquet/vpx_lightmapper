@@ -142,7 +142,6 @@ def create_bake_meshes(op, context):
     # Create all solid bake meshes
     bake_meshes = []
     bake_results = []
-    bm_merge = bmesh.new()
     for bake_name, bake_col, bake_col_object_set, sync_obj, is_translucent in to_bake:
         # Join all objects to build baked objects (converting to mesh, and preserving split normals)
         print(f"\nBuilding solid bake target model for '{bake_name}'")
@@ -344,11 +343,7 @@ def create_bake_meshes(op, context):
         bpy.ops.object.mode_set(mode='OBJECT')
         
         print(f'. Base solid mesh has {len(bake_mesh.polygons)} tris and {len(bake_mesh.vertices)} vertices')
-        # here merging accross lightmaps is disabled for clean layer support. It has a performance impact on the resulting table
-        #if sync_obj:
-        bake_meshes.append((bake_name, bake_mesh, sync_obj))
-        #else:
-        #    bm_merge.from_mesh(bake_mesh)
+        bake_meshes.append((bake_col, bake_name, bake_mesh, sync_obj))
         result_col.objects.unlink(bake_target)
 
         # Save solid bake to the result collection
@@ -372,7 +367,7 @@ def create_bake_meshes(op, context):
             for index in range(n_render_groups):
                 bake_instance.data.materials[index] = materials[index]
             bake_instance.vlmSettings.bake_lighting = light_name
-            bake_instance.vlmSettings.bake_objects = bake_col.name
+            bake_instance.vlmSettings.bake_objects = bake_col
             bake_instance.vlmSettings.bake_hdr_scale = 1.0
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
@@ -384,20 +379,11 @@ def create_bake_meshes(op, context):
                 bake_instance.vlmSettings.bake_type = 'default'
             result_col.objects.link(bake_instance)
             bake_results.append(bake_instance)
-
-    # Add the merged mesh for non movable bake groups
-    merged_bake_mesh = bpy.data.meshes.new('LightMesh')
-    bm_merge.to_mesh(merged_bake_mesh)
-    bm_merge.free()
-    if len(merged_bake_mesh.polygons) > 0:
-        for index in range(n_render_groups):
-            merged_bake_mesh.materials.append(light_scenarios[0][4][index])
-        bake_meshes.append(('Table', merged_bake_mesh, None))
     
     # Build all the visibility maps
     vmaps = []
     print(f'\nBuilding all lightmap meshes (prune map size={prunemap_width}x{prunemap_height})')
-    for bake_name, bake_mesh, sync_obj in bake_meshes:
+    for bake_col, bake_name, bake_mesh, sync_obj in bake_meshes:
         print(f'. Building lightmap meshes for {bake_name}')
         obj = bpy.data.objects.new(f"LightMesh", bake_mesh)
         result_col.objects.link(obj)
@@ -415,7 +401,7 @@ def create_bake_meshes(op, context):
         if not is_lightmap: continue
         influence = build_influence_map(render_path, light_name, n_render_groups, prunemap_width, prunemap_height)
         print(f'\nProcessing lighmaps for {light_name}')
-        for (bake_name, bake_mesh, sync_obj), lightmap_vmap in zip(bake_meshes, vmaps):
+        for (bake_col, bake_name, bake_mesh, sync_obj), lightmap_vmap in zip(bake_meshes, vmaps):
             obj_name = f'{bake_name}.LM.{light_name}'
             bake_instance = bpy.data.objects.get(obj_name)
             if bake_instance:
@@ -443,7 +429,7 @@ def create_bake_meshes(op, context):
                 bake_instance.matrix_basis.identity()
             bake_instance.vlmSettings.bake_type = 'lightmap'
             bake_instance.vlmSettings.bake_lighting = light_name
-            bake_instance.vlmSettings.bake_objects = bake_name
+            bake_instance.vlmSettings.bake_objects = bake_col
             bake_instance.vlmSettings.bake_hdr_range = hdr_range
             bake_instance.vlmSettings.bake_sync_light = ';'.join([l.name for l in lights]) if lights else ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''

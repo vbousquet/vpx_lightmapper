@@ -90,7 +90,7 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
     '''Perform nesting of a group of objects to a minimal (not optimal) set of nestmaps
     Eventually splitting objects that can't fit into a single nestmap.
     '''
-    pack_threshold = int(tex_w*tex_h*0.9)
+    pack_threshold = int(tex_w * tex_h * 0.85)
     src_w, src_h = render_size
     # adds one to the padding to take in account uv positionning inside pixel
     padding = context.scene.vlmSettings.padding + 1
@@ -105,16 +105,26 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
     to_render = []
     splitted_objects = []
     while islands_to_pack:
-        # Sort from biggest to smallest
-        islands_to_pack.sort(key=lambda p: p[3], reverse=True)
+        # Sort from biggest squared pixcount sum to smallest
+        islands_to_pack.sort(key=lambda p: p[4], reverse=True)
 
         # Select island groups
+        total_pixcount = sum([block[3] for block in islands_to_pack])
+        n_min_pages = max(1, int(total_pixcount / pack_threshold))
+            
         pixcount = 0
         selection = []
-        for block in islands_to_pack:
+        # Dispatch blocks on the total amount of remaining pages (don't put all the big one in the first page)
+        for block in islands_to_pack[::n_min_pages]:
             if pixcount == 0 or pixcount + block[3] <= pack_threshold:
                 selection.append(block)
                 pixcount += block[3]
+        # Then fill up with small blocks
+        for block in reversed(islands_to_pack):
+            if pixcount == 0 or pixcount + block[3] <= pack_threshold and not block in selection:
+                selection.append(block)
+                pixcount += block[3]
+        
 
         while True:
             pixcount = 0
@@ -123,7 +133,7 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                 pixcount += block[3]
                 selected_islands.extend(block[2])
             selection_names = [block[0].name for block in selection]
-            print(f'Trying to nest in a single texture the {len(selected_islands)} islands ({pixcount/float(tex_w*tex_h):6.2%} fill with {pixcount} px / {tex_w*tex_h} content) of {selection_names}')
+            print(f'\nTrying to nest in a single texture the {len(selected_islands)} islands ({pixcount/float(tex_w*tex_h):6.2%} fill with {pixcount} px / {tex_w*tex_h} content) of {selection_names}')
 
             # Save UV for undoing nesting if needed
             uv_undo = []
@@ -142,7 +152,7 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                 to_render.append( (selection, nestmap) )
                 for block in selection:
                     islands_to_pack.remove(block)
-                    obj, bm, block_islands, block_pix_count = block
+                    obj, bm, block_islands, block_pix_count, block_pix_count_squared = block
                     for face in bm.faces:
                         face.tag = True
                     for island in block_islands:
@@ -159,7 +169,17 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                 # remove last block and start again with a smaller group
                 if len(selection) > 1:
                     print(f'Nesting of {selection_names} overflowed from a single texture page. Retrying with a smaller content.')
-                    selection.pop()
+                    incompatible_blocks = []
+                    for overflow_object in set([island['source'][0] for island in nested_islands]):
+                        overflow_block = next((block for block in selection if block[0] == overflow_object))
+                        incompatible_blocks.append(overflow_block)
+                    incompatible_blocks.sort(key=lambda p: p[4])
+                    overflow_block = incompatible_blocks[0]
+                    # remove the first overflowing block
+                    #overflow_island = next((island for island in nested_islands if island['place'][0] > 0))
+                    #overflow_object = overflow_island['source'][0]
+                    print(f'Removing {overflow_block[0].name} from nesting group (smallest incompatible nest block).')
+                    selection.remove(overflow_block)
                     # reset uv
                     index = 0
                     for island in selected_islands:
@@ -174,7 +194,7 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                     # to be nested with other blocks
                     block = selection[0]
                     islands_to_pack.remove(block)
-                    obj, bm, block_islands, block_pix_count = block
+                    obj, bm, block_islands, block_pix_count, block_pix_count_squared = block
                     src_w, src_h, padding, islands, targets, target_heights = nestmap
                     print(f'Object {obj.name} does not fit on a single page. Splitting it.')
                     # Consider the parts that fitted the first page as successfull
@@ -212,6 +232,7 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                             processed_islands.append(island)
                             island['source'] = (obj_copy, None)
                             block_pix_count = block_pix_count - island['pixcount']
+                            block_pix_count_squared = block_pix_count_squared - island['pixcount squared']
                             processed_pix_count = processed_pix_count + island['pixcount']
                     bmesh.ops.delete(bm_copy, geom=faces_to_remove, context='FACES')
                     bm_copy.to_mesh(obj_copy.data)
@@ -221,7 +242,7 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                     print(f'. {len(processed_islands)} islands were nested on the first page and kept.')
                     # Continue nesting with all the remaining islands
                     print(f'. {len(remaining_islands)} islands were splitted, and still need to be nested.')
-                    islands_to_pack.append( (obj, bm, remaining_islands, block_pix_count) )
+                    islands_to_pack.append( (obj, bm, remaining_islands, block_pix_count, block_pix_count_squared) )
                     break
 
     # Free unprocessed data if any
@@ -235,8 +256,9 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
         src_w, src_h, padding, islands, targets, target_heights = nestmap
         nestmaps = [np.zeros((len(target) * height * 4), 'f') for target, height in zip(targets, target_heights)]
         with_alpha = False
-        for obj_name in {obj.name for (obj, _, _, _) in selection}:
+        for obj_name in {obj.name for (obj, _, _, _, _) in selection}:
             obj = bpy.data.objects[obj_name]
+            hdr_scale = vlm_utils.get_hdr_scale(obj.vlmSettings.bake_hdr_range)
             print(f'. Copying renders for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
             # Load the render 
             render_data = []
@@ -251,9 +273,6 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                 else:
                     render_data.append(None)
             # Render to the packed nest map
-            #is_lightmap = obj.vlmSettings.bake_type == 'lightmap'
-            is_opaque = obj.vlmSettings.bake_type != 'active'
-            with_alpha = with_alpha or not is_opaque
             for island in islands:
                 island_obj, _ = island['source']
                 if island_obj != obj: continue
@@ -279,22 +298,24 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                 target_tex = nestmaps[n]
 
                 # Identify opaque islands to process padding accordingly by fixing alpha on rendered borders (lightmaps are always opaque)
-                # Changed opaque is determined by the user (see is_opaque above, taken from the bake type)
-                # if is_lightmap:
-                    # is_opaque = True
-                # else:
-                    # alpha = 0
-                    # n_alpha = 0
-                    # for px, col_mask in enumerate(unpadded_mask):
-                        # for span in col_mask:
-                            # for py in range(span[0] + 1, span[1]):
-                                # dx = px + min_x - padding
-                                # dy = py + min_y - padding
-                                # if 0 <= dx and dx < src_w and 0 <= dy and dy < src_h:
-                                    # alpha = alpha + island_render[4*(dx + dy*src_w) + 3]
-                                    # n_alpha = n_alpha + 1
-                    # is_opaque = alpha/n_alpha > 0.98 if n_alpha >= 32 else False
-                    # #if n_alpha > 64: print(f'. Translucency: {alpha/n_alpha:>6.1%} for {n_alpha} points')
+                if obj.vlmSettings.bake_type == 'lightmap':
+                    is_opaque = False # No border padding for lightmaps
+                elif obj.vlmSettings.bake_type == 'active':
+                    is_opaque = False # No border padding for parts marked as translucent by the user
+                else: # Apply border padding if the part is opaque
+                    alpha = 0
+                    n_alpha = 0
+                    for px, col_mask in enumerate(unpadded_mask):
+                        for span in col_mask:
+                            for py in range(span[0] + 1, span[1]):
+                                dx = px + min_x - padding
+                                dy = py + min_y - padding
+                                if 0 <= dx and dx < src_w and 0 <= dy and dy < src_h:
+                                    alpha = alpha + island_render[4*(dx + dy*src_w) + 3]
+                                    n_alpha = n_alpha + 1
+                    is_opaque = alpha/n_alpha > 0.98 if n_alpha >= 32 else False
+                    #if n_alpha > 64: print(f'. Translucency: {alpha/n_alpha:>6.1%} for {n_alpha} points')
+                with_alpha = with_alpha or not is_opaque
                     
                 for px, col_mask in enumerate(mask):
                     for span in col_mask:
@@ -347,13 +368,13 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                                                             best_alpha = island_render[p3+3]
                                                             best_pos = p3
                                             if best_alpha >= 1: break
-                                        for j in range(4):
-                                            target_tex[p+j] = island_render[best_pos+j]
+                                        for j in range(3):
+                                            target_tex[p+j] = island_render[best_pos+j] * hdr_scale
                                         target_tex[p+3] = 1
                                     else:
-                                        for j in range(4):
-                                            target_tex[p+j] = island_render[p2+j]
-                                            # target_tex[p+j] = 1
+                                        for j in range(3):
+                                            target_tex[p+j] = island_render[p2+j] * hdr_scale
+                                        target_tex[p+3] = island_render[p2+3]
 
         # Save the rendered nestmaps
         scene = bpy.data.scenes.new('VLM.Tmp Scene')
@@ -422,6 +443,7 @@ def prepare_nesting(obj, render_size, padding):
     shader_draw = gpu.types.GPUShader(vertex_shader, fragment_shader)
     gpu.state.blend_set('NONE')
     total_pix_count = 0
+    total_pix_count_squared = 0
     for index, island in enumerate(islands, start=1):
         island_min = island['min']
         island_max = island['max']
@@ -508,6 +530,7 @@ def prepare_nesting(obj, render_size, padding):
         buffer.dimensions = src_w * src_h * 4
 
         island_pix_count = 0
+        island_pix_count_squared = 0
         island_hor = []
         for x in range(island_w):
             ymin = -1
@@ -519,10 +542,12 @@ def prepare_nesting(obj, render_size, padding):
                     if ymin != -1:
                         spans.append((ymin, y-1, y-1-ymin + 1))
                         island_pix_count = island_pix_count + (y-1-ymin + 1)
+                        island_pix_count_squared = island_pix_count_squared + (y-1-ymin + 1)*(y-1-ymin + 1)
                         ymin = -1
             if ymin != -1:
                 spans.append((ymin, island_h-1, island_h-1-ymin + 1))
                 island_pix_count = island_pix_count + (island_h-1-ymin + 1)
+                island_pix_count_squared = island_pix_count_squared + (island_h-1-ymin + 1)*(island_h-1-ymin + 1)
             island_hor.append(spans)
         
         island_ver = []
@@ -549,7 +574,9 @@ def prepare_nesting(obj, render_size, padding):
         island_masks.append(island_ver) # 90 rotation, Flipped on X
         
         island['pixcount'] = island_pix_count
+        island['pixcount squared'] = island_pix_count_squared
         total_pix_count = total_pix_count + island_pix_count
+        total_pix_count_squared = total_pix_count_squared + island_pix_count_squared
 
         island['source'] = (obj, bm)
 
@@ -557,9 +584,24 @@ def prepare_nesting(obj, render_size, padding):
         
     offscreen.free()
     
-    return (obj, bm, islands, total_pix_count)
+    return (obj, bm, islands, total_pix_count, total_pix_count_squared)
 
 
+def round_for_mimpaps(x):
+    '''Round a texture dimension (width/height) for clean mipmap support.
+    To avoid blur artefacts, bakemaps and lightmaps need to have the same mipmapping capabilities.
+    Therefore, texture dimensions need to be rounded to the next power of 2 of the mipmap level
+    we want to support. For example, a 4K render on a 4K display, needs at least 1 mipmap level (so
+    rounding to the next even size). A 4k render on a 0.5k display (landscape 1920x1080) will need
+    at least 4 mipmap levels (rounding to the next multiple of 16).
+    '''
+    mipmap_level = 6 # Make a 8K render playable on a 0.25k display
+    mask = 1 << mipmap_level
+    return ((x + (mask-1)) & (-mask))
+    # Next power of 2 would be excessive. The full mipmap chain down to 1 pixel is not needed
+    #return 1<<(x-1).bit_length()
+    
+    
 def perform_nesting(islands, src_w, src_h, tex_w, tex_h, padding, only_one_page=False):
     # Placement algorithm (simple discret bottom left direct placement)
     targets = []
@@ -621,7 +663,7 @@ def perform_nesting(islands, src_w, src_h, tex_w, tex_h, padding, only_one_page=
                             print(f'. Island #{index:>3}/{len(islands)} could not be placed (single page mode) pixcount:{island["pixcount"]:>7}px  from {island["source"][0].name}')
                             return (src_w, src_h, padding, islands, [], [])
         island['place'] = (n, x, y, rot)
-        print(f'. Island #{index:>3}/{len(islands)} placed on nestmap #{n} at {x:>4}, {y:>4} o:{rot} pixcount:{island["pixcount"]:>7}px  from {island["source"][0].name}')
+        # print(f'. Island #{index:>3}/{len(islands)} placed on nestmap #{n} at {x:>4}, {y:>4} o:{rot} pixcount:{island["pixcount"]:>7}px  from {island["source"][0].name}')
         
         # Update target mask
         target_mask = targets[n]
@@ -636,12 +678,15 @@ def perform_nesting(islands, src_w, src_h, tex_w, tex_h, padding, only_one_page=
                             target_mask[x + col].insert(i, (check[0], y+span[0], y+span[0] - check[0] + 1))
                         break
 
-    # Crop targets
+    # Crop targets to smallest power of two (if not DX9 will lower the texture quality...)
     target_heights = []
     for target in targets:
         # Remove empty columns on the right
         while len(target)>0 and len(target[-1]) == 1 and target[-1][0][2] == tex_h:
             target.pop()
+        target_w = round_for_mimpaps(len(target))
+        while len(target) < target_w:
+            target.append([(0, tex_h-1, tex_h)])
         # Evaluate upper bound
         ymax = 0
         for spans in target:
@@ -650,7 +695,8 @@ def perform_nesting(islands, src_w, src_h, tex_w, tex_h, padding, only_one_page=
             else:
                 ymax = tex_h
                 break
-        target_heights.append(ymax)
+        target_h = round_for_mimpaps(ymax)
+        target_heights.append(target_h)
         
     # Update UV to the new placement
     for island in islands:

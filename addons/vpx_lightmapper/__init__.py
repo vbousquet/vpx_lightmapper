@@ -228,6 +228,7 @@ class VLM_Collection_props(PropertyGroup):
         default='group'
     )
     is_opaque: BoolProperty(name="Opaque", description="Wether this collection only contains opaque objects which do not require blending.", default = True)
+    depth_bias: IntProperty(name="Depth Bias", description="Depth Bias applied to the layer when exported to VPX. Set to 0 for playfield, Negative for layer above playfield, positive for layers under playfield.", default = 0)
     light_mode: EnumProperty(
         items=[
             ('solid', 'Solid', 'Base solid bake', '', 0),
@@ -245,18 +246,20 @@ class VLM_Object_props(PropertyGroup):
     # Bake objects properties (for all objects except the one in the result collection)
     vpx_object: StringProperty(name="VPX", description="Identifier of reference VPX object", default = '')
     vpx_subpart: StringProperty(name="Part", description="Sub part identifier for multi part object like bumpers,...", default = '')
+    movable_script: StringProperty(name="Sync", description="VBS script for movable/mod scynchronization", default = '')
     import_mesh: BoolProperty(name="Mesh", description="Update mesh on import", default = True)
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
     is_rgb_led: BoolProperty(name="RGB Led", description="RGB Led (lightmapped to white then colored in VPX for dynamic colors)", default = False)
     enable_aoi: BoolProperty(name="Enable AOI", description="Area Of Influence rendering optimization", default = True)
     bake_to: PointerProperty(name="Bake To", type=bpy.types.Object, description="Target object used as bake mesh target")
+    bake_mask: PointerProperty(name="Bake Mask", type=bpy.types.Object, description="Object to be rendered with this object (for example for alpha layers)")
     indirect_only: BoolProperty(name="Indirect", description="Do not bake this object but consider its influence on the scene", default = False)
     hide_from_others: BoolProperty(name="Hide from others", description="Hide this object from other objects. For example hide flipper bat from playfield. WARNING: this feature has limited support. see doc.", default = False)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     layback_offset: FloatProperty(name="Layback offset", description="Y offset caused by current layback", default = 0.0)
     # Bake result properties (for object inside the bake result collection)
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
-    bake_objects: StringProperty(name="Bake", description="Bake collection included in this bake/lightmap", default="")
+    bake_objects: PointerProperty(name="Bake", type=bpy.types.Collection, description="Bake collection included in this bake/lightmap")
     bake_sync_light: StringProperty(name="Sync Light", description="Object to sync light state on", default="")
     bake_sync_trans: StringProperty(name="Sync Trans", description="Object to sync transform on", default="")
     bake_type: EnumProperty(
@@ -749,6 +752,7 @@ class VLM_PT_Col_Props(bpy.types.Panel):
         light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
         if col.name in bake_col.children:
             layout.prop(col.vlmSettings, 'bake_mode', expand=True)
+            layout.prop(col.vlmSettings, 'depth_bias', expand=True)
             layout.prop(col.vlmSettings, 'is_opaque', expand=True)
         elif col.name in light_col.children:
             layout.prop(col.vlmSettings, 'light_mode', expand=True)
@@ -777,6 +781,7 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                 layout.label(text="VPX object:")
                 layout.prop(obj.vlmSettings, 'vpx_object', text='VPX', expand=True)
                 layout.prop(obj.vlmSettings, 'vpx_subpart', text='Subpart', expand=True)
+                layout.prop(obj.vlmSettings, 'movable_script', expand=True)
                 if light_col and obj.name in light_col.all_objects:
                     layout.prop(obj.vlmSettings, 'is_rgb_led', expand=True)
                     layout.prop(obj.vlmSettings, 'enable_aoi', expand=True)
@@ -807,6 +812,7 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                 layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Mixed', icon='REMOVE').indirect_only = True
             if len(bake_objects) == 1 and bake_col:
                 layout.prop(obj.vlmSettings, 'hide_from_others', text='Hide')
+                layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
                 layout.prop(bake_objects[0].vlmSettings, 'bake_to')
             
             layout.separator()
