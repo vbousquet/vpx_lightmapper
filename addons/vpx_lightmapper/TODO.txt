@@ -2,7 +2,7 @@ TODO
 - Implement surface positionning relative to a ramp
 - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 - JP's Star Trek has a wrong texture positionning (panel above ramp)
-- When importing plastics wall, create 2 meshes: one for the plastic with a plastic shader (enlarged for the bevelling to be visible), one for the image (bpy.ops.mesh.solidify(thickness=-0.01), invert selection and delete, then scale on z axis)
+- When importing plastics wall, create 2 meshes: one for the plastic with a plastic shader (enlarged for the bevelling to be visible), one for the image (bpy.ops.mesh.solidify(thickness=-0.01), invert selection and delete, then scale back on z axis)
 - Support 'active' (i.e. non opaque bake) objects for the occluder selection
 - Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled
 - When loading library, update existing node groups instead of skipping them
@@ -11,15 +11,14 @@ TODO
 - Add a user configurable way of stopping modifier application when baking (for the moment hardcoded to stop on fine bevelling)
 
 VPX Optimizations 
-- Unshaded path can be more efficient (single tex fetch)
+- Unshaded path can be more efficient (single tex fetch) => Tested, 1.5ms speedup on a 22ms render time on a GTX650. Is it really worth the effort ?
 - HDR texture should be half float (64b instead of 128b) to improve cache hit and limit memory bandwidth consumption (but HDR is not working anyway due to DX9 downscaling the texture)
 
 
 
 
 
-
-Overlapping of translucent parts is a nightmare by design:  each overlap must result in a model split for correct rendering. Overlaps are POV dependent.
+Update documentation for transparent parts: Overlapping of translucent parts is a nightmare by design:  each overlap must result in a model split for correct rendering. Overlaps are POV dependent.
 - perform fixed view baking/lightmap baking of translucent parts ? with this approach, lightmap can't be rendered with depth test => how to render them ? disable depth write of translucent parts (VPX modification) ? Result can't be right (blending is not additive and is order of rendering dependent).
 . just drop lightmaps in favor of basic VPX's light transmission (i.e. don't improve ramps) ? It will be difficult to make them look right
 - perform automatic model splitting from render POV ? rendering will be wrong as soon as the POV will change
