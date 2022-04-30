@@ -175,7 +175,7 @@ def create_bake_meshes(op, context):
             override["object"] = override["active_object"] = dup
             override["selected_objects"] = override["selected_editable_objects"] = [dup]
             for modifier in dup.modifiers:
-                if modifier.type == 'BEVEL' and modifier.width < 0.1: break
+                if 'NoExp' in modifier.name: break # or (modifier.type == 'BEVEL' and modifier.width < 0.1)
                 bpy.ops.object.modifier_apply(override, modifier=modifier.name)
             dup = bpy.data.objects[dup_name]
             dup.modifiers.clear()
