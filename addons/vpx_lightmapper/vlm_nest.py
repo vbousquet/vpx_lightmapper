@@ -104,6 +104,7 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
     # Nest groups of islands into nestmaps
     splitted_objects = []
     nestmap_index = 0
+    n_failed = 0
     while islands_to_pack:
         # Sort from biggest squared pixcount sum to smallest
         islands_to_pack.sort(key=lambda p: p[4], reverse=True)
@@ -168,6 +169,7 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                 break
             else:
                 # remove last block and start again with a smaller group
+                n_failed = n_failed + 1
                 if len(selection) > 1:
                     #print(f'Nesting of {selection_names} overflowed from a single texture page. Retrying with a smaller content.')
                     incompatible_blocks = []
@@ -251,6 +253,7 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
     # Free unprocessed data if any
     for (obj, bm, islands, obj_pixcount) in islands_to_pack:
         bm.free()
+    print(f'. Nestmapping finished ({n_failed} overflow were handled for {nestmap_index} generated nestmaps).')
         
     return (nestmap_index, splitted_objects)
 
@@ -289,8 +292,11 @@ def render_nestmap(context, selection, nestmap, nestmap_name, nestmap_index):
             island_render_group = island['render_group']
             if n > 0: # Skip islands that were nested to secondary pages: they have been splitted to other objects
                 continue
-            if island_render_group < 0 or island_render_group >= len(render_data) or render_data[island_render_group] is None:
-                print('. Missing render group, skipping island')
+            if island_render_group < 0 or island_render_group >= len(render_data):
+                print('. Missing render group, skipping island (likely a bug)')
+                continue
+            if render_data[island_render_group] is None:
+                print('. No render (likely uninfluenced lightmap), skipping island')
                 continue
             if obj.vlmSettings.bake_nestmap != nestmap_index:
                 if obj.vlmSettings.bake_nestmap != -1:
