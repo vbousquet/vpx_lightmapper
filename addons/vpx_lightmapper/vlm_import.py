@@ -1829,7 +1829,7 @@ def read_vpx(op, context, filepath):
                     "VPX.Core.Hittargetfatsquare", "VPX.Core.Droptargett4", "VPX.Core.Hittargett2slim", "VPX.Core.Hittargett1slim"]
                 active = is_active(materials, material, image, opaque_images)
                 target_col = MOVABLE_COL if type in [1, 2, 7] else (ACTIVE_COL if active else STATIC_COL)
-                obj = add_core_mesh(created_objects, name, '', meshes[type], target_col if visible else hidden_col, materials, material, image, x, y, z, x_size, y_size, z_size, rot_z, global_scale)
+                obj = add_core_mesh(created_objects, name, '', meshes[type], target_col if visible else HIDDEN_COL, materials, material, image, x, y, z, x_size, y_size, z_size, rot_z, global_scale)
 
             else:
                 print(f"GameStg/GameItem{index}: unsupported type #{item_type}")
