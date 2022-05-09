@@ -281,7 +281,7 @@ def render_all_groups(op, context):
     if bake_info_group:
         bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 1.0
 
-    # Create temp render scene, using the user render settings and compositor setup if any
+    # Create temp render scene, using the user render settings setup
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
     scene.collection.objects.link(camera_object)
     scene.camera = camera_object

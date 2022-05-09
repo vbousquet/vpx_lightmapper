@@ -24,6 +24,7 @@ import functools
 import datetime
 import string
 import unicodedata
+from mathutils import Vector
 from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
 
@@ -38,6 +39,39 @@ def get_global_scale(context):
         return 0.01 * 2.69875 / 50 # Metric scale (imperial is performed by blender itself)
 
 
+# 3D tri area ABC is half the length of AB cross product AC 
+def tri_area(co1, co2, co3):
+    return (co2 - co1).cross(co3 - co1).length / 2.0
+
+
+# Adapted from Blender source code:
+# winx/winy defines the render resolution, including pixel aspect ratio
+# https://developer.blender.org/diffusion/B/browse/master/source/blender/editors/uvedit/uvedit_unwrap_ops.c
+# https://developer.blender.org/diffusion/B/browse/master/source/blender/blenlib/intern/uvproject.c
+def project_uv(camera, mesh, winx=1.0, winy=1.0):
+    if camera.type != 'CAMERA':
+        raise Exception(f"Object {camera.name} is not a camera.")
+    modelview_matrix = camera.matrix_world.normalized().inverted()
+    if winx > winy:
+        xasp = 1.0
+        yasp = winx / float(winy)
+    else:
+        xasp = winy / float(winx)
+        yasp = 1.0
+    shiftx = 0.5 - (camera.data.shift_x * xasp)
+    shifty = 0.5 - (camera.data.shift_y * yasp)
+    camsize = math.tan(camera.data.angle / 2.0)
+    uv_layer = mesh.uv_layers.active
+    for face in mesh.polygons:
+        for loop_idx in face.loop_indices:
+            co = mesh.vertices[mesh.loops[loop_idx].vertex_index].co
+            p1 = modelview_matrix @ Vector((co[0], co[1], co[2], 1))
+            if p1.z == 0.0: p1.z = 0.00001
+            u = shiftx + xasp * (-p1.x * ((1.0 / camsize) / p1.z)) / 2.0
+            v = shifty + yasp * (-p1.y * ((1.0 / camsize) / p1.z)) / 2.0
+            uv_layer.data[loop_idx].uv = (u, v)
+    
+    
 def get_vpx_item(context, vpx_name, vpx_subpart, single=False):
     '''
     Search the complete scene for objects linked to the given vpx object/subpart

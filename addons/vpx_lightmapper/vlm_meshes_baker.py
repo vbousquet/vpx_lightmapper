@@ -81,6 +81,8 @@ def create_bake_meshes(op, context):
     opt_padding = context.scene.vlmSettings.padding
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
     opt_ar = context.scene.vlmSettings.render_aspect_ratio
+    proj_x = opt_tex_size * context.scene.render.pixel_aspect_x * opt_ar
+    proj_y = opt_tex_size * context.scene.render.pixel_aspect_y
 
     # Bake mesh generation settings
     opt_backface_limit_angle = context.scene.vlmSettings.remove_backface
@@ -93,6 +95,12 @@ def create_bake_meshes(op, context):
 
     # Packmap grouping
     opt_pack_margin = 0.05 # ratio that we admit to loose in resolution to optimize grouped texture size
+
+    # Delete existing results
+    if True:
+        to_delete = [obj for obj in result_col.all_objects]
+        for obj in to_delete:
+            bpy.data.objects.remove(obj, do_unlink=True)
 
     # Append core material (used to preview)
     if "VPX.Core.Mat.PackMap" not in bpy.data.materials:
@@ -148,7 +156,6 @@ def create_bake_meshes(op, context):
         poly_start = 0
         objects_to_join = []
         for i, obj_name in enumerate(bake_col_object_set):
-            print(f". Adding #{i+1}/{len(bake_col_object_set)}: {obj_name}")
             dup = bpy.data.objects[obj_name].copy()
             dup.data = dup.data.copy()
             result_col.objects.link(dup)
@@ -167,8 +174,8 @@ def create_bake_meshes(op, context):
             dup.data.use_auto_smooth = False
             dup.data.materials.clear()
             dup.data.validate()
-            for i in range(n_render_groups):
-                dup.data.materials.append(light_scenarios[0][4][i])
+            for j in range(n_render_groups):
+                dup.data.materials.append(light_scenarios[0][4][j])
             for poly in dup.data.polygons:
                 poly.material_index = dup.vlmSettings.render_group
             override = context.copy()
@@ -181,15 +188,42 @@ def create_bake_meshes(op, context):
             dup.modifiers.clear()
             dup.data.transform(dup.matrix_basis)
             dup.matrix_basis.identity()
+            # Create base UV projected layer
+            uvs = [uv for uv in dup.data.uv_layers]
+            while uvs:
+                dup.data.uv_layers.remove(uvs.pop())
+            uv_layer = dup.data.uv_layers.new(name='UVMap')
+            vlm_utils.project_uv(camera, dup.data, proj_x, proj_y)
+            # Evaluate biggest face size in pixels
+            bm = bmesh.new()
+            bm.from_mesh(dup.data)
+            bm.faces.ensure_lookup_table()
+            uv_loop = bm.loops.layers.uv[0]
+            triangle_loops = bm.calc_loop_triangles()
+            areas = {face: 0.0 for face in bm.faces} 
+            for loop in triangle_loops:
+                face = loop[0].face
+                areas[face] = areas[face] + vlm_utils.tri_area( *(Vector( (*l[uv_loop].uv, 0) ) for l in loop) )
+            bm.free()
+            max_size = max(areas.values()) * proj_x * proj_y
+            if max_size < 1.0:
+                ratio = max(math.sqrt(max_size), 0.1)
+                context.view_layer.objects.active = dup
+                # with context.temp_override(active_object=dup, selected_objects=dup):
+                bpy.ops.object.mode_set(mode = 'EDIT')
+                bpy.ops.mesh.decimate(ratio=ratio)
+                bpy.ops.object.mode_set(mode = 'OBJECT')
+                print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was decimated using a ratio of {ratio:.2%} from {len(areas)} to {len(dup.data.polygons)} faces')
+            else:
+                print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added')
             objects_to_join.append(dup)
-        
         if len(objects_to_join) == 0: continue
         
         # Create joined mesh
         bake_mesh = bpy.data.meshes.new('VLM.Bake Target')
         bake_mesh.materials.clear()
-        for index in range(n_render_groups):
-            bake_mesh.materials.append(light_scenarios[0][4][i])
+        for j in range(n_render_groups):
+            bake_mesh.materials.append(light_scenarios[0][4][j])
         bm = bmesh.new()
         poly_start = 0
         for obj in objects_to_join:
