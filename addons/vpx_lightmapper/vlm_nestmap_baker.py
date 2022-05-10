@@ -23,11 +23,10 @@ from PIL import Image # External dependency
 
 
 def render_nestmaps(op, context):
-    ctx_area = next((a for a in context.screen.areas if a.type == 'VIEW_3D'), None)
-    if not ctx_area:
-        op.report({'ERROR'}, 'This operator must be used with a 3D view active')
+    camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    if not camera:
+        op.report({'ERROR'}, 'Bake camera is missing')
         return {'CANCELLED'}
-    ctx_area.regions[-1].data.view_perspective = 'CAMERA'
 
     result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
     if not result_col or len(result_col.all_objects) == 0:
@@ -39,31 +38,21 @@ def render_nestmaps(op, context):
     vlm_utils.mkpath(bakepath)
     selected_objects = list(context.selected_objects)
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
-    render_size = (int(opt_tex_size * context.scene.vlmSettings.render_aspect_ratio), opt_tex_size)
+    opt_ar = context.scene.vlmSettings.render_aspect_ratio
+    proj_x = opt_tex_size * context.scene.render.pixel_aspect_x * opt_ar
+    proj_y = opt_tex_size * context.scene.render.pixel_aspect_y
+    render_size = (int(opt_tex_size * opt_ar), opt_tex_size)
     lc = vlm_collections.find_layer_collection(context.view_layer.layer_collection, result_col)
     if lc: lc.exclude = False
 
     # reset UV of target objects (2 layers: 1 for default view projected, 1 for nested UV)
     to_nest = [o for o in result_col.all_objects]
     for obj in to_nest:
-        uvs = [uv for uv in obj.data.uv_layers]
+        uvs = [uv for uv in dup.data.uv_layers]
         while uvs:
-            obj.data.uv_layers.remove(uvs.pop())
-        obj.data.uv_layers.new(name='UVMap Nested')
-        bpy.ops.object.select_all(action='DESELECT')
-        obj.select_set(True)
-        context.view_layer.objects.active = obj
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.uv.select_all(action='SELECT')
-        override = context.copy()
-        override["object"] = override["active_object"] = obj
-        override["selected_objects"] = override["selected_editable_objects"] = [obj]
-        override["area"] = ctx_area
-        override["space_data"] = ctx_area.spaces.active
-        override["region"] = ctx_area.regions[-1]
-        bpy.ops.uv.project_from_view(override)
-        bpy.ops.object.mode_set(mode='OBJECT')
+            dup.data.uv_layers.remove(uvs.pop())
+        uv_layer = dup.data.uv_layers.new(name='UVMap Nested')
+        vlm_utils.project_uv(camera, dup.data, proj_x, proj_y)
         obj.data.uv_layers.new(name='UVMap')
 
     # Perform the actual island nesting and nestmap generation

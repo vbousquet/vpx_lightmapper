@@ -27,6 +27,7 @@ from math import radians
 from bpy_extras.io_utils import axis_conversion
 from . import biff_io
 from . import vlm_utils
+from . import vlm_camera
 from . import vlm_collections
 
 # Dependencies which need a custom install (not included in the Blender install)
@@ -352,6 +353,7 @@ def read_vpx(op, context, filepath):
     
     vlm_utils.load_library()
     
+    created_objects = []
     with olefile.OleFileIO(filepath) as ole:
         version = biff_io.BIFF_reader(ole.openstream('GameStg/Version').read()).get_32()
         if version <= 30:
@@ -362,6 +364,9 @@ def read_vpx(op, context, filepath):
         game_data = biff_io.BIFF_reader(ole.openstream('GameStg/GameData').read())
         n_materials = 0
         env_image = ""
+        env_light_height = 0
+        env_light_color = (0,0,0,1)
+        ambiant_color = (0,0,0,1)
         n_items = 0
         n_sounds = 0
         n_images = 0
@@ -408,6 +413,17 @@ def read_vpx(op, context, filepath):
                     materials[name.casefold()] = mat
             elif game_data.tag == 'EIMG':
                 env_image = game_data.get_string()
+            elif game_data.tag == 'LZHI':
+                env_light_height = game_data.get_float() * global_scale
+            elif game_data.tag == 'LZDI': # Environment color as Int
+                env_light_color = game_data.get_color()
+            elif game_data.tag == 'LZAM': # Ambiant color as Int
+                ambiant_color = game_data.get_color()
+            elif game_data.tag == 'GLES': # Emission scale for ambiant and environment lights
+                global_emission_scale = game_data.get_float()
+            # bw.WriteFloat(FID(LZRA), m_lightRange);
+            # bw.WriteFloat(FID(LIES), m_lightEmissionScale);
+            # bw.WriteFloat(FID(ENES), m_envEmissionScale); # only used for HDRI env texture
             elif game_data.tag == 'LEFT':
                 playfield_left = game_data.get_float() * global_scale
             elif game_data.tag == 'TOPX':
@@ -530,7 +546,6 @@ def read_vpx(op, context, filepath):
         else:
             mat = bpy.data.worlds.new("VPX.Env.IBL")
             mat.use_nodes = True
-            mat.use_fake_user = True
             nodes = mat.node_tree.nodes
             nodes.clear()
             if env_image in bpy.data.images:
@@ -547,6 +562,18 @@ def read_vpx(op, context, filepath):
             env_col = vlm_collections.get_collection(vlm_collections.get_collection(context.scene.collection, LIGHTS_COL), 'World')
             env_col.vlmSettings.light_mode = 'solid'
             env_col.vlmSettings.world = mat
+            if env_light_color != (0,0,0,1):
+                for i in range(1, 3):
+                    light = bpy.data.lights.new(name=f'VPX.Env.L{i}', type='POINT')
+                    light.color = (env_light_color[0], env_light_color[1], env_light_color[2])
+                    light.energy = 50000 * global_scale
+                    light.shadow_soft_size = 10 * opt_light_size * global_scale
+                    obj = bpy.data.objects.new(f'VPX.Env.L{i}', light)
+                    obj.location = (0.5 * playfield_right, -playfield_bottom * i / 3.0, env_light_height)
+                    obj.vlmSettings.vpx_object = 'VPX.Env'
+                    obj.vlmSettings.vpx_subpart = f'Scene Light {i}'
+                    env_col.objects.link(obj)
+                    created_objects.append(obj.name)
         if 'VPX.Mat.Tex.IBL' in mat.node_tree.nodes:
             node_tex = mat.node_tree.nodes['VPX.Mat.Tex.IBL']
             if env_image in bpy.data.images:
@@ -562,9 +589,9 @@ def read_vpx(op, context, filepath):
             lattice.vlmSettings.vpx_subpart = 'Layback'
             vlm_collections.get_collection(context.scene.collection, HIDDEN_COL).objects.link(lattice)
         layback_factor = -math.tan(math.radians(camera_layback) / 2) # to shift undeformed objects like lights
+        created_objects.append(lattice.name)
         
         # Read the game items
-        created_objects = [lattice.name]
         surface_offsets = {}
         shifted_objects = []
         insert_cups = []
@@ -1526,6 +1553,12 @@ def read_vpx(op, context, filepath):
                     uv_layer = mesh.uv_layers.new()
                     for i in range(len(mesh.loops)):
                         uv_layer.data[i].uv = uvs[mesh.loops[i].vertex_index]
+                    bm = bmesh.new()
+                    bm.from_mesh(mesh)
+                    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.01 * global_scale)
+                    bmesh.ops.dissolve_limit(bm, angle_limit=radians(0.1), use_dissolve_boundaries=False, verts=bm.verts, edges=bm.edges, delimit={'NORMAL'})
+                    bm.to_mesh(mesh)
+                    bm.free()
                 else:
                     bm = bmesh.new()
                     bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=False, segments=n_sides, radius1=0.5, radius2=0.5, depth=1, matrix=mathutils.Matrix(), calc_uvs=True)
@@ -1907,6 +1940,10 @@ def read_vpx(op, context, filepath):
     if bakes is None and lights is None:
         bakes = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake')
         lights = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights')
+        playfield_col = vlm_collections.get_collection(bakes, 'Playfield')
+        vlm_collections.unlink(playfield_obj)
+        playfield_col.objects.link(playfield_obj)
+        context.scene.vlmSettings.playfield_col = playfield_col
         light_col = vlm_collections.get_collection(context.scene.collection, LIGHTS_COL, create=False)
         if light_col:
             context.scene.collection.children.unlink(light_col)
@@ -1922,14 +1959,14 @@ def read_vpx(op, context, filepath):
             bakes.children.link(statics)
             statics.vlmSettings.bake_mode = 'group'
             statics.vlmSettings.is_opaque = True
-            statics.name = "Layer 1"
+            statics.name = "Parts"
         actives = vlm_collections.get_collection(context.scene.collection, ACTIVE_COL, create=False)
         if actives:
             context.scene.collection.children.unlink(actives)
             bakes.children.link(actives)
             actives.vlmSettings.bake_mode = 'group'
             actives.vlmSettings.is_opaque = False
-            actives.name = "Layer 2"
+            actives.name = "Overlay"
         movables = vlm_collections.get_collection(context.scene.collection, MOVABLE_COL, create=False)
         if movables:
             context.scene.collection.children.unlink(movables)
@@ -1974,5 +2011,6 @@ def read_vpx(op, context, filepath):
         context.scene.vlmSettings.table_file = filepath
     
     context.scene.vlmSettings.playfield_size = (playfield_left, playfield_top, playfield_width, playfield_height)
+    vlm_camera.camera_inclination_update(None, context)
     print(f"\nImport finished.")
     return {"FINISHED"}

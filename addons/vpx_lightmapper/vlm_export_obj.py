@@ -19,17 +19,19 @@ from . import vlm_nest
 
 
 def export_obj(op, context):
-    ctx_area = next((a for a in context.screen.areas if a.type == 'VIEW_3D'), None)
-    if not ctx_area:
-        op.report({'ERROR'}, 'This operator must be used with a 3D view active')
+    camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    if not camera:
+        op.report({'ERROR'}, 'Bake camera is missing')
         return {'CANCELLED'}
-    ctx_area.regions[-1].data.view_perspective = 'CAMERA'
-    
+
     bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
     vlm_utils.mkpath(bakepath)
     selected_objects = list(context.selected_objects)
 
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
+    opt_ar = context.scene.vlmSettings.render_aspect_ratio
+    proj_x = opt_tex_size * context.scene.render.pixel_aspect_x * opt_ar
+    proj_y = opt_tex_size * context.scene.render.pixel_aspect_y
     render_size = (int(opt_tex_size * context.scene.vlmSettings.render_aspect_ratio), opt_tex_size)
 
     # Duplicate and reset UV of target objects
@@ -45,17 +47,7 @@ def export_obj(op, context):
         while uvs:
             dup.data.uv_layers.remove(uvs.pop())
         uv_layer = dup.data.uv_layers.new(name='UVMap')
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.uv.select_all(action='SELECT')
-        override = context.copy()
-        override["object"] = override["active_object"] = dup
-        override["selected_objects"] = override["selected_editable_objects"] = [dup]
-        override["area"] = ctx_area
-        override["space_data"] = ctx_area.spaces.active
-        override["region"] = ctx_area.regions[-1]
-        bpy.ops.uv.project_from_view(override)
-        bpy.ops.object.mode_set(mode='OBJECT')
+        vlm_utils.project_uv(camera, dup.data, proj_x, proj_y)
         to_nest.append(dup)
 
     # Perform the actual island nesting and packmap generation
