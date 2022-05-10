@@ -197,7 +197,7 @@ class VLM_Scene_props(PropertyGroup):
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
     keep_pf_reflection_faces: BoolProperty(name="Keep playfield reflection", description="Keep faces only visible through playfield reflection", default = False)
     # Exporter options
-    enable_vpx_reflection: BoolProperty(name="Enable VPX reflection", description="Enable VPX playfield reflection for exported models and lightmaps", default = True)
+    enable_vpx_reflection: BoolProperty(name="Enable VPX reflection", description="Enable VPX playfield reflection for exported models and lightmaps. Note that this will usually leads to 'double' reflections since indirect light is already baked.", default = False)
     export_mode: EnumProperty(
         items=[
             ('default', 'Default', 'Add bakes and lightmap to the table', '', 0),
