@@ -321,133 +321,172 @@ def render_all_groups(op, context):
     
     # In Blender 3.2, we can render multiple lights at once and save there data separately using light groups for way faster rendering. This needs to use the compositor to performs denoising and save to split file outputs.
     batched_scenarios = []
-    if False and bpy.app.version >= (3, 2, 0):
+    if bpy.app.version >= (3, 2, 0):
         print('. Performing batch light rendering (Blender 3.2+)')
-        prev_world = scene.world
-        render_world = None
-        n_scenarios = 0
-        scene.use_nodes = True
-        scene.view_layers[0].cycles.denoising_store_passes = True
-        scene.render.use_file_extension = False
+        has_batch_to_process = True
+        max_scenarios_in_batch = 8
+        
+        while has_batch_to_process:
+            has_batch_to_process = False
 
-        nodes = scene.node_tree.nodes
-        links = scene.node_tree.links
-        nodes.clear()
-        links.clear()
-        rl = nodes.new("CompositorNodeRLayers")
-        rl.scene = scene
-        rl.location.x = -200
-        dec = len(light_scenarios) / 2.0
-        for i, scenario in enumerate(light_scenarios, start=1):
-            name, is_lightmap, light_col, lights, _ = scenario
-            if next((l for l in lights if l.type != 'LIGHT'), None):
-                print(f". {name} lighting scenario use emitter/occluder meshes. It can't be batched rendered.")
-                continue
-            if light_col.vlmSettings.world != None:
-                if render_world is None:
-                    render_world = light_col.vlmSettings.world
-                    render_world.lightgroup = name
-                else:
-                    print(f". {name} lighting scenario has a custom world. It can't be batched rendered.")
-                    continue
-            scene.view_layers[0].lightgroups.add(name=name)
-            initial_state = (0, None)
-            if vlm_utils.is_rgb_led(lights):
-                colored_lights = [o for o in lights if o.type=='LIGHT']
-                prev_colors = [o.data.color for o in colored_lights]
-                for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
-                initial_state = (1, zip(colored_lights, prev_colors))
-            for light in lights:
-                light.lightgroup = name
-                render_col.objects.link(light)
-            denoise = nodes.new("CompositorNodeDenoise")
-            denoise.location.x = 200
-            denoise.location.y = -(i-dec) * 200
-            links.new(rl.outputs[3     -1], denoise.inputs[1])
-            links.new(rl.outputs[4     -1], denoise.inputs[2])
-            links.new(rl.outputs[6+i-1 -1], denoise.inputs[0])
-            out = nodes.new("CompositorNodeOutputFile")
-            out.location.x = 600
-            out.location.y = -(i-dec) * 200
-            if is_lightmap:
-                links.new(denoise.outputs[0], out.inputs[0])
-            else:
-                alpha = nodes.new("CompositorNodeSetAlpha")
-                alpha.location.x = 400
-                alpha.location.y = -(i-dec) * 200
-                links.new(denoise.outputs[0], alpha.inputs[0])
-                links.new(rl.outputs[1], alpha.inputs[1])
-                links.new(alpha.outputs[0], out.inputs[0])
-            batched_scenarios.append((scenario, denoise, out, initial_state))
+            prev_world = scene.world
+            render_world = None
+            n_scenarios = 0
+            scene.use_nodes = True
+            scene.view_layers[0].cycles.denoising_store_passes = True
+            scene.render.use_file_extension = False
 
-        scene.world = render_world
-
-        for group_index, group_mask in enumerate(group_masks):
-            need_render = False
-            for scenario, denoise, out, _ in batched_scenarios:
+            nodes = scene.node_tree.nodes
+            links = scene.node_tree.links
+            nodes.clear()
+            links.clear()
+            rl = nodes.new("CompositorNodeRLayers")
+            rl.scene = scene
+            rl.location.x = -200
+            dec = max_scenarios_in_batch / 2.0
+            batch = []
+            for i, scenario in enumerate(light_scenarios, start=1):
                 name, is_lightmap, light_col, lights, _ = scenario
-                render_path = f'{bakepath}{name} - Group {group_index}.exr'
-                if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
-                    need_render = True
-                    break
-            if not need_render:
-                n_existing += len(batched_scenarios)
-            else:
-                objects = [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == group_index]
-                n_objects = len(objects)
-                for obj in objects:
-                    if not obj.vlmSettings.hide_from_others:
-                        indirect_col.objects.unlink(obj)
-                    if obj.vlmSettings.bake_mask:
-                        render_col.objects.link(obj.vlmSettings.bake_mask)
-                    render_col.objects.link(obj)
-                
-                for scenario, denoise, out, _ in batched_scenarios:
+                if next((done for done in batched_scenarios if name == done[0][0]), None):
+                    continue # This scenario was already processed in previous batch
+                if next((l for l in lights if l.type != 'LIGHT'), None):
+                    #print(f". {name} lighting scenario use emitter/occluder meshes. It can't be batched rendered.")
+                    continue
+                if light_col.vlmSettings.world != None:
+                    if render_world is None: # One non lightmap bake maximum per batch
+                        render_world = light_col.vlmSettings.world
+                        render_world.lightgroup = name
+                    else:
+                        continue
+                if len(batch) >= max_scenarios_in_batch: # Maximum number of simultaneous scenario render (Blender 3.2 alpha may crashes if there are too much)
+                    has_batch_to_process = True
+                    continue
+                scene.view_layers[0].lightgroups.add(name=name)
+                initial_state = (0, None)
+                if vlm_utils.is_rgb_led(lights):
+                    colored_lights = [o for o in lights if o.type=='LIGHT']
+                    prev_colors = [o.data.color for o in colored_lights]
+                    for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
+                    initial_state = (1, zip(colored_lights, prev_colors))
+                for light in lights:
+                    light.lightgroup = name
+                    render_col.objects.link(light)
+                denoise = nodes.new("CompositorNodeDenoise")
+                denoise.location.x = 200
+                denoise.location.y = -(i-dec) * 200
+                links.new(rl.outputs['Denoising Normal'], denoise.inputs['Normal'])
+                links.new(rl.outputs['Denoising Albedo'], denoise.inputs['Albedo'])
+                out = nodes.new("CompositorNodeOutputFile")
+                out.location.x = 600
+                out.location.y = -(i-dec) * 200
+                if is_lightmap:
+                    links.new(denoise.outputs['Image'], out.inputs['Image'])
+                else:
+                    alpha = nodes.new("CompositorNodeSetAlpha")
+                    alpha.location.x = 400
+                    alpha.location.y = -(i-dec) * 200
+                    links.new(denoise.outputs['Image'], alpha.inputs['Image'])
+                    links.new(rl.outputs['Alpha'], alpha.inputs['Alpha'])
+                    links.new(alpha.outputs['Image'], out.inputs['Image'])
+                batch.append((scenario, denoise, out, initial_state))
+
+            scene.world = render_world
+
+            for scenario, denoise, out, initial_state in batch:
+                name, is_lightmap, light_col, lights, _ = scenario
+                links.new(rl.outputs[f'Combined_{name}'], denoise.inputs[0])
+
+            for group_index, group_mask in enumerate(group_masks):
+                influence = None
+                need_render = False
+                for scenario, denoise, out, initial_state in batch:
                     name, is_lightmap, light_col, lights, _ = scenario
-                    out.base_path = f'{bakepath}'
-                    out.file_slots[0].path = f'{name} - Group {group_index}.exr'
-                    out.file_slots[0].use_node_format = True
-                    out.format.file_format = 'OPEN_EXR'
-                    out.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
-                    out.format.exr_codec = 'ZIP'
-                    out.format.color_depth = '16'
-                
-                elapsed = time.time() - start_time
-                msg = f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for {len(batched_scenarios)} lighting scenarios. Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
-                if elapsed > 0 and n_render_performed > 0:
-                    elapsed_per_render = elapsed / n_render_performed
-                    remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
-                    msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
-                print(msg)
-                
-                bpy.ops.render.render(write_still=False, scene=scene.name)
-                n_render_performed += len(batched_scenarios)
+                    render_path = f'{bakepath}{name} - Group {group_index}.exr'
+                    if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
+                        need_render = True
+                    if not is_lightmap or light_col.vlmSettings.world:
+                        influence = (0, 1, 0, 1)
+                    else:
+                        for light in lights:
+                            light_influence = get_light_influence(scene, context.view_layer.depsgraph, camera_object, light, group_mask)
+                            if light_influence:
+                                if influence:
+                                    min_x, max_x, min_y, max_y = influence
+                                    min_x2, max_x2, min_y2, max_y2 = light_influence
+                                    influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
+                                else:
+                                    influence = light_influence
+                if influence and influence != (0, 1, 0, 1):
+                    min_x, max_x, min_y, max_y = influence
+                    scene.render.use_border = True
+                    scene.render.border_min_x = min_x
+                    scene.render.border_max_x = max_x
+                    scene.render.border_min_y = 1 - max_y
+                    scene.render.border_max_y = 1 - min_y
+                else:
+                    scene.render.use_border = False
+                if not need_render or not influence:
+                    n_existing += len(batch)
+                else:
+                    objects = [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == group_index]
+                    n_objects = len(objects)
+                    for obj in objects:
+                        if not obj.vlmSettings.hide_from_others:
+                            indirect_col.objects.unlink(obj)
+                        if obj.vlmSettings.bake_mask:
+                            render_col.objects.link(obj.vlmSettings.bake_mask)
+                        render_col.objects.link(obj)
+                    
+                    for scenario, denoise, out, _ in batch:
+                        name, is_lightmap, light_col, lights, _ = scenario
+                        out.base_path = f'{bakepath}'
+                        out.file_slots[0].path = f'{name} - Group {group_index}.exr'
+                        out.file_slots[0].use_node_format = True
+                        out.format.file_format = 'OPEN_EXR'
+                        out.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
+                        out.format.exr_codec = 'ZIP'
+                        out.format.color_depth = '16'
+                    
+                    elapsed = time.time() - start_time
+                    msg = f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for {len(batch)} lighting scenarios (influence: {influence}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+                    if elapsed > 0 and n_render_performed > 0:
+                        elapsed_per_render = elapsed / n_render_performed
+                        remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
+                        msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
+                    print(msg)
+                    #return {'FINISHED'}                    
+                    
+                    bpy.ops.render.render(write_still=False, scene=scene.name)
+                    n_render_performed += len(batch)
 
-                # Rename files since blender will append a render index number to the filename
-                for file in os.listdir(bpy.path.abspath(f'{bakepath}')):
-                    match = re.fullmatch(r"(.*exr)\d\d\d\d", file)
-                    if match:
-                        outRenderFileName = bpy.path.abspath(f'{bakepath}{match[1]}')
-                        if os.path.exists(outRenderFileName):
-                            os.remove(outRenderFileName)
-                        os.rename(bpy.path.abspath(f'{bakepath}{file}'), outRenderFileName)
+                    # Rename files since blender will append a render index number to the filename
+                    for file in os.listdir(bpy.path.abspath(f'{bakepath}')):
+                        match = re.fullmatch(r"(.*exr)\d\d\d\d", file)
+                        if match:
+                            outRenderFileName = bpy.path.abspath(f'{bakepath}{match[1]}')
+                            if os.path.exists(outRenderFileName):
+                                os.remove(outRenderFileName)
+                            os.rename(bpy.path.abspath(f'{bakepath}{file}'), outRenderFileName)
 
-                for obj in objects:
-                    if not obj.vlmSettings.hide_from_others:
-                        indirect_col.objects.link(obj)
-                    if obj.vlmSettings.bake_mask:
-                        render_col.objects.unlink(obj.vlmSettings.bake_mask)
-                    render_col.objects.unlink(obj)
+                    for obj in objects:
+                        if not obj.vlmSettings.hide_from_others:
+                            indirect_col.objects.link(obj)
+                        if obj.vlmSettings.bake_mask:
+                            render_col.objects.unlink(obj.vlmSettings.bake_mask)
+                        render_col.objects.unlink(obj)
 
-        for scenario, denoise, out, initial_state in batched_scenarios:
-            if initial_state[0] == 1:
-                for o, c in initial_state[1]: o.data.color = c
-            bpy.ops.scene.view_layer_remove_lightgroup({'scene':scene})
-        nodes.clear()
-        links.clear()
-        scene.use_nodes = False
-        scene.world = prev_world
-        scene.view_layers[0].cycles.denoising_store_passes = False
+            for scenario, denoise, out, initial_state in batch:
+                if initial_state[0] == 1:
+                    for o, c in initial_state[1]: o.data.color = c
+                bpy.ops.scene.view_layer_remove_lightgroup({'scene':scene})
+            nodes.clear()
+            links.clear()
+            scene.use_nodes = False
+            scene.world = prev_world
+            scene.view_layers[0].cycles.denoising_store_passes = False
+            scene.render.use_border = False
+            
+            batched_scenarios.extend(batch)
     
     print(f'\nEvaluating {n_total_render-n_existing-n_render_performed} out of {n_total_render} renders ({n_render_groups} render groups for {n_lighting_situations} lighting situations)')
     for group_index, group_mask in enumerate(group_masks):
