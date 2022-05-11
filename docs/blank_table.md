@@ -69,10 +69,13 @@ Sub Table1_Init
 	gi4.Visible = False
 End Sub
 ```
-
 This code disable the rendering of the VPX lights while keeping their reflection on balls.
 
+To be playable, the table will also be missing a physics playfield. To add one, create a ramp with top and bottom height at 0 and covering the complete playfield.
 
 ## 6. Next steps
 
 This example was kept very simple. At this step, you should have a global understanding of the process, and located were important UI parts are located. The other articles show how to animate the lighting, handle more complex situations like playfield inserts, plastic ramps and such.
+
+
+The files for this tutorial are available [here](Blank%20Table).
