@@ -94,9 +94,9 @@ def create_bake_meshes(op, context):
 
     # Append core material (used to preview)
     if "VPX.Core.Mat.PackMap" not in bpy.data.materials:
-        librarypath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VPXMeshes.blend")
+        librarypath = vlm_utils.get_library_path()
         if not os.path.isfile(librarypath):
-            self.report({'WARNING'},f"{librarypath} does not exist")
+            op.report({'WARNING'},f"{librarypath} does not exist")
             return {'CANCELLED'}
         with bpy.data.libraries.load(librarypath, link=False) as (data_from, data_to):
             data_to.objects = data_from.objects

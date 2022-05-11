@@ -16,6 +16,7 @@
 import bpy
 import array
 import os
+import re
 import pathlib
 import gpu
 import math
@@ -72,6 +73,52 @@ def project_uv(camera, mesh, winx=1.0, winy=1.0):
             uv_layer.data[loop_idx].uv = (u, v)
     
     
+def fixSlash(filepath: str) -> str:
+    """convert \\\+ to /"""
+    filepath = re.sub(r"\\+", "/", filepath)
+    filepath = re.sub(r"\/+", "/", filepath)
+    return filepath
+    
+
+def get_assetlib_path():
+    return fixSlash(os.path.dirname(__file__)) + "/assets/"
+ 
+ 
+def get_library_path():
+    #os.path.join(os.path.dirname(os.path.abspath(__file__)), "/assets/VPXMeshes.blend")
+    return fixSlash(os.path.dirname(__file__)) + "/assets/VPXMeshes.blend"
+ 
+ 
+def install_assetlib():
+    shouldCreate = True
+    for lib in bpy.context.preferences.filepaths.asset_libraries:
+        if lib.path == get_assetlib_path():
+            shouldCreate = False
+    if shouldCreate:
+        bpy.ops.preferences.asset_library_add(directory=get_assetlib_path())
+        for lib in bpy.context.preferences.filepaths.asset_libraries:
+            if lib.path == get_assetlib_path():
+                lib.name = 'VLM Pinball Parts'
+
+
+def uninstall_assetlib():
+    libs = [(lib.name, lib.path) for lib in bpy.context.preferences.filepaths.asset_libraries if lib.path != get_assetlib_path()]
+    for _ in range(len(bpy.context.preferences.filepaths.asset_libraries)):
+        bpy.ops.preferences.asset_library_remove(0)
+    for _, path in libs:
+        bpy.ops.preferences.asset_library_add(directory=path)
+    for lib in bpy.context.preferences.filepaths.asset_libraries:
+        for name, path in libs:
+            if lib.path == path:
+                lib.name = name
+                break
+    if False: # Sadly this is not working as intended as Blender 3.2
+        for index, lib in enumerate(bpy.context.preferences.filepaths.asset_libraries):
+            if lib.path == get_assetlib_path():
+                bpy.ops.preferences.asset_library_remove(index)
+                break
+
+
 def get_vpx_item(context, vpx_name, vpx_subpart, single=False):
     '''
     Search the complete scene for objects linked to the given vpx object/subpart
@@ -88,27 +135,14 @@ def load_library():
     """Append core meshes (without linking them in order to dispose the unused ones after import)
     and core shader node groups (with fake user to avoid loosing them)
     """
-    librarypath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VPXMeshes.blend")
+    librarypath = get_library_path()
     if not os.path.isfile(librarypath):
         print(f'{librarypath} does not exist')
-    # Core materials, Compositing, Fixed view shading & miscellaneous nodes
-    nodegroups = ('VLM.BakeInfo', 'VPX.Material', 'VPX.Flasher', 'VPX.Light', 'VLM.Fixed View Glass', 'VLM.Fixed View Specular', 'VLM.Fixed View Incoming')
     with bpy.data.libraries.load(librarypath, link=False) as (data_from, data_to):
         data_to.objects = [name for name in data_from.objects if name.startswith("VPX.Core.")]
         data_to.images = [name for name in data_from.images if name.startswith("VPX.Core.")]
         data_to.materials = [name for name in data_from.materials if name.startswith("VPX.Core.Mat.")]
-        data_to.node_groups = [name for name in nodegroups if not name in bpy.data.node_groups] # only import missing node groups since we add a fake user
-    for nodegroup in nodegroups:
-        bpy.data.node_groups[nodegroup].use_fake_user = True
-
-    bpy.data.node_groups.get('VLM.BakeInfo').use_fake_user = True
-    bpy.data.node_groups.get('VPX.Material').use_fake_user = True
-    bpy.data.node_groups.get('VPX.Flasher').use_fake_user = True
-    bpy.data.node_groups.get('VPX.Light').use_fake_user = True
-    # Fixed view shading
-    bpy.data.node_groups.get('VLM.Fixed View Glass').use_fake_user = True
-    bpy.data.node_groups.get('VLM.Fixed View Specular').use_fake_user = True
-    bpy.data.node_groups.get('VLM.Fixed View Incoming').use_fake_user = True
+        data_to.node_groups = ('VLM.BakeInfo', 'VPX.Material', 'VPX.Flasher', 'VPX.Light')
 
 
 def clean_filename(filename):
