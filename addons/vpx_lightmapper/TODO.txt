@@ -4,22 +4,20 @@ TODO
 - JP's Star Trek has a wrong texture positionning (panel above ramp)
 - Support 'active' (i.e. non opaque bake) objects for the occluder selection
 - Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled
-- When loading library, update existing node groups instead of skipping them
-- Include an asset folder, register it as an asset library when the plugin is activated, move the core assets to this asset library instead of loading them directly, populate with additional assets (screws, bulbs, posts, inserts, materials,...)
-
 
 - Mark edges of lightmap pruned face, then shade them to black when rendering nestmaps to avoid lightmaps seams at runtime
 
 
 - Rewrite the documentation with a step by step guide (and corresponding vpx/blend files):
-. Step 1: quick walk through on the blank table
-. Step 2: adding a light
-. Step 3: syncing with LampZ
-. Step 4: adding a flasher
-. Step 5: adding an insert ('bake to' feature)
-. Step 6: transparent parts ('bake mask' feature)
-. Step 7: better playfield with 3D wood texturing
-. Step 8: 3D inserts
+. Step 1: quick walk through
+. Step 2: baking the blank table
+. Step 3: adding a light
+. Step 4: syncing with LampZ
+. Step 5: adding a flasher
+. Step 6: adding an insert & 'bake to' feature
+. Step 7: transparent parts & 'bake mask' feature
+. Step 8: better playfield with 3D wood
+. Step 9: 3D inserts
 
 Update documentation for transparent parts: Overlapping of translucent parts is a nightmare by design:  each overlap must result in a model split for correct rendering. Overlaps are POV dependent.
 - perform fixed view baking/lightmap baking of translucent parts ? with this approach, lightmap can't be rendered with depth test => how to render them ? disable depth write of translucent parts (VPX modification) ? Result can't be right (blending is not additive and is order of rendering dependent).
@@ -45,6 +43,10 @@ VPX Optimizations
 
 
 Closed items:
+- Avoid using fake user for the core node groups
+- When loading library, update existing node groups instead of skipping them => no, this could break the blend file
+- Move the core assets to the asset library instead of loading them directly => no
+- Include an asset folder, register it as an asset library when the plugin is activated, populate with additional assets (screws, bulbs, posts, inserts, materials,...)
 - Import VPX scene lights (like for the blank table)
 - Perform lightmap pruning by render group for better handling of object overlays
 - When importing plastics wall, create 2 meshes: one for the plastic with a plastic shader (enlarged for the bevelling to be visible), one for the image (bpy.ops.mesh.solidify(thickness=-0.01), invert selection and delete, then scale back on z axis) => no
