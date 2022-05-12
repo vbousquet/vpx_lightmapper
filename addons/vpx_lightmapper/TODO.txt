@@ -5,12 +5,12 @@ TODO
 - Support 'active' (i.e. non opaque bake) objects for the occluder selection
 - Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled
 
-- Mark edges of lightmap pruned face, then shade them to black when rendering nestmaps to avoid lightmaps seams at runtime
+- Shade edges of lightmap pruned face to black when rendering nestmaps to limit lightmaps seams at runtime
 
 
 - Rewrite the documentation with a step by step guide (and corresponding vpx/blend files):
 . Step 1: quick walk through
-. Step 2: baking the blank table
+x Step 2: baking the blank table
 . Step 3: adding a light
 . Step 4: syncing with LampZ
 . Step 5: adding a flasher
@@ -19,19 +19,6 @@ TODO
 . Step 8: better playfield with 3D wood
 . Step 9: 3D inserts
 
-Update documentation for transparent parts: Overlapping of translucent parts is a nightmare by design:  each overlap must result in a model split for correct rendering. Overlaps are POV dependent.
-- perform fixed view baking/lightmap baking of translucent parts ? with this approach, lightmap can't be rendered with depth test => how to render them ? disable depth write of translucent parts (VPX modification) ? Result can't be right (blending is not additive and is order of rendering dependent).
-. just drop lightmaps in favor of basic VPX's light transmission (i.e. don't improve ramps) ? It will be difficult to make them look right
-- perform automatic model splitting from render POV ? rendering will be wrong as soon as the POV will change
-
-VPX render path (for reference)
-0. Render (apart) mirror from static prerendered and dynamic parts
-0. Render (apart) light buffer from lights flagged as transmitting (bulb checked, with transmit > 0)
-1. Copy static playfield without depth, and static parts with depth
-2. Copy mirror without depth (depth tested to static parts, since they are the only one in the depth buffer)
-3. Render playfield depth
-4. Render dynamic opaque parts (objects, balls, DMDs)
-5. Render dynamic translucent parts (objects and DMDs)
 
 VPX Optimizations 
 - Unshaded path can be more efficient (single tex fetch) => Tested, 1.5ms speedup on a 22ms render time on a GTX650. Is it really worth the effort ?
@@ -43,6 +30,7 @@ VPX Optimizations
 
 
 Closed items:
+- Extend lightmp pruned faces and mark edges of the pruned face for smoother fading
 - Avoid using fake user for the core node groups
 - When loading library, update existing node groups instead of skipping them => no, this could break the blend file
 - Move the core assets to the asset library instead of loading them directly => no

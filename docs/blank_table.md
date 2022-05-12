@@ -2,6 +2,15 @@
 
 This guide will take you through the steps to create a baked version of the base VPX's blank table. All the steps can be performed in less than 15 minutes and give the bases to understand the full process before going further.
 
+* [1. Prepare the VPX table](#1-prepare-the-vpx-table)
+* [2. Import the table in Blender](#2-import-the-table-in-blender)
+* [3. Cleanup the import and prepare for bake](#3-cleanup-the-import-and-prepare-for-bake)
+* [4. Batch process](#4-batch-process)
+* [5. Update the table script](#5-update-the-table-script)
+* [6. Next steps](#6-next-steps)
+
+The files for this tutorial are available [here](Blank%20Table).
+
 
 ## 1. Prepare the VPX table
 
@@ -57,7 +66,7 @@ Once the batch has completed (may be long), you will have a new collection 'VLM.
 ![Lightmap preview](BT-06%20Lightmap%20preview.png)
 
 
-## 5. Updating the table script
+## 5. Update the table script
 
 To finish with first bake process, get back to VPX and open the exported table. Open the table's script view and add the following block to the table script before running your first VPX baked table.
 
@@ -77,5 +86,3 @@ To be playable, the table will also be missing a physics playfield. To add one, 
 
 This example was kept very simple. At this step, you should have a global understanding of the process, and located were important UI parts are located. The other articles show how to animate the lighting, handle more complex situations like playfield inserts, plastic ramps and such.
 
-
-The files for this tutorial are available [here](Blank%20Table).

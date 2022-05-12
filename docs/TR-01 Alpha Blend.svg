@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   width="355.14716"
+   height="194.88576"
+   viewBox="0 0 93.966013 51.563525"
+   version="1.1"
+   id="svg8"
+   inkscape:version="1.0 (4035a4fb49, 2020-05-01)"
+   sodipodi:docname="TR-01 Alpha Blend.svg">
+  <defs
+     id="defs2" />
+  <sodipodi:namedview
+     id="base"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageopacity="0.0"
+     inkscape:pageshadow="2"
+     inkscape:zoom="1.979899"
+     inkscape:cx="258.54876"
+     inkscape:cy="59.046693"
+     inkscape:document-units="px"
+     inkscape:current-layer="layer1"
+     inkscape:document-rotation="0"
+     showgrid="false"
+     units="px"
+     inkscape:snap-page="true"
+     fit-margin-top="0"
+     fit-margin-left="0"
+     fit-margin-right="0"
+     fit-margin-bottom="0" />
+  <metadata
+     id="metadata5">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title />
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <g
+     inkscape:label="Calque 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <rect
+       style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583;stroke-miterlimit:4;stroke-dasharray:0.79375, 0.79375;stroke-dashoffset:0;stop-color:#000000"
+       id="rect2824"
+       width="93.966019"
+       height="51.563522"
+       x="0"
+       y="0" />
+    <rect
+       style="fill:#02ff00;fill-opacity:0.5;stroke:#000000;stroke-width:0.264583;stroke-miterlimit:4;stroke-dasharray:0.79375, 0.79375;stroke-dashoffset:0;stroke-opacity:1;stop-color:#000000"
+       id="rect2836"
+       width="22.717911"
+       height="22.717911"
+       x="61.614353"
+       y="21.41917" />
+    <text
+       xml:space="preserve"
+       style="font-size:3.88056px;line-height:1.25;font-family:Calibri;-inkscape-font-specification:Calibri;letter-spacing:0px;word-spacing:0px;stroke-width:0.264583"
+       x="23.460239"
+       y="48.814293"
+       id="text2781"><tspan
+         sodipodi:role="line"
+         x="23.460239"
+         y="48.814293"
+         style="text-align:center;text-anchor:middle;stroke-width:0.264583"
+         id="tspan2783">Red then Green</tspan></text>
+    <rect
+       style="fill:#ff0000;fill-opacity:0.5;stroke:#000000;stroke-width:0.264583;stroke-miterlimit:4;stroke-dasharray:0.79375, 0.79375;stroke-dashoffset:0;stroke-opacity:1;stop-color:#000000"
+       id="rect2826"
+       width="22.717911"
+       height="22.717911"
+       x="8.8575001"
+       y="10.86202" />
+    <rect
+       y="21.41917"
+       x="19.281013"
+       height="22.717911"
+       width="22.717911"
+       id="rect2828"
+       style="fill:#02ff00;fill-opacity:0.5;stroke:#000000;stroke-width:0.264583;stroke-miterlimit:4;stroke-dasharray:0.79375, 0.79375;stroke-dashoffset:0;stroke-opacity:1;stop-color:#000000" />
+    <rect
+       y="10.86202"
+       x="51.190838"
+       height="22.717911"
+       width="22.717911"
+       id="rect2834"
+       style="fill:#ff0000;fill-opacity:0.5;stroke:#000000;stroke-width:0.264583;stroke-miterlimit:4;stroke-dasharray:0.79375, 0.79375;stroke-dashoffset:0;stroke-opacity:1;stop-color:#000000" />
+    <text
+       id="text2842"
+       y="48.814293"
+       x="65.793579"
+       style="font-size:3.88056px;line-height:1.25;font-family:Calibri;-inkscape-font-specification:Calibri;letter-spacing:0px;word-spacing:0px;stroke-width:0.264583"
+       xml:space="preserve"><tspan
+         id="tspan2840"
+         style="text-align:center;text-anchor:middle;stroke-width:0.264583"
+         y="48.814293"
+         x="65.793579"
+         sodipodi:role="line">Green then Red</tspan></text>
+    <text
+       id="text2846"
+       y="6.4809551"
+       x="45.685242"
+       style="font-size:3.88056px;line-height:1.25;font-family:Calibri;-inkscape-font-specification:Calibri;letter-spacing:0px;word-spacing:0px;stroke-width:0.264583"
+       xml:space="preserve"><tspan
+         id="tspan2844"
+         style="text-align:center;text-anchor:middle;stroke-width:0.264583"
+         y="6.4809551"
+         x="45.685242"
+         sodipodi:role="line">Alpha Blending: Impact of render order</tspan></text>
+  </g>
+</svg>
