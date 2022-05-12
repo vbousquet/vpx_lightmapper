@@ -64,7 +64,7 @@ For a simple plastic ramp, this would lead to 2 layers: one for the back of the 
 
 The toolkit allows to easily define layers by creating additional bake collections (each bake collection is baked to a separate mesh), and allowing to define for each bake collection its own depth bias.
 
-![Bake layer config](TR-04%20Bake%20layers.png)
+![Bake layer config](TR-04%20Bake%20Layers.png)
 
 Blender also needs to be told where each layers must be separated. By default, in the above setup, when rendering the part of the ramp nearest to the player, it will compute the lights coming from behind, and since there are opaque objects behind, it will not consider it as transparent but instead shade it with the color of the refracted light coming from behind.
 
