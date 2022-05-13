@@ -270,6 +270,7 @@ def render_all_groups(op, context):
     bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
+    max_scenarios_in_batch = int(8 * 4096 / opt_tex_size)
     opt_force_render = False # Force rendering even if cache is available
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     n_render_groups = vlm_utils.get_n_render_groups(context)
@@ -324,7 +325,6 @@ def render_all_groups(op, context):
     if bpy.app.version >= (3, 2, 0):
         print('. Performing batch light rendering (Blender 3.2+)')
         has_batch_to_process = True
-        max_scenarios_in_batch = 8
         
         while has_batch_to_process:
             has_batch_to_process = False
@@ -361,7 +361,7 @@ def render_all_groups(op, context):
                 if len(batch) >= max_scenarios_in_batch: # Maximum number of simultaneous scenario render (Blender 3.2 alpha may crashes if there are too much)
                     has_batch_to_process = True
                     continue
-                scene.view_layers[0].lightgroups.add(name=name)
+                scene.view_layers[0].lightgroups.add(name=name.replace(".","_"))
                 initial_state = (0, None)
                 if vlm_utils.is_rgb_led(lights):
                     colored_lights = [o for o in lights if o.type=='LIGHT']
@@ -369,7 +369,7 @@ def render_all_groups(op, context):
                     for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
                     initial_state = (1, zip(colored_lights, prev_colors))
                 for light in lights:
-                    light.lightgroup = name
+                    light.lightgroup = name.replace(".","_")
                     render_col.objects.link(light)
                 denoise = nodes.new("CompositorNodeDenoise")
                 denoise.location.x = 200
@@ -394,7 +394,7 @@ def render_all_groups(op, context):
 
             for scenario, denoise, out, initial_state in batch:
                 name, is_lightmap, light_col, lights, _ = scenario
-                links.new(rl.outputs[f'Combined_{name}'], denoise.inputs[0])
+                links.new(rl.outputs[f'Combined_{name.replace(".","_")}'], denoise.inputs[0])
 
             for group_index, group_mask in enumerate(group_masks):
                 influence = None
