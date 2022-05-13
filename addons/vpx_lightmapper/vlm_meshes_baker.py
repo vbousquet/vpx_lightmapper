@@ -81,7 +81,8 @@ def create_bake_meshes(op, context):
     # Bake mesh generation settings
     opt_backface_limit_angle = context.scene.vlmSettings.remove_backface
     opt_vpx_reflection = context.scene.vlmSettings.keep_pf_reflection_faces
-    opt_lod_threshold = 2.0 * 2.0 # start LOD for biggest face below 2x2 pixels
+    opt_lod_threshold = 16.0 * opt_tex_size / 4096  # start LOD for biggest face below 16x16 pixels for 4K renders (1 pixel for 256px renders)
+    opt_lod_threshold = opt_lod_threshold * opt_lod_threshold
     opt_lightmap_prune_res = min(256, opt_tex_size) # resolution used in the algorithm for unlit face pruning (artefact observed at 256)
     prunemap_width = int(opt_lightmap_prune_res * opt_ar)
     prunemap_height = opt_lightmap_prune_res
@@ -212,7 +213,7 @@ def create_bake_meshes(op, context):
                 print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was decimated using a ratio of {ratio:.2%} from {len(areas)} to {len(dup.data.polygons)} faces')
             else:
                 bpy.ops.object.mode_set(mode = 'OBJECT')
-                print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added')
+                print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added (no LOD since max face size is {max_size} with a threshold of {opt_lod_threshold})')
             objects_to_join.append(dup)
         if len(objects_to_join) == 0: continue
         
@@ -622,11 +623,12 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, 
     # Keep neighbor faces and use them for fading out to limit seams in the resulting lightmaps
     kept_faces = [face for face in bm.faces if face.tag]
     color_layer = bm.loops.layers.color.verify()
-    for face in kept_faces:
-        for loop in face.loops:
-            for neighbor_face in loop.vert.link_faces:
-                if not neighbor_face.tag:
-                    neighbor_face.tag = True
+    if False: # Activate to extend with "fade" faces
+        for face in kept_faces:
+            for loop in face.loops:
+                for neighbor_face in loop.vert.link_faces:
+                    if not neighbor_face.tag:
+                        neighbor_face.tag = True
     delete_faces = [face for face in bm.faces if not face.tag]
     if delete_faces:
         for face in bm.faces:
