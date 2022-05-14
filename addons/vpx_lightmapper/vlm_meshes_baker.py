@@ -88,10 +88,9 @@ def create_bake_meshes(op, context):
     prunemap_height = opt_lightmap_prune_res
 
     # Delete existing results
-    if True:
-        to_delete = [obj for obj in result_col.all_objects]
-        for obj in to_delete:
-            bpy.data.objects.remove(obj, do_unlink=True)
+    to_delete = [obj for obj in result_col.all_objects]
+    for obj in to_delete:
+        bpy.data.objects.remove(obj, do_unlink=True)
 
     # Append core material (used to preview)
     if "VPX.Core.Mat.PackMap" not in bpy.data.materials:
@@ -107,6 +106,7 @@ def create_bake_meshes(op, context):
     # Prepare the list of lighting situation with a packmap material per render group, and a merge group per light situation
     light_merge_groups = {}
     light_scenarios = vlm_utils.get_lightings(context)
+    #light_scenarios = [l for l in light_scenarios if l[0] == 'Inserts-L8'] # Debug: For quickly testing a single light scenario
     for light_scenario in light_scenarios:
         name = light_scenario[0]
         light_merge_groups[name] = []
@@ -138,7 +138,6 @@ def create_bake_meshes(op, context):
         
     # Create all solid bake meshes
     bake_meshes = []
-    bake_results = []
     for bake_name, bake_col, bake_col_object_set, sync_obj, is_translucent in to_bake:
         # Join all objects to build baked objects (converting to mesh, and preserving split normals)
         print(f"\nBuilding solid bake target model for '{bake_name}'")
@@ -182,7 +181,7 @@ def create_bake_meshes(op, context):
             uvs = [uv for uv in dup.data.uv_layers]
             while uvs:
                 dup.data.uv_layers.remove(uvs.pop())
-            uv_layer = dup.data.uv_layers.new(name='UVMap')
+            dup.data.uv_layers.new(name='UVMap')
             vlm_utils.project_uv(camera, dup.data, proj_x, proj_y)
             # Optimize mesh: usual cleanup and evaluate biggest face size in pixels for decimate LOD
             bm = bmesh.new()
@@ -361,13 +360,8 @@ def create_bake_meshes(op, context):
             light_name, is_lightmap, _, lights, materials = light_scenario
             if is_lightmap: continue
             obj_name = f'{bake_name}.BM.{light_name}' # if sync_obj else f'Table.BM.{light_name}.{bake_name}'
-            bake_instance = bpy.data.objects.get(obj_name)
             bake_mesh = bake_mesh.copy()
-            if bake_instance:
-                vlm_collections.unlink(bake_instance)
-                bake_instance.data = bake_mesh
-            else:
-                bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
+            bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
             if sync_obj:
                 dup = bpy.data.objects[sync_obj]
                 bake_mesh.transform(Matrix(dup.matrix_basis).inverted())
@@ -388,7 +382,6 @@ def create_bake_meshes(op, context):
             else:
                 bake_instance.vlmSettings.bake_type = 'default'
             result_col.objects.link(bake_instance)
-            bake_results.append(bake_instance)
     
     # Build all the visibility maps
     vmaps = []
@@ -400,7 +393,7 @@ def create_bake_meshes(op, context):
         bpy.ops.object.select_all(action='DESELECT')
         context.view_layer.objects.active = obj
         obj.select_set(True)
-        lightmap_vmap = build_visibility_map(bake_mesh, n_render_groups, prunemap_width, prunemap_height)
+        lightmap_vmap = build_visibility_map(bake_name, bake_mesh, n_render_groups, prunemap_width, prunemap_height)
         vmaps.append(lightmap_vmap)
         result_col.objects.unlink(obj)
 
@@ -413,12 +406,7 @@ def create_bake_meshes(op, context):
         print(f'\nProcessing lighmaps for {light_name}')
         for (bake_col, bake_name, bake_mesh, sync_obj), lightmap_vmap in zip(bake_meshes, vmaps):
             obj_name = f'{bake_name}.LM.{light_name}'
-            bake_instance = bpy.data.objects.get(obj_name)
-            if bake_instance:
-                vlm_collections.unlink(bake_instance)
-                bake_instance.data = bake_mesh.copy()
-            else:
-                bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
+            bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             n_faces = len(bake_instance.data.polygons)
             for index in range(n_render_groups):
                 bake_instance.data.materials[index] = materials[index]
@@ -427,23 +415,23 @@ def create_bake_meshes(op, context):
             context.view_layer.objects.active = bake_instance
             bake_instance.select_set(True)
             hdr_range = prune_lightmap_by_visibility_map(bake_instance.data, bake_name, light_name, lightmap_vmap, influence, prunemap_width, prunemap_height)
-            print(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.1f}) for {bake_name}')
             if not bake_instance.data.polygons:
                 result_col.objects.unlink(bake_instance)
                 #print(f". Mesh {bake_name} has no more faces after optimization for {light_name} lighting")
-            if sync_obj:
-                dup = bpy.data.objects[sync_obj]
-                bake_instance.data.transform(Matrix(dup.matrix_basis).inverted())
-                bake_instance.matrix_basis = dup.matrix_basis
             else:
-                bake_instance.matrix_basis.identity()
-            bake_instance.vlmSettings.bake_type = 'lightmap'
-            bake_instance.vlmSettings.bake_lighting = light_name
-            bake_instance.vlmSettings.bake_objects = bake_col
-            bake_instance.vlmSettings.bake_hdr_range = hdr_range
-            bake_instance.vlmSettings.bake_sync_light = ';'.join([l.name for l in lights]) if lights else ''
-            bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
-            bake_results.append(bake_instance)
+                print(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.1f}) for {bake_name}')
+                if sync_obj:
+                    dup = bpy.data.objects[sync_obj]
+                    bake_instance.data.transform(Matrix(dup.matrix_basis).inverted())
+                    bake_instance.matrix_basis = dup.matrix_basis
+                else:
+                    bake_instance.matrix_basis.identity()
+                bake_instance.vlmSettings.bake_type = 'lightmap'
+                bake_instance.vlmSettings.bake_lighting = light_name
+                bake_instance.vlmSettings.bake_objects = bake_col
+                bake_instance.vlmSettings.bake_hdr_range = hdr_range
+                bake_instance.vlmSettings.bake_sync_light = ';'.join([l.name for l in lights]) if lights else ''
+                bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
 
     # Purge unlinked datas and clean up
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -459,7 +447,7 @@ def orient2d(ax, ay, bx, by, x, y):
     return (bx-ax)*(y-ay) - (by-ay)*(x-ax)
 
 
-def build_visibility_map(bake_instance_mesh, n_render_groups, width, height):
+def build_visibility_map(bake_name, bake_instance_mesh, n_render_groups, width, height):
     """Build a set of rasterized maps where each pixels contains the list of visible faces.
     """
     bm = bmesh.new()
@@ -511,6 +499,19 @@ def build_visibility_map(bake_instance_mesh, n_render_groups, width, height):
         if not marked: # for triangles that occupy less than one pixel in the visibility map
             vmaps[min_x + min_y * width].append(face.index)
     bm.free()
+    if False: # For debug purpose, save generated visibility map
+        print(f'. Saving visibility map {bake_name}')
+        pixels = [1.0 for i in range(width*height*4)]
+        for xy in range(width*height):
+            pixels[xy*4] = len(vmaps[xy])
+            pixels[xy*4+1] = len(vmaps[xy])
+            pixels[xy*4+2] = len(vmaps[xy])
+        image = bpy.data.images.new("debug", width, height, alpha=False, float_buffer=True)
+        image.pixels = pixels
+        image.filepath_raw = f'//{bake_name} - Visibility Map.exr'
+        image.file_format = 'OPEN_EXR'
+        image.save()
+        bpy.data.images.remove(image)
     return vmaps
 
 
@@ -525,16 +526,18 @@ def build_influence_map(render_path, name, n_render_groups, w, h):
         uniform sampler2D image;
         uniform float deltaU;
         uniform float deltaV;
+        uniform float stacking;
         uniform int nx;
         uniform int ny;
         in vec2 uvInterp;
         in vec2 uvInterp2;
         out vec4 FragColor;
         void main() {
-            vec4 t = texture(back, uvInterp2);
+            vec3 t = stacking * texture(back, uvInterp2).rgb;
             for (int y=0; y<ny; y++) {
                 for (int x=0; x<nx; x++) {
-                    t = max(t, texture(image, uvInterp + vec2(x * deltaU, y * deltaV)));
+                    vec4 s = texture(image, uvInterp + vec2(x * deltaU, y * deltaV));
+                    t = max(t, s.a * s.rgb);
                 }
             }
             float v = dot(t.rgb, vec3(0.299, 0.587, 0.114));
@@ -545,7 +548,6 @@ def build_influence_map(render_path, name, n_render_groups, w, h):
     # Rescale with a max filter, convert to black and white, apply alpha, in a single pass per image on the GPU
     gpu.state.blend_set('NONE')
     bw_shader = gpu.types.GPUShader(vertex_shader, bw_fragment_shader)
-    bw_shader.bind()
     offscreen = gpu.types.GPUOffScreen(w, h, format='RGBA32F')
     offscreen2 = gpu.types.GPUOffScreen(w, h, format='RGBA32F')
     offscreen3 = gpu.types.GPUOffScreen(w, h, format='RGBA32F')
@@ -569,10 +571,19 @@ def build_influence_map(render_path, name, n_render_groups, w, h):
                     bw_shader, 'TRI_FAN',
                     {
                         "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
-                        "uv": ((0.5/im_width, 0.5/im_height), (1 - (0.5 + nx - 1)/im_width, 0), (1 - (0.5 + nx - 1)/im_width, 1 - (0.5 + ny - 1)/im_height), (0, 1 - (0.5 + ny - 1)/im_height)),
-                        "uv2": ((0.5/w, 0.5/h), (1 - 0.5/w, 0), (1 - 0.5/w, 1 - 0.5/h), (0, 1 - 0.5/h)),
+                        "uv": (
+                            (     0.5          /im_width,      0.5          /im_height), 
+                            (1 - (0.5 + nx - 1)/im_width,      0.5          /im_height), 
+                            (1 - (0.5 + nx - 1)/im_width, 1 - (0.5 + ny - 1)/im_height), 
+                            (     0.5          /im_width, 1 - (0.5 + ny - 1)/im_height)),
+                        "uv2": (
+                            (    0.5/w,     0.5/h), 
+                            (1 - 0.5/w,     0.5/h), 
+                            (1 - 0.5/w, 1 - 0.5/h), 
+                            (    0.5/w, 1 - 0.5/h)),
                     },
                 )
+            bw_shader.bind()
             bw_shader.uniform_sampler("back", layers[0].texture_color)
             bw_shader.uniform_sampler("image", gpu.texture.from_image(image))
             bw_shader.uniform_float("deltaU", 1.0 / im_width)
@@ -580,8 +591,10 @@ def build_influence_map(render_path, name, n_render_groups, w, h):
             bw_shader.uniform_int("nx", nx)
             bw_shader.uniform_int("ny", ny)
             with layers[1].bind():
+                bw_shader.uniform_float("stacking", 1.0)
                 batch.draw(bw_shader)
             with offscreen3.bind():
+                bw_shader.uniform_float("stacking", 0.0)
                 batch.draw(bw_shader)
             imaps[i+1] = offscreen3.texture_color.read()
             imaps[i+1].dimensions = w * h * 4
@@ -591,7 +604,7 @@ def build_influence_map(render_path, name, n_render_groups, w, h):
     imaps[0].dimensions = w * h * 4
     for layer in layers:
         layer.free()
-    if False: # For debug purpose, save generated influence map
+    if True: # For debug purpose, save generated influence map
         print(f'. Saving light influence map to {render_path}{name} - Influence Map.exr')
         image = bpy.data.images.new("debug", w, h, alpha=False, float_buffer=True)
         image.pixels = [v for v in imaps[0]]
@@ -608,37 +621,42 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, 
     lm_threshold = 0.01
     bpy.ops.object.mode_set(mode='EDIT')
     bm = bmesh.from_edit_mesh(bake_instance_mesh)
-    n_faces = len(bm.faces)
+    bm.faces.ensure_lookup_table()
+    # Mark faces that are actually influenced
+    hdr_range = 0.0
     for face in bm.faces:
         face.tag = False
-    bm.faces.ensure_lookup_table()
-    hdr_range = 0.0
     for xy in range(w * h):
         if vmaps[xy] and imaps[0][4 * xy] > lm_threshold:
             hdr_range = max(hdr_range, imaps[0][4 * xy + 1])
             for face_index in vmaps[xy]:
                 face = bm.faces[face_index]
+                #face.tag = True
                 if face.material_index > -1 and imaps[face.material_index + 1] and imaps[face.material_index + 1][4 * xy] > lm_threshold:
                     face.tag = True
-    # Keep neighbor faces and use them for fading out to limit seams in the resulting lightmaps
-    kept_faces = [face for face in bm.faces if face.tag]
-    color_layer = bm.loops.layers.color.verify()
-    if False: # Activate to extend with "fade" faces
+    if True:
+        # Basic pruning: just remove the face under a lighting threshold
+        faces = [face for face in bm.faces if not face.tag]
+        if faces: bmesh.ops.delete(bm, geom=faces, context='FACES')
+    else:
+        # Keep neighbor faces and use them for fading out to limit seams in the resulting lightmaps
+        kept_faces = [face for face in bm.faces if face.tag]
+        color_layer = bm.loops.layers.color.verify()
         for face in kept_faces:
             for loop in face.loops:
                 for neighbor_face in loop.vert.link_faces:
                     if not neighbor_face.tag:
                         neighbor_face.tag = True
-    delete_faces = [face for face in bm.faces if not face.tag]
-    if delete_faces:
-        for face in bm.faces:
-            for loop in face.loops:
-                loop[color_layer] = (0, 0, 0, 1)
-        for face in kept_faces:
-            for vert in face.verts:
-                for loop in vert.link_loops:
-                    loop[color_layer] = (1, 1, 1, 1)
-        bmesh.ops.delete(bm, geom=delete_faces, context='FACES')
+        delete_faces = [face for face in bm.faces if not face.tag]
+        if delete_faces:
+            for face in bm.faces:
+                for loop in face.loops:
+                    loop[color_layer] = (0, 0, 0, 1)
+            for face in kept_faces:
+                for vert in face.verts:
+                    for loop in vert.link_loops:
+                        loop[color_layer] = (1, 1, 1, 1)
+            bmesh.ops.delete(bm, geom=delete_faces, context='FACES')
     bmesh.update_edit_mesh(bake_instance_mesh)
     bpy.ops.object.mode_set(mode='OBJECT')
     return hdr_range
