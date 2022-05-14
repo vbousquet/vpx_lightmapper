@@ -49,9 +49,11 @@ def tri_area(co1, co2, co3):
 # winx/winy defines the render resolution, including pixel aspect ratio
 # https://developer.blender.org/diffusion/B/browse/master/source/blender/editors/uvedit/uvedit_unwrap_ops.c
 # https://developer.blender.org/diffusion/B/browse/master/source/blender/blenlib/intern/uvproject.c
-def project_uv(camera, mesh, winx=1.0, winy=1.0):
+def project_uv(camera, obj, winx=1.0, winy=1.0):
     if camera.type != 'CAMERA':
         raise Exception(f"Object {camera.name} is not a camera.")
+    mesh = obj.data
+    obj_mat = obj.matrix_basis
     modelview_matrix = camera.matrix_world.normalized().inverted()
     if winx > winy:
         xasp = 1.0
@@ -65,7 +67,7 @@ def project_uv(camera, mesh, winx=1.0, winy=1.0):
     uv_layer = mesh.uv_layers.active
     for face in mesh.polygons:
         for loop_idx in face.loop_indices:
-            co = mesh.vertices[mesh.loops[loop_idx].vertex_index].co
+            co = obj_mat @ mesh.vertices[mesh.loops[loop_idx].vertex_index].co
             p1 = modelview_matrix @ Vector((co[0], co[1], co[2], 1))
             if p1.z == 0.0: p1.z = 0.00001
             u = shiftx + xasp * (-p1.x * ((1.0 / camsize) / p1.z)) / 2.0

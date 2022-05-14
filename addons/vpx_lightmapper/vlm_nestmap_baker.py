@@ -52,7 +52,7 @@ def render_nestmaps(op, context):
         while uvs:
             obj.data.uv_layers.remove(uvs.pop())
         obj.data.uv_layers.new(name='UVMap Nested')
-        vlm_utils.project_uv(camera, obj.data, proj_x, proj_y)
+        vlm_utils.project_uv(camera, obj, proj_x, proj_y)
         obj.data.uv_layers.new(name='UVMap')
 
     # Perform the actual island nesting and nestmap generation

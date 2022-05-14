@@ -182,7 +182,7 @@ def create_bake_meshes(op, context):
             while uvs:
                 dup.data.uv_layers.remove(uvs.pop())
             dup.data.uv_layers.new(name='UVMap')
-            vlm_utils.project_uv(camera, dup.data, proj_x, proj_y)
+            vlm_utils.project_uv(camera, dup, proj_x, proj_y)
             # Optimize mesh: usual cleanup and evaluate biggest face size in pixels for decimate LOD
             bm = bmesh.new()
             bm.from_mesh(dup.data)
@@ -338,7 +338,7 @@ def create_bake_meshes(op, context):
             bme.to_mesh(bake_target.data)
             bme.free()
             bake_target.data.update()
-            vlm_utils.project_uv(camera, bake_target.data, proj_x, proj_y)
+            vlm_utils.project_uv(camera, bake_target, proj_x, proj_y)
             print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
         
         # Sort front to back faces if opaque, back to front for translucent
