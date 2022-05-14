@@ -133,7 +133,8 @@ def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nes
                 selection.append(block)
                 pixcount += block.pix_count
         
-
+        retry_count = 0
+        incompatible_sets = []
         while True:
             pixcount = 0
             selected_islands = []
@@ -141,7 +142,7 @@ def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nes
                 pixcount += block.pix_count
                 selected_islands.extend(block.islands)
             selection_names = [block.obj.name for block in selection]
-            print(f'\nTrying to nest in a single texture the {len(selected_islands)} islands ({pixcount/float(tex_w*tex_h):6.2%} fill with {pixcount} px / {tex_w*tex_h} content) of {selection_names}')
+            print(f'\nTrying to nest in a single texture the {len(selected_islands)} islands ({pixcount/float(tex_w*tex_h):6.2%} fill with {pixcount} px / {tex_w*tex_h} content)\n. Source objects: {selection_names}')
 
             # Save UV for undoing nesting if needed
             uv_undo = []
@@ -154,7 +155,7 @@ def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nes
 
             nestmap = perform_nesting(selected_islands, uv_name, src_w, src_h, tex_w, tex_h, padding, only_one_page=(len(selection) > 1))
             if len(nestmap.targets) == 1:
-                print(f'Nesting of {selection_names} succeeded.')
+                print(f'. Nesting succeeded.')
                 # Success: store result for later nestmap render
                 tick_time = time.time()
                 render_nestmap(context, selection, nestmap, nestmap_name,  nestmap_offset + nestmap_index)
@@ -179,19 +180,31 @@ def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nes
                 # remove last block and start again with a smaller group
                 n_failed = n_failed + 1
                 if len(selection) > 1:
-                    #print(f'Nesting of {selection_names} overflowed from a single texture page. Retrying with a smaller content.')
+                    retry_count = retry_count + 1
                     incompatible_blocks = []
                     for overflow_object in set([island['source'][0] for island in nestmap.islands]):
                         overflow_block = next((block for block in selection if block.obj == overflow_object))
                         incompatible_blocks.append(overflow_block)
                     incompatible_blocks.sort(key=lambda p: p.pix_count*p.pix_count)
-                    # select smallest incompatible block with an impact of at least 1% of the overall pixel count
+                    incompatible_sets.append(set([block.obj.name for block in incompatible_blocks]))
+                    # select smallest incompatible block with an impact of at least 1% of the overall pixel count, replace it with smaller blocks
                     overflow_block = next((block for block in incompatible_blocks if block.pix_count > int(tex_w * tex_h * 0.01)), incompatible_blocks[0])
-                    # for reference: remove the first overflowing block
-                    #overflow_island = next((island for island in nestmap.islands if island['place'][0] > 0))
-                    #overflow_object = overflow_island['source'][0]
-                    print(f'Nesting has overflowed. Removing {overflow_block.obj.name} ({overflow_block.pix_count}px) from nesting group (smallest incompatible nest block).')
+                    pixcount = pixcount - overflow_block.pix_count
                     selection.remove(overflow_block)
+
+                    limited_threshold = pack_threshold - int(tex_w * tex_h * 0.05 * retry_count) # Get down threshold 5% per retry
+                    n_added = added_pixcount = 0
+                    for block in reversed(islands_to_pack):
+                        if pixcount == 0 or pixcount + block.pix_count <= pack_threshold and not block in selection:
+                            new_set = set([block.obj.name for block in selection])
+                            new_set.add(block.obj.name)
+                            if new_set not in incompatible_sets:
+                                selection.append(block)
+                                pixcount += block.pix_count
+                                added_pixcount += block.pix_count
+                                n_added += 1
+                    print(f'. Nesting overflowed. Replacing {overflow_block.obj.name} ({overflow_block.pix_count}px) from nesting group (smallest incompatible nest block) with {n_added} smaller blocks ({added_pixcount}px)')
+                    
                     # reset uv
                     index = 0
                     for island in selected_islands:
@@ -208,7 +221,7 @@ def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nes
                     islands_to_pack.remove(block)
                     obj, bm, block_islands, block_pix_count = block
                     src_w, src_h, padding, islands, targets, target_heights = nestmap
-                    print(f'Object {obj.name} does not fit on a single page. Splitting it.')
+                    print(f'. Object {obj.name} did not fit on a single page. Splitting it.')
                     # Consider the parts that fitted the first page as successfull
                     obj_copy = obj.copy()
                     obj_copy.data = obj_copy.data.copy()

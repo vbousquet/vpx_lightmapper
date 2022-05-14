@@ -8,6 +8,7 @@ TODO
 - Shade edges of lightmap pruned face to black when rendering nestmaps to limit lightmaps seams at runtime
 
 
+
 - Rewrite the documentation with a step by step guide (and corresponding vpx/blend files):
 . Step 1: installation & quick walk through
 x Step 2: baking the blank table
@@ -30,6 +31,7 @@ VPX Optimizations
 
 
 Closed items:
+- Nestmap algo: when needing to remove a big block, try to replace with small ones (needs to keep track of incompatible blocks and prevent recreating these selection groups)
 - Extend lightmp pruned faces and mark edges of the pruned face for smoother fading
 - Avoid using fake user for the core node groups
 - When loading library, update existing node groups instead of skipping them => no, this could break the blend file
