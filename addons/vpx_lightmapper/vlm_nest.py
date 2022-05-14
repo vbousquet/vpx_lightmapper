@@ -86,7 +86,7 @@ def create_vert_face_db(faces, uv_layer):
 ## Code for 2D nesting algorithm
 
 
-def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offset):
+def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nestmap_offset):
     '''Perform nesting of a group of objects to a minimal (not optimal) set of nestmaps
     Eventually splitting objects that can't fit into a single nestmap.
     '''
@@ -94,17 +94,21 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
     src_w, src_h = render_size
     # adds one to the padding to take in account uv positionning inside pixel
     padding = context.scene.vlmSettings.padding + 1
+    start_time = time.time()
 
     # Evaluate all islands with their masks
+    tick_time = time.time()
     islands_to_pack = []
     for obj in objects:
         obj.vlmSettings.bake_nestmap = -1
-        islands_to_pack.append(prepare_nesting(obj, render_size, padding))
+        islands_to_pack.append(prepare_nesting(obj, render_size, padding, uv_name))
+    prepare_length = time.time() - tick_time
 
     # Nest groups of islands into nestmaps
     splitted_objects = []
     nestmap_index = 0
     n_failed = 0
+    render_length = 0
     while islands_to_pack:
         # Sort from biggest squared pixcount sum to smallest
         islands_to_pack.sort(key=lambda p: p[4], reverse=True)
@@ -150,7 +154,9 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
             if len(targets) == 1:
                 print(f'Nesting of {selection_names} succeeded.')
                 # Success: store result for later nestmap render
+                tick_time = time.time()
                 render_nestmap(context, selection, nestmap, nestmap_name,  nestmap_offset + nestmap_index)
+                render_length = time.time() - tick_time
                 nestmap_index = nestmap_index + 1
                 for block in selection:
                     islands_to_pack.remove(block)
@@ -243,7 +249,9 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
                     bm_copy.to_mesh(obj_copy.data)
                     bm_copy.free()
                     nestmap = (src_w, src_h, padding, processed_islands, targets[0:1], target_heights[0:1])
+                    tick_time = time.time()
                     render_nestmap(context, [(obj_copy, None, processed_islands, processed_pix_count, processed_pix_count_squared)], nestmap, nestmap_name, nestmap_offset + nestmap_index)
+                    render_length = time.time() - tick_time
                     nestmap_index = nestmap_index + 1
                     print(f'. {len(processed_islands)} islands were nested on the first page and kept.')
                     # Continue nesting with all the remaining islands
@@ -254,7 +262,8 @@ def nest(context, objects, render_size, tex_w, tex_h, nestmap_name, nestmap_offs
     # Free unprocessed data if any
     for (obj, bm, islands, obj_pixcount) in islands_to_pack:
         bm.free()
-    print(f'. Nestmapping finished ({n_failed} overflow were handled for {nestmap_index} generated nestmaps).')
+    total_length = time.time() - start_time
+    print(f'. Nestmapping finished ({n_failed} overflow were handled for {nestmap_index} generated nestmaps) in {str(datetime.timedelta(seconds=total_length))} (prepare={str(datetime.timedelta(seconds=prepare_length))}, nest={str(datetime.timedelta(seconds=total_length-prepare_length-render_length))}, render={str(datetime.timedelta(seconds=render_length))}).')
         
     return (nestmap_index, splitted_objects)
 
@@ -625,7 +634,7 @@ def render_nestmap(context, selection, nestmap, nestmap_name, nestmap_index):
     print(f'. Nest map generated and saved to {base_filepath}')
 
 
-def prepare_nesting(obj, render_size, padding):
+def prepare_nesting(obj, render_size, padding, uv_name):
     src_w, src_h = render_size
     print(f'Preparing nesting of {obj.name} from {src_w}x{src_h} renders')
 
@@ -633,7 +642,7 @@ def prepare_nesting(obj, render_size, padding):
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     bm.faces.ensure_lookup_table()
-    uv_layer = bm.loops.layers.uv.verify()
+    uv_layer = bm.loops.layers.uv[uv_name]
     ftv, vtf = create_vert_face_db([f for f in bm.faces], uv_layer)
     islands = get_island(bm, ftv, vtf, uv_layer)
 

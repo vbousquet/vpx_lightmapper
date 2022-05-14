@@ -57,7 +57,7 @@ def render_nestmaps(op, context):
 
     # Perform the actual island nesting and nestmap generation
     max_tex_size = min(4096, 2 * opt_tex_size)
-    n_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest, render_size, max_tex_size, max_tex_size, 'Nestmap', 0)
+    n_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap Nested', render_size, max_tex_size, max_tex_size, 'Nestmap', 0)
 
     # Restore initial state
     bpy.ops.object.select_all(action='DESELECT')
