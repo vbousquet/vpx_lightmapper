@@ -9,7 +9,7 @@ TODO
 
 
 - Rewrite the documentation with a step by step guide (and corresponding vpx/blend files):
-. Step 1: quick walk through
+. Step 1: installation & quick walk through
 x Step 2: baking the blank table
 . Step 3: adding a light
 . Step 4: syncing with LampZ
