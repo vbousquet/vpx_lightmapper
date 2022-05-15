@@ -212,7 +212,7 @@ def create_bake_meshes(op, context):
                 print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was decimated using a ratio of {ratio:.2%} from {len(areas)} to {len(dup.data.polygons)} faces')
             else:
                 bpy.ops.object.mode_set(mode = 'OBJECT')
-                print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added (no LOD since max face size is {max_size} with a threshold of {opt_lod_threshold})')
+                print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added (no LOD since max face size is {max_size:>8.2}px² with a threshold of {opt_lod_threshold}px²)')
             objects_to_join.append(dup)
         if len(objects_to_join) == 0: continue
         
@@ -618,7 +618,8 @@ def build_influence_map(render_path, name, n_render_groups, w, h):
 def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, vmaps, imaps, w, h):
     """ Prune given lightmap mesh based on the given influence map / visibility map
     """
-    lm_threshold = 0.01
+    # Tests shows that at 0.01 seams are visible
+    lm_threshold = 0.0025
     bpy.ops.object.mode_set(mode='EDIT')
     bm = bmesh.from_edit_mesh(bake_instance_mesh)
     bm.faces.ensure_lookup_table()
@@ -631,7 +632,6 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, 
             hdr_range = max(hdr_range, imaps[0][4 * xy + 1])
             for face_index in vmaps[xy]:
                 face = bm.faces[face_index]
-                #face.tag = True
                 if face.material_index > -1 and imaps[face.material_index + 1] and imaps[face.material_index + 1][4 * xy] > lm_threshold:
                     face.tag = True
     if True:

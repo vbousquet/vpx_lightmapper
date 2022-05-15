@@ -7,6 +7,7 @@ TODO
 
 - Shade edges of lightmap pruned face to black when rendering nestmaps to limit lightmaps seams at runtime
 
+- Automatically an invisible playfield size physx ramp if missing (instead of warning about it)
 
 
 - Rewrite the documentation with a step by step guide (and corresponding vpx/blend files):

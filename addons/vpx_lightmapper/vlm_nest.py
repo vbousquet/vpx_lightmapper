@@ -192,10 +192,10 @@ def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nes
                     pixcount = pixcount - overflow_block.pix_count
                     selection.remove(overflow_block)
 
-                    limited_threshold = pack_threshold - int(tex_w * tex_h * 0.05 * retry_count) # Get down threshold 5% per retry
+                    limited_threshold = pack_threshold - int(tex_w * tex_h * 0.01 * retry_count) # Get down threshold after each retry to ensure finding a solution
                     n_added = added_pixcount = 0
                     for block in reversed(islands_to_pack):
-                        if pixcount == 0 or pixcount + block.pix_count <= pack_threshold and not block in selection:
+                        if pixcount == 0 or pixcount + block.pix_count <= limited_threshold and not block in selection:
                             new_set = set([block.obj.name for block in selection])
                             new_set.add(block.obj.name)
                             if new_set not in incompatible_sets:
@@ -465,7 +465,7 @@ def render_nestmap_gpu(context, selection, nestmap, nestmap_name, nestmap_index)
         pack_image.file_format = 'PNG'
         pack_image.save()
         bpy.data.images.remove(pack_image)
-        Image.open(path_png).save(path_webp, 'WEBP')
+        Image.open(path_png).save(path_webp, format = "WebP", lossless = True)
         print(f'. Texture #{i} has a size of {target_w}x{target_h} for a fill rate of {1.0 - (filled/(target_w*target_h)):>6.2%} (alpha: {with_alpha})')
     bpy.data.scenes.remove(scene)
     print(f'. Nest map generated and saved to {base_filepath}')
@@ -641,7 +641,7 @@ def render_nestmap(context, selection, nestmap, nestmap_name, nestmap_index):
         pack_image.file_format = 'PNG'
         pack_image.save()
         bpy.data.images.remove(pack_image)
-        Image.open(path_png).save(path_webp, 'WEBP')
+        Image.open(path_png).save(path_webp, format = "WebP", lossless = True)
         print(f'. Texture #{i} has a size of {target_w}x{target_h} for a fill rate of {1.0 - (filled/(target_w*target_h)):>6.2%} (alpha: {with_alpha})')
     bpy.data.scenes.remove(scene)
     print(f'. Nest map generated and saved to {base_filepath}')

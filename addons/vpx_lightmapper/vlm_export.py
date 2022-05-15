@@ -303,15 +303,36 @@ def export_vpx(op, context):
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', obj.location[0]/global_scale, -obj.location[1]/global_scale, obj.location[2]/global_scale)
         writer.write_tagged_padded_vector(b'VSIZ', obj.scale[0]/global_scale, obj.scale[1]/global_scale, obj.scale[2]/global_scale)
-        writer.write_tagged_float(b'RTV0', math.degrees(obj.rotation_euler[0]))
-        writer.write_tagged_float(b'RTV1', math.degrees(obj.rotation_euler[1]))
-        writer.write_tagged_float(b'RTV2', -math.degrees(obj.rotation_euler[2]))
-        writer.write_tagged_float(b'RTV3', 0)
-        writer.write_tagged_float(b'RTV4', 0)
-        writer.write_tagged_float(b'RTV5', 0)
-        writer.write_tagged_float(b'RTV6', 0)
-        writer.write_tagged_float(b'RTV7', 0)
-        writer.write_tagged_float(b'RTV8', 0)
+        use_roty = True
+        if obj.vlmSettings.bake_sync_trans != '':
+            sync = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
+            use_roty = sync and sync.vlmSettings.movable_script != '' and 'roty' in sync.vlmSettings.movable_script.lower()
+        if not use_roty:
+            # RotX / RotY / RotZ
+            writer.write_tagged_float(b'RTV0', 0)
+            writer.write_tagged_float(b'RTV1', 0)
+            writer.write_tagged_float(b'RTV2', 0)
+            # TransX / TransY / TransZ
+            writer.write_tagged_float(b'RTV3', 0)
+            writer.write_tagged_float(b'RTV4', 0)
+            writer.write_tagged_float(b'RTV5', 0)
+            # ObjRotX / ObjRotY / ObjRotZ
+            writer.write_tagged_float(b'RTV6', math.degrees(obj.rotation_euler[0]))
+            writer.write_tagged_float(b'RTV7', math.degrees(obj.rotation_euler[1]))
+            writer.write_tagged_float(b'RTV8', -math.degrees(obj.rotation_euler[2]))
+        else:
+            # RotX / RotY / RotZ
+            writer.write_tagged_float(b'RTV0', math.degrees(obj.rotation_euler[0]))
+            writer.write_tagged_float(b'RTV1', math.degrees(obj.rotation_euler[1]))
+            writer.write_tagged_float(b'RTV2', -math.degrees(obj.rotation_euler[2]))
+            # TransX / TransY / TransZ
+            writer.write_tagged_float(b'RTV3', 0)
+            writer.write_tagged_float(b'RTV4', 0)
+            writer.write_tagged_float(b'RTV5', 0)
+            # ObjRotX / ObjRotY / ObjRotZ
+            writer.write_tagged_float(b'RTV6', 0)
+            writer.write_tagged_float(b'RTV7', 0)
+            writer.write_tagged_float(b'RTV8', 0)
         writer.write_tagged_string(b'IMAG', f'VLM.Nestmap{obj.vlmSettings.bake_nestmap}')
         writer.write_tagged_string(b'NRMA', '')
         writer.write_tagged_u32(b'SIDS', 4)
@@ -440,8 +461,8 @@ def export_vpx(op, context):
             break
         is_hdr = next( (o for o in objects if o.vlmSettings.bake_hdr_range > 1.0), None) is not None
         base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}')
-        #nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.png' # VPX does not support HDR...
-        nestmap_path = f'{base_path}.png'
+        #nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.png' # VPX does not support HDR, png are like webp but bigger
+        nestmap_path = f'{base_path}.webp'
         if not os.path.exists(nestmap_path):
             op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
             return {'CANCELLED'}
