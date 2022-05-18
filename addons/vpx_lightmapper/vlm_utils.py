@@ -28,7 +28,6 @@ import unicodedata
 from mathutils import Vector
 from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
-
 from . import vlm_collections
 
 
@@ -38,6 +37,15 @@ def get_global_scale(context):
     else:
         # 50 VP units = 1 1/16" ball = 1.0625" = 2.69875 cm
         return 0.01 * 2.69875 / 50 # Metric scale (imperial is performed by blender itself)
+
+
+def get_lm_threshold():
+    ''' 
+    The lightmap influence threshold used for pruning uinfluenced lightmap faces
+    - Face with a max RGB channel value below this value will be pruned (to limit mesh size and overdraw).
+    - Lightmap intensity will be adjusted to remove any influence below 2 times this value (to avoid seams).
+    '''
+    return 0.01
 
 
 # 3D tri area ABC is half the length of AB cross product AC 
@@ -66,9 +74,14 @@ def project_uv(camera, obj, winx=1.0, winy=1.0):
     camsize = math.tan(camera.data.angle / 2.0)
     uv_layer = mesh.uv_layers.active
     for face in mesh.polygons:
+        y_mirror = 1.0
+        if obj.vlmSettings.is_spinner:
+            # Perform Y mirror for back facing spinner faces
+            normal = obj_mat @ face.normal
+            if normal.length_squared >= 0.5 and normal.dot(camera.location - face.center) <= 0.0: y_mirror = -1.0
         for loop_idx in face.loop_indices:
-            co = obj_mat @ mesh.vertices[mesh.loops[loop_idx].vertex_index].co
-            p1 = modelview_matrix @ Vector((co[0], co[1], co[2], 1))
+            co = mesh.vertices[mesh.loops[loop_idx].vertex_index].co
+            p1 = modelview_matrix @ obj_mat @ Vector((co[0], y_mirror * co[1], co[2], 1))
             if p1.z == 0.0: p1.z = 0.00001
             u = shiftx + xasp * (-p1.x * ((1.0 / camsize) / p1.z)) / 2.0
             v = shifty + yasp * (-p1.y * ((1.0 / camsize) / p1.z)) / 2.0
@@ -319,9 +332,7 @@ def get_hdr_scale(hdr_range):
     '''Compute HDR scaling to fit in a LDR texture (VPX does not support HDR images)
     '''
     hdr_scale = 1.0 / hdr_range if hdr_range > 0.0 else 1.0
-    if hdr_scale < 0.25: hdr_scale = 0.25
-    if hdr_scale > 1.0: hdr_scale = 1.0
-    return hdr_scale
+    return min(max(hdr_scale, 0.25), 4.0)
 
 
 def get_lightings(context):

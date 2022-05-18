@@ -86,6 +86,11 @@ def export_vpx(op, context):
         op.report({'ERROR'}, f'{input_path} does not exist')
         return {'CANCELLED'}
 
+    bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+    if not bake_col:
+        op.report({'ERROR'}, "No 'VLM.Bake' collection to process")
+        return {'CANCELLED'}
+
     result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
     if not result_col:
         op.report({'ERROR'}, "No 'VLM.Result' collection to process")
@@ -95,7 +100,6 @@ def export_vpx(op, context):
     vlm_utils.mkpath(f"{bakepath}Export/")
     playfield_col = context.scene.vlmSettings.playfield_col
     export_mode = context.scene.vlmSettings.export_mode
-    bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
     light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
     global_scale = vlm_utils.get_global_scale(context)
     output_path = bpy.path.abspath(f"//{os.path.splitext(bpy.path.basename(input_path))[0]} - VLM.vpx")
@@ -144,8 +148,7 @@ def export_vpx(op, context):
     if playfield_col: baked_vpx_objects.append('playfield_mesh')
 
     # Remove previous baked models and append the new ones, also hide/remove baked items
-    n_read_item = 0
-    n_game_items = 0
+    n_read_item = n_game_items = 0
     used_images = {}
     removed_images = {}
     prefix = ['Wall', 'Flipper', 'Timer', 'Plunger', 'Text', 'Bumper', 'Trigger', 'Light', 'Kicker', '', 'Gate', 'Spinner', 'Ramp', 
@@ -180,6 +183,7 @@ def export_vpx(op, context):
         item_type = item_data.get_32()
         layer_name = ''
         is_bulb = is_reflect_on_ball = False
+        is_playfield_mesh = False
         while not item_data.is_eof():
             item_data.next()
             reflection_field = visibility_field = False
@@ -189,7 +193,7 @@ def export_vpx(op, context):
                     item_data.skip(24) # Rename to playfield_phys and hide
                     item_data.put_u32(0x00680070)
                     item_data.put_u32(0x00730079)
-                    needs_playfield_physics = False
+                    is_playfield_mesh = True
             elif item_data.tag == 'LANR':
                 layer_name = item_data.get_string()
             elif item_data.tag == 'REEN':
@@ -260,6 +264,8 @@ def export_vpx(op, context):
             if is_part_baked and (visibility_field or reflection_field):
                 item_data.put_bool(False)
             item_data.skip_tag()
+        if is_playfield_mesh and not layer_name == 'VLM.Visuals':
+            needs_playfield_physics = False
         # Filters out objects
         remove = layer_name == 'VLM.Visuals'
         if export_mode == 'remove' or export_mode == 'remove_all':
@@ -288,26 +294,69 @@ def export_vpx(op, context):
                     used_images[image].append(name)
         n_read_item = n_read_item + 1
 
-    # Add new bake models
+
+
+    # Add new bake models and default playfield collider if needed
+    meshes_to_export = sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}')
+    pfobj = None
+    pf_friction = pf_elasticity = pf_falloff = pf_scatter = 0
+    if needs_playfield_physics:
+        print('. Adding a default playfield mesh')
+        playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
+        playfield_right = playfield_width + playfield_left
+        playfield_bottom = playfield_height + playfield_top
+        vert = [
+            (playfield_left, -playfield_bottom, 0.0), 
+            (playfield_right, -playfield_bottom, 0.0), 
+            (playfield_left, -playfield_top, 0.0), 
+            (playfield_right, -playfield_top, 0.0)]
+        pfmesh = bpy.data.meshes.new("VPX.Mesh.Playfield.Exp")
+        pfmesh.from_pydata(vert, [], [(0, 1, 2), (1, 3, 2)])
+        pfmesh.uv_layers.new(name='UVMap Nested')
+        pfobj = bpy.data.objects.new("VPX.Mesh.Playfield.Exp", pfmesh)
+        # FIXME For the time being, for some reason I can't get VPX to render the right playfield
+        meshes_to_export.insert(0, pfobj) # collidable playfield_mesh must be the first
+        # meshes_to_export.append(pfobj) # collidable playfield_mesh must be the last
+        br = biff_io.BIFF_reader(src_storage.openstream('GameStg/GameData').read())
+        while not br.is_eof():
+            br.next()
+            if br.tag == "FRCT":
+                pf_friction = br.get_float()
+            elif br.tag == "ELAS":
+                pf_elasticity = br.get_float()
+            elif br.tag == "ELFA":
+                pf_falloff = br.get_float()
+            elif br.tag == "PFSC":
+                pf_scatter = br.get_float()
+            br.skip_tag()
     new_playfield_image = None
-    for obj in sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}'):
+    for obj in meshes_to_export:
+        uv_layer_nested = obj.data.uv_layers.get("UVMap Nested")
+        if not uv_layer_nested:
+            print(f'. Missing nested uv map for {obj.name}')
+            continue
         is_light = obj.vlmSettings.bake_type == 'lightmap'
         is_active = obj.vlmSettings.bake_type == 'active'
         is_static = obj.vlmSettings.bake_type == 'static'
         is_movable = obj.vlmSettings.bake_sync_trans != ''
-        is_playfield = playfield_col and not is_light and obj.vlmSettings.bake_objects == playfield_col
+        is_playfield = playfield_col != '' and not is_light and obj.vlmSettings.bake_objects == playfield_col.name
         if is_playfield: new_playfield_image = f'VLM.Nestmap{obj.vlmSettings.bake_nestmap}'
-        depth_bias = obj.vlmSettings.bake_objects.vlmSettings.depth_bias
+        depth_bias = None
+        for col_name in obj.vlmSettings.bake_objects.split(';'):
+            col = vlm_collections.get_collection(bake_col, col_name, create=False)
+            if col:
+                if depth_bias != None and depth_bias != col.vlmSettings.depth_bias:
+                    print(f'ERROR: {obj.name} merges multiple bake collections with different depth bias settings {obj.vlmSettings.bake_objects}')
+                depth_bias = col.vlmSettings.depth_bias
+            elif obj != pfobj:
+                print(f'ERROR: {obj.name} contains object of missing bake collection {col}')
+        if not depth_bias: depth_bias = 0
         if is_light: depth_bias = depth_bias - 10
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', obj.location[0]/global_scale, -obj.location[1]/global_scale, obj.location[2]/global_scale)
-        writer.write_tagged_padded_vector(b'VSIZ', obj.scale[0]/global_scale, obj.scale[1]/global_scale, obj.scale[2]/global_scale)
-        use_roty = True
-        if obj.vlmSettings.bake_sync_trans != '':
-            sync = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
-            use_roty = sync and sync.vlmSettings.movable_script != '' and 'roty' in sync.vlmSettings.movable_script.lower()
-        if not use_roty:
+        writer.write_tagged_padded_vector(b'VSIZ', obj.scale[0], obj.scale[1], obj.scale[2])
+        if obj.vlmSettings.use_obj_pos:
             # RotX / RotY / RotZ
             writer.write_tagged_float(b'RTV0', 0)
             writer.write_tagged_float(b'RTV1', 0)
@@ -319,12 +368,12 @@ def export_vpx(op, context):
             # ObjRotX / ObjRotY / ObjRotZ
             writer.write_tagged_float(b'RTV6', math.degrees(obj.rotation_euler[0]))
             writer.write_tagged_float(b'RTV7', math.degrees(obj.rotation_euler[1]))
-            writer.write_tagged_float(b'RTV8', -math.degrees(obj.rotation_euler[2]))
+            writer.write_tagged_float(b'RTV8', -math.degrees(obj.rotation_euler[2]) - 180)
         else:
             # RotX / RotY / RotZ
             writer.write_tagged_float(b'RTV0', math.degrees(obj.rotation_euler[0]))
             writer.write_tagged_float(b'RTV1', math.degrees(obj.rotation_euler[1]))
-            writer.write_tagged_float(b'RTV2', -math.degrees(obj.rotation_euler[2]))
+            writer.write_tagged_float(b'RTV2', -math.degrees(obj.rotation_euler[2]) - 180)
             # TransX / TransY / TransZ
             writer.write_tagged_float(b'RTV3', 0)
             writer.write_tagged_float(b'RTV4', 0)
@@ -336,21 +385,22 @@ def export_vpx(op, context):
         writer.write_tagged_string(b'IMAG', f'VLM.Nestmap{obj.vlmSettings.bake_nestmap}')
         writer.write_tagged_string(b'NRMA', '')
         writer.write_tagged_u32(b'SIDS', 4)
-        writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if is_playfield else export_name(obj.name))
+        writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if is_playfield else 'playfield_physics' if obj == pfobj else export_name(obj.name))
+        # writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if is_playfield or obj == pfobj else export_name(obj.name))
         writer.write_tagged_string(b'MATR', 'VLM.Lightmap' if is_light else 'VLM.Bake.Active' if is_active else 'VLM.Bake.Solid')
         writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
-        writer.write_tagged_bool(b'TVIS', True)
+        writer.write_tagged_bool(b'TVIS', obj != pfobj)
         writer.write_tagged_bool(b'DTXI', False)
-        writer.write_tagged_bool(b'HTEV', False)
+        writer.write_tagged_bool(b'HTEV', obj == pfobj)
         writer.write_tagged_float(b'THRS', 2.0)
-        writer.write_tagged_float(b'ELAS', 0.3)
-        writer.write_tagged_float(b'ELFO', 0.0)
-        writer.write_tagged_float(b'RFCT', 0.0)
-        writer.write_tagged_float(b'RSCT', 0.0)
+        writer.write_tagged_float(b'ELAS', pf_elasticity if obj == pfobj else 0.3)
+        writer.write_tagged_float(b'ELFO', pf_falloff if obj == pfobj else 0.0)
+        writer.write_tagged_float(b'RFCT', pf_friction if obj == pfobj else 0.0)
+        writer.write_tagged_float(b'RSCT', pf_scatter if obj == pfobj else 0.0)
         writer.write_tagged_float(b'EFUI', 0.0)
         writer.write_tagged_float(b'CORF', 0.0)
-        writer.write_tagged_bool(b'CLDR', False)
-        writer.write_tagged_bool(b'ISTO', True)
+        writer.write_tagged_bool(b'CLDR', obj == pfobj)
+        writer.write_tagged_bool(b'ISTO', obj != pfobj)
         writer.write_tagged_bool(b'U3DM', True)
         writer.write_tagged_bool(b'STRE', is_static)
         writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
@@ -358,7 +408,7 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'REEN', not is_playfield and context.scene.vlmSettings.enable_vpx_reflection)
         writer.write_tagged_bool(b'EBFC', False)
         writer.write_tagged_string(b'MAPH', '')
-        writer.write_tagged_bool(b'OVPH', False)
+        writer.write_tagged_bool(b'OVPH', True if obj == pfobj else False)
         writer.write_tagged_bool(b'DIPT', False)
         writer.write_tagged_bool(b'OSNM', False)
         writer.write_tagged_string(b'M3DN', f'VLM.{obj.name}')
@@ -366,7 +416,6 @@ def export_vpx(op, context):
         vertices = []
         vert_dict = {}
         n_vertices = 0
-        uv_layer_nested = obj.data.uv_layers["UVMap Nested"]
         for poly in obj.data.polygons:
             if len(poly.loop_indices) != 3:
                 continue
@@ -375,7 +424,7 @@ def export_vpx(op, context):
                 x, y, z = obj.data.vertices[loop.vertex_index].co
                 nx, ny, nz = loop.normal
                 u, v = uv_layer_nested.data[loop_index].uv
-                vertex = (x, -y, z, nx, -ny, nz, u, 1.0 - v)
+                vertex = (-x / global_scale, y / global_scale, z / global_scale, -nx, ny, nz, u, 1.0 - v)
                 existing_index = vert_dict.get(vertex, None)
                 if existing_index is None:
                     vert_dict[vertex] = n_vertices
@@ -785,9 +834,6 @@ def export_vpx(op, context):
     print(f". {n_images} images exported in table files")
     print(". Images marked as used:", list(used_images.keys()))
     print(". Images marked as deletable:", list(removed_images.keys()))
-
-    if needs_playfield_physics:
-        print('WARNING: this table needs a playfield physics object. You need to add an invisible, full playfield sized, ramp (not yet automated here).')
 
     print(f'\nExport finished.')
     return {"FINISHED"}

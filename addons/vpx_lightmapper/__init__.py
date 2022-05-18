@@ -257,9 +257,13 @@ class VLM_Object_props(PropertyGroup):
     hide_from_others: BoolProperty(name="Hide from others", description="Hide this object from other objects. For example hide flipper bat from playfield. WARNING: this feature has limited support. see doc.", default = False)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     layback_offset: FloatProperty(name="Layback offset", description="Y offset caused by current layback", default = 0.0)
+    # Both bake object and bake result
+    is_spinner: BoolProperty(name="Spinner", description="Tag object has a spinner where backfacing faces are mirrors of front facing.", default = False)
+    use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot pos instead of Rot.", default = False)
     # Bake result properties (for object inside the bake result collection)
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
-    bake_objects: PointerProperty(name="Bake", type=bpy.types.Collection, description="Bake collection included in this bake/lightmap")
+    # bake_objects: PointerProperty(name="Bake", type=bpy.types.Collection, description="Bake collection included in this bake/lightmap")
+    bake_objects: StringProperty(name="Bake", description="Bake collections included in this bake/lightmap", default="")
     bake_sync_light: StringProperty(name="Sync Light", description="Object to sync light state on", default="")
     bake_sync_trans: StringProperty(name="Sync Trans", description="Object to sync transform on", default="")
     bake_type: EnumProperty(
@@ -812,6 +816,8 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                 layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Mixed', icon='REMOVE').indirect_only = True
             if len(bake_objects) == 1 and bake_col:
                 layout.prop(obj.vlmSettings, 'hide_from_others', text='Hide')
+                layout.prop(obj.vlmSettings, 'use_obj_pos')
+                layout.prop(obj.vlmSettings, 'is_spinner')
                 layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
                 layout.prop(bake_objects[0].vlmSettings, 'bake_to')
             
@@ -860,6 +866,8 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
                 layout.prop(props, 'bake_sync_trans')
                 layout.prop(props, 'bake_type')
                 layout.prop(props, 'bake_hdr_range')
+                layout.prop(props, 'is_spinner')
+                layout.prop(props, 'use_obj_pos')
                 layout.separator()
                 layout.prop(props, 'bake_nestmap')
                 layout.operator(VLM_OT_select_nestmap_group.bl_idname)

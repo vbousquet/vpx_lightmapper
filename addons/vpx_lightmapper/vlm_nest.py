@@ -480,8 +480,17 @@ def render_nestmap(context, selection, nestmap, nestmap_name, nestmap_index):
     # FIXME sort by bake_lighting to avoid constantly loading/unloading all renders
     for obj_name in {obj.name for (obj, _, _, _) in selection}:
         obj = bpy.data.objects[obj_name]
-        hdr_scale = vlm_utils.get_hdr_scale(obj.vlmSettings.bake_hdr_range)
-        print(f'. Copying renders for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
+        # Cut off pixels below the lightmap threshold to avoid seams:
+        # v => (v + rgb_offset) * rgb_scale * hdr_scale
+        hdr_range = obj.vlmSettings.bake_hdr_range
+        if obj.vlmSettings.bake_type == 'lightmap':
+            rgb_offset = -vlm_utils.get_lm_threshold() * 2
+            rgb_scale = hdr_range / (hdr_range + rgb_offset)
+            rgb_scale = rgb_scale * vlm_utils.get_hdr_scale(hdr_range)
+        else:
+            rgb_offset = 0.0
+            rgb_scale = 1.0
+        print(f'. Copying renders for object {obj.name} from {obj.vlmSettings.bake_lighting} renders (RGB rescaling offset={rgb_offset:.3} scale={rgb_scale:.3})')
         # Load the render 
         render_data = []
         for i in range(n_render_groups):
@@ -594,11 +603,11 @@ def render_nestmap(context, selection, nestmap, nestmap_name, nestmap_index):
                                                         best_pos = p3
                                         if best_alpha >= 1: break
                                     for j in range(3):
-                                        target_tex[p+j] = island_render[best_pos+j] * hdr_scale
+                                        target_tex[p+j] = (island_render[best_pos+j] + rgb_offset) * rgb_scale
                                     target_tex[p+3] = 1
                                 else:
                                     for j in range(3):
-                                        target_tex[p+j] = island_render[p2+j] * hdr_scale
+                                        target_tex[p+j] = (island_render[p2+j] + rgb_offset) * rgb_scale
                                     target_tex[p+3] = island_render[p2+3]
 
     # Save the rendered nestmaps
