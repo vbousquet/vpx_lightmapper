@@ -476,6 +476,9 @@ def render_all_groups(op, context):
                         render_col.objects.unlink(obj)
 
             for scenario, denoise, out, initial_state in batch:
+                _, _, _, lights, _ = scenario
+                for light in lights:
+                    render_col.objects.unlink(light)
                 if initial_state[0] == 1:
                     for o, c in initial_state[1]: o.data.color = c
                 bpy.ops.scene.view_layer_remove_lightgroup({'scene':scene})
