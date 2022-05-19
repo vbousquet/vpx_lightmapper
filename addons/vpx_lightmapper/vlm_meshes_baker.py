@@ -81,8 +81,8 @@ def create_bake_meshes(op, context):
     # Bake mesh generation settings
     opt_backface_limit_angle = context.scene.vlmSettings.remove_backface
     opt_vpx_reflection = context.scene.vlmSettings.keep_pf_reflection_faces
-    opt_lod_threshold = 16.0 * opt_tex_size / 4096  # start LOD for biggest face below 16x16 pixels for 4K renders (1 pixel for 256px renders)
-    opt_lod_threshold = opt_lod_threshold * opt_lod_threshold
+    opt_lod_threshold = 16 * opt_tex_size / 4096  # start LOD for biggest face below 16x16 pixels for 4K renders (1 pixel for 256px renders)
+    opt_lod_threshold = int(opt_lod_threshold * opt_lod_threshold)
     opt_lightmap_prune_res = min(256, opt_tex_size) # resolution used in the algorithm for unlit face pruning (artefact observed at 256)
     prunemap_width = int(opt_lightmap_prune_res * opt_ar)
     prunemap_height = opt_lightmap_prune_res
@@ -131,10 +131,15 @@ def create_bake_meshes(op, context):
         if bake_col.vlmSettings.bake_mode == 'split':
             for obj_name in object_names:
                 to_bake.append((obj_name, bake_col, [obj_name], obj_name, not bake_col.vlmSettings.is_opaque))
-        # elif len(object_names) == 1:
-            # to_bake.append((bake_col.name, bake_col, object_names, object_names[0], not bake_col.vlmSettings.is_opaque))
         else:
-            to_bake.append((bake_col.name, bake_col, object_names, None, not bake_col.vlmSettings.is_opaque))
+            sync_obj = None
+            for obj_name in object_names:
+                obj = bpy.data.objects[obj_name]
+                if obj.vlmSettings.movable_script != '':
+                    if sync_obj != None:
+                        print(f'. ERROR: Bake collection {bake_col.name} bakes to a group but more than one object defines a move script.')
+                    sync_obj = obj_name
+            to_bake.append((bake_col.name, bake_col, object_names, sync_obj, not bake_col.vlmSettings.is_opaque))
         
     # Create all solid bake meshes
     bake_meshes = []
@@ -185,6 +190,17 @@ def create_bake_meshes(op, context):
             # Apply base transform
             dup.data.transform(dup.matrix_basis)
             dup.matrix_basis.identity()
+            # Perform base mesh optimization
+            # with context.temp_override(active_object=dup, selected_objects=dup):
+            context.view_layer.objects.active = dup
+            bpy.ops.object.mode_set(mode = 'EDIT')
+            bpy.ops.mesh.reveal()
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.mesh.remove_doubles(threshold = 0.001 * global_scale)
+            bpy.ops.mesh.dissolve_limited(angle_limit = radians(0.1))
+            bpy.ops.mesh.delete_loose()
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.object.mode_set(mode = 'OBJECT')
             # Optimize mesh: usual cleanup and evaluate biggest face size in pixels for decimate LOD
             bm = bmesh.new()
             bm.from_mesh(dup.data)
@@ -197,23 +213,13 @@ def create_bake_meshes(op, context):
                 areas[face] = areas[face] + vlm_utils.tri_area( *(Vector( (*l[uv_loop].uv, 0) ) for l in loop) )
             bm.free()
             max_size = int(max(areas.values()) * proj_x * proj_y)
-            # with context.temp_override(active_object=dup, selected_objects=dup):
-            context.view_layer.objects.active = dup
-            bpy.ops.object.mode_set(mode = 'EDIT')
-            bpy.ops.mesh.reveal()
-            bpy.ops.mesh.select_all(action='SELECT')
-            bpy.ops.mesh.remove_doubles(threshold = 0.001 * global_scale)
-            bpy.ops.mesh.dissolve_limited(angle_limit = radians(0.1))
-            bpy.ops.mesh.delete_loose()
-            bpy.ops.mesh.select_all(action='SELECT')
             if max_size < opt_lod_threshold:
                 ratio = math.sqrt(max_size / opt_lod_threshold)
+                bpy.ops.object.mode_set(mode = 'EDIT')
                 bpy.ops.mesh.decimate(ratio=ratio)
                 bpy.ops.object.mode_set(mode = 'OBJECT')
-                dup.data.update()
                 print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was decimated using a ratio of {ratio:.2%} from {len(areas)} to {len(dup.data.polygons)} faces')
             else:
-                bpy.ops.object.mode_set(mode = 'OBJECT')
                 print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added (no LOD since max face size is {max_size:>8}px² with a threshold of {opt_lod_threshold}px²)')
             objects_to_join.append(dup)
         if len(objects_to_join) == 0: continue
@@ -432,6 +438,7 @@ def create_bake_meshes(op, context):
 
     # Process each of the bake meshes according to the light scenario, pruning unneeded faces
     render_path = vlm_utils.get_bakepath(context, type='RENDERS')
+    lm_threshold = vlm_utils.get_lm_threshold()
     for light_scenario in light_scenarios:
         light_name, is_lightmap, _, lights, materials = light_scenario
         if not is_lightmap: continue
@@ -448,7 +455,7 @@ def create_bake_meshes(op, context):
             context.view_layer.objects.active = bake_instance
             bake_instance.select_set(True)
             hdr_range = prune_lightmap_by_visibility_map(bake_instance.data, bake_name, light_name, lightmap_vmap, influence, prunemap_width, prunemap_height)
-            if not bake_instance.data.polygons:
+            if not bake_instance.data.polygons or hdr_range <= 2 * lm_threshold:
                 result_col.objects.unlink(bake_instance)
                 #print(f". Mesh {bake_name} has no more faces after optimization for {light_name} lighting")
             else:
