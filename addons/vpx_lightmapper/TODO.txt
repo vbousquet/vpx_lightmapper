@@ -5,7 +5,11 @@ TODO
 - Support 'active' (i.e. non opaque bake) objects for the occluder selection
 - Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled
 
-- Merge lightmaps based on user setup
+
+- rewrite nestmap padding using a clean object mask (it is mainly broken for the moment since it rely on alpha which is not reliable or missing)
+- fix VPX in order to be able to use a playfield_mesh for the playfield (to get the correct physics setup for playfield)
+- fix wire ramp in TZ getting optimized out
+- fix HDR range scaling
 
 
 Rewrite the documentation with a step by step guide (and corresponding vpx/blend files):
@@ -30,6 +34,8 @@ VPX potential optimizations
 
 
 Closed items:
+- fix 3.1 / 3.2 rendering modes (see LampPost mod in TZ) => lights where not unlinked after 3.2 rendering, before 3.1 mode
+- Merge lightmaps based on user setup => no filter on move script even for group bakes
 - Automatically add an invisible playfield_mesh if missing (instead of warning about it)
 - Support baking spinner (backface = mirrored frontface)
 - fix visibile map borders when lightmap pruning (extend 1px)

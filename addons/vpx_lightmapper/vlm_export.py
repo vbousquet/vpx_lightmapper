@@ -748,7 +748,7 @@ def export_vpx(op, context):
                 if vpx_name not in light_processed:
                     code += f"	' Sync on {vpx_name}\n"
                     light_processed.append(vpx_name)
-        hdr_scale = vlm_utils.get_hdr_scale(obj.vlmSettings.bake_hdr_range)
+        hdr_scale = vlm_utils.get_hdr_scale(obj)
         code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, {100.0/hdr_scale:6.2f}, "\n'
     code += 'End Sub\n'
 
@@ -791,7 +791,7 @@ def export_vpx(op, context):
     for obj in lightmaps:
         vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
         obj_ref = elem_ref(export_name(obj.name))
-        hdr_scale = vlm_utils.get_hdr_scale(obj.vlmSettings.bake_hdr_range)
+        hdr_scale = vlm_utils.get_hdr_scale(obj)
         if not vpx_name:
             code += f"	{obj_ref}.Visible = False ' {100.0/hdr_scale:6.2f} HDR scaling\n"
         elif vpx_name in table_lights:

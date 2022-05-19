@@ -328,11 +328,15 @@ def is_part_of_bake_category(obj, category):
     return next((col for col in obj.users_collection if col.vlmSettings.bake_mode == category), None) is not None
 
 
-def get_hdr_scale(hdr_range):
+def get_hdr_scale(obj):
     '''Compute HDR scaling to fit in a LDR texture (VPX does not support HDR images)
     '''
-    hdr_scale = 1.0 / hdr_range if hdr_range > 0.0 else 1.0
-    return min(max(hdr_scale, 0.25), 4.0)
+    if obj.vlmSettings.bake_type == 'lightmap':
+        hdr_range = obj.vlmSettings.bake_hdr_range
+        hdr_scale = 1.0 / hdr_range if hdr_range > 0.0 else 1.0
+        return min(max(hdr_scale, 1.0 / 2.0), 1.0)
+    else:
+        return 1.0
 
 
 def get_lightings(context):
