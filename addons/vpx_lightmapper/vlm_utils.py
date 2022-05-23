@@ -45,7 +45,21 @@ def get_lm_threshold():
     - Face with a max RGB channel value below this value will be pruned (to limit mesh size and overdraw).
     - Lightmap intensity will be adjusted to remove any influence below 2 times this value (to avoid seams).
     '''
+    #return 1.0 / (256.0 * 2.0) # Lowest threshold (2 * 1 bit precision) => 0.00195
     return 0.01
+
+
+def get_hdr_scale(obj):
+    '''Compute HDR scaling to fit in a LDR texture (VPX does not support HDR images)
+    '''
+    hdr_range = obj.vlmSettings.bake_hdr_range
+    if obj.vlmSettings.bake_type != 'lightmap':
+        return 1.0
+    elif hdr_range < 1.0:
+        return 1.0
+    else:
+        return 1.0
+        #return 1.0 / min(hdr_range, 4.0)
 
 
 # 3D tri area ABC is half the length of AB cross product AC 
@@ -326,17 +340,6 @@ def is_rgb_led(objects):
 
 def is_part_of_bake_category(obj, category):
     return next((col for col in obj.users_collection if col.vlmSettings.bake_mode == category), None) is not None
-
-
-def get_hdr_scale(obj):
-    '''Compute HDR scaling to fit in a LDR texture (VPX does not support HDR images)
-    '''
-    if obj.vlmSettings.bake_type == 'lightmap':
-        hdr_range = obj.vlmSettings.bake_hdr_range
-        hdr_scale = 1.0 / hdr_range if hdr_range > 0.0 else 1.0
-        return min(max(hdr_scale, 1.0 / 2.0), 1.0)
-    else:
-        return 1.0
 
 
 def get_lightings(context):

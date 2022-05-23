@@ -154,6 +154,101 @@ def compute_render_groups(op, context):
 
     print(f"\n{len(object_masks)} render groups defined in {vlm_utils.format_time(time.time() - start_time)}.")
     bpy.data.scenes.remove(scene)
+
+    # render hi-res mask for later nestmap rendering
+    render_group_masks(op, context)
+
     context.scene.vlmSettings.last_bake_step = 'groups'
     return {'FINISHED'}
     
+
+def render_group_masks(op, context):
+    """Render render groups masks
+    """
+    if context.blend_data.filepath == '':
+        op.report({'ERROR'}, 'You must save your project before rendering')
+        return {'CANCELLED'}
+
+    if context.scene.vlmSettings.layback_mode == 'deform':
+        op.report({'ERROR'}, 'Deform camera mode is not supported by the lightmapper')
+        return {'CANCELLED'}
+
+    bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+    if not bake_col:
+        op.report({'ERROR'}, "No 'VLM.Bake' collection to process")
+        return {'CANCELLED'}
+
+    camera_object = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    if not camera_object:
+        op.report({'ERROR'}, 'Bake camera is missing')
+        return {'CANCELLED'}
+
+    n_render_groups = vlm_utils.get_n_render_groups(context)
+    start_time = time.time()
+    bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
+    vlm_utils.mkpath(bakepath)
+    opt_tex_size = int(context.scene.vlmSettings.tex_size)
+    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
+
+    # Create temp render scene, using the user render settings setup
+    scene = bpy.data.scenes.new('VLM.Tmp Scene')
+    scene.collection.objects.link(camera_object)
+    scene.camera = camera_object
+    scene.render.engine = 'CYCLES'
+    for prop in context.scene.render.bl_rna.properties:
+        if not prop.is_readonly and prop.identifier not in {'rna_type'}:
+            setattr(scene.render, prop.identifier, getattr(context.scene.render, prop.identifier))
+    for prop in context.scene.cycles.bl_rna.properties:
+        if not prop.is_readonly and prop.identifier not in {'rna_type'}:
+            setattr(scene.cycles, prop.identifier, getattr(context.scene.cycles, prop.identifier))
+    scene.render.use_border = False
+    scene.render.use_crop_to_border = False
+    scene.render.resolution_y = opt_tex_size
+    scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio)
+    scene.view_settings.view_transform = 'Raw'
+    scene.view_settings.look = 'None'
+    scene.view_layers[0].use_pass_combined = True
+    scene.view_layers[0].use_pass_z = False
+    scene.cycles.max_bounces = 1
+    scene.cycles.use_denoising = False
+
+    mask_mat = bpy.data.materials.new(name='VPX.Mask')
+    mask_mat.use_nodes = True
+    nodes = mask_mat.node_tree.nodes
+    nodes.clear()
+    links = mask_mat.node_tree.links
+    emit = nodes.new('ShaderNodeEmission')
+    node_output = nodes.new(type='ShaderNodeOutputMaterial')   
+    node_output.location.x = 400
+    links.new(emit.outputs[0], node_output.inputs[0])
+    scene.view_layers[0].material_override = mask_mat
+
+    print(f'\nEvaluating {n_render_groups} render group masks')
+    bakepath = vlm_utils.get_bakepath(context, type='MASKS')
+    for group_index in range(n_render_groups):
+        linked_objects = []
+        for obj in bake_col.all_objects:
+            if obj.vlmSettings.render_group == group_index and not obj.vlmSettings.indirect_only:
+                if obj.vlmSettings.bake_mask and obj.vlmSettings.bake_mask not in linked_objects:
+                    scene.collection.objects.link(obj.vlmSettings.bake_mask)
+                    linked_objects.append(obj.vlmSettings.bake_mask)
+                if obj.vlmSettings.bake_to: obj = obj.vlmSettings.bake_to
+                if obj not in linked_objects:
+                    scene.collection.objects.link(obj)
+                    linked_objects.append(obj)
+        print(f'\n. Rendering group #{group_index}/{n_render_groups} ({len(linked_objects)} objects)')
+        
+        scene.render.filepath = f'{bakepath}Mask Group {group_index}.png'
+        scene.render.image_settings.file_format = 'PNG'
+        scene.render.image_settings.color_mode = 'RGBA'
+        scene.render.image_settings.color_depth = '8'
+        bpy.ops.render.render(write_still=True, scene=scene.name)
+
+        for obj in linked_objects:
+            scene.collection.objects.unlink(obj)
+    
+    bpy.data.materials.remove(mask_mat)
+    bpy.data.scenes.remove(scene)
+    length = time.time() - start_time
+    print(f'\nRendering group masks finished in a total time of {vlm_utils.format_time(length)}')
+    return {'FINISHED'}

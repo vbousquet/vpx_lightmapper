@@ -6,10 +6,8 @@ TODO
 - Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled
 
 
-- rewrite nestmap padding using a clean object mask (it is mainly broken for the moment since it rely on alpha which is not reliable or missing)
 - fix VPX in order to be able to use a playfield_mesh for the playfield (to get the correct physics setup for playfield)
-- fix wire ramp in TZ getting optimized out
-- fix HDR range scaling
+- fix VPX rendering reflection in playfield holes
 
 
 Rewrite the documentation with a step by step guide (and corresponding vpx/blend files):
@@ -17,16 +15,15 @@ Rewrite the documentation with a step by step guide (and corresponding vpx/blend
 x Step 2: baking the blank table
 . Step 3: adding a light
 . Step 4: syncing with LampZ
-. Step 5: adding a flasher
-. Step 6: adding an insert & 'bake to' feature
-. Step 7: transparent parts & 'bake mask' feature
-. Step 8: better playfield with 3D wood
-. Step 9: 3D inserts
+. Step 5: adding an insert & 'bake to' feature
+o Step 6: transparent parts & 'bake mask' feature
+. Step 7: better playfield with 3D wood
+. Step 8: 3D inserts
 
 
 VPX potential optimizations 
 - Unshaded path can be more efficient (single tex fetch) => Tested, 1.5ms speedup on a 22ms render time on a GTX650. Is it really worth the effort ?
-- HDR texture should be half float (64b instead of 128b) to improve cache hit and limit memory bandwidth consumption (but HDR is not working anyway due to DX9 downscaling the texture)
+- HDR texture should be half float (64b instead of 128b, or even 48b without alpha channel) to improve cache hit and limit memory bandwidth consumption (but HDR is not working anyway due to DX9 downscaling the texture)
 
 
 
@@ -34,6 +31,12 @@ VPX potential optimizations
 
 
 Closed items:
+- rewrite a clean lightmap seam fader => deactivated color offset, and finished fading on adjacent faces
+- fix HDR range scaling => ideally it should just use EXR for HDR lightmaps, and fix VPX where needed => seems ok right now
+- overlapping islands should be nested together (considered as a single island by the nestmapper, perhaps with a way to limit this for very large overlays)
+- rewrite nestmap padding using a clean object mask (it is mainly broken for the moment since it rely on alpha which is not reliable or missing)
+- add a way to directly update script (to avoid all the copy/paste): use markers in the helper script, detect/replace in the main script
+- fix wire ramp in TZ getting optimized out (likely excessive LOD) => this was a (huge) bug in the LOD system (LOD was not applied ot rthe right objects...)
 - fix 3.1 / 3.2 rendering modes (see LampPost mod in TZ) => lights where not unlinked after 3.2 rendering, before 3.1 mode
 - Merge lightmaps based on user setup => no filter on move script even for group bakes
 - Automatically add an invisible playfield_mesh if missing (instead of warning about it)

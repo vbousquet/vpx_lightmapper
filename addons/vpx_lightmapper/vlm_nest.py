@@ -53,23 +53,75 @@ def get_island(bm, face_to_verts, vert_to_faces, uv_layer):
         current_island = []
         face_idx = list(faces_left)[0]
         parse_island(bm, face_idx, faces_left, current_island, face_to_verts, vert_to_faces)
-        max_uv = Vector((-10000000.0, -10000000.0))
-        min_uv = Vector((10000000.0, 10000000.0))
-        for face in current_island:
-            for l in face.loops:
-                uv = l[uv_layer].uv
-                max_uv.x = max(uv.x, max_uv.x)
-                max_uv.y = max(uv.y, max_uv.y)
-                min_uv.x = min(uv.x, min_uv.x)
-                min_uv.y = min(uv.y, min_uv.y)
-        uv_island_lists.append(
-            {'faces': current_island, 
-            'render_group': current_island[0].material_index,
-            'max': max_uv, 
-            'min': min_uv,
-            'size': (max_uv - min_uv), 
-            'bb_area': (max_uv.x-min_uv.x)*(max_uv.y-min_uv.y)})
+        island = {'faces': current_island, 'render_group': current_island[0].material_index}
+        update_island_bounds(island, uv_layer)
+        uv_island_lists.append(island)
     return uv_island_lists
+
+
+def tri_overlaps(a1, b1, c1, a2, b2, c2):
+    e = 0.0
+    det2d = lambda a,b,c: a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y)
+    if det2d(a1, b1, c1) < 0.0: c1, b1, a1 = a1, b1, c1
+    if det2d(a2, b2, c2) < 0.0: c2, b2, a2 = a2, b2, c2
+    if det2d(a1, b1, a2)<e and det2d(a1, b1, b2)<e and det2d(a1, b1, c2)<e: return False
+    if det2d(b1, c1, a2)<e and det2d(b1, c1, b2)<e and det2d(b1, c1, c2)<e: return False
+    if det2d(c1, a1, a2)<e and det2d(c1, a1, b2)<e and det2d(c1, a1, c2)<e: return False
+    if det2d(a2, b2, a1)<e and det2d(a2, b2, b1)<e and det2d(a2, b2, c1)<e: return False
+    if det2d(b2, c2, a1)<e and det2d(b2, c2, b1)<e and det2d(b2, c2, c1)<e: return False
+    if det2d(c2, a2, a1)<e and det2d(c2, a2, b1)<e and det2d(c2, a2, c1)<e: return False
+    return True
+
+
+def island_bounds_overlaps(i1, i2):
+    i1_min = i1['min']
+    i1_max = i1['max']
+    i2_min = i2['min']
+    i2_max = i2['max']
+    return i1_min.x < i2_max.x and i1_max.x > i2_min.x and i1_max.y > i2_min.y and i1_min.y < i2_max.y
+    
+
+def get_merged_overlapping_islands(islands, uv_layer):
+    merged_islands = []
+    for island in islands:
+        merged = False
+        other_islands = [i for i in merged_islands if island['render_group'] == i['render_group'] and island_bounds_overlaps(island, i)]
+        for f in island['faces']:
+            a1 = f.loops[0][uv_layer].uv
+            b1 = f.loops[1][uv_layer].uv
+            c1 = f.loops[2][uv_layer].uv
+            for other_island in other_islands:
+                for g in other_island['faces']:
+                    a2 = g.loops[0][uv_layer].uv
+                    b2 = g.loops[1][uv_layer].uv
+                    c2 = g.loops[2][uv_layer].uv
+                    if tri_overlaps(a1, b1, c1, a2, b2, c2):
+                        #print('. Overlapping islands merged')
+                        merged = True
+                        other_island['faces'].extend(island['faces'])
+                        update_island_bounds(other_island, uv_layer)
+                        break
+            if merged:
+                break
+        if not merged:
+            merged_islands.append(island)
+    return merged_islands
+    
+
+def update_island_bounds(island, uv_layer):
+    max_uv = Vector((-10000000.0, -10000000.0))
+    min_uv = Vector((10000000.0, 10000000.0))
+    for face in island['faces']:
+        for l in face.loops:
+            uv = l[uv_layer].uv
+            max_uv.x = max(uv.x, max_uv.x)
+            max_uv.y = max(uv.y, max_uv.y)
+            min_uv.x = min(uv.x, min_uv.x)
+            min_uv.y = min(uv.y, min_uv.y)
+    island['max'] = max_uv
+    island['min'] = min_uv
+    island['size'] = max_uv - min_uv
+    island['bb_area'] = (max_uv.x-min_uv.x)*(max_uv.y-min_uv.y)
 
 
 def create_vert_face_db(faces, uv_layer):
@@ -89,7 +141,7 @@ def create_vert_face_db(faces, uv_layer):
 NestBlock = namedtuple("NestBlock", "obj bm islands pix_count")
 NestMap = namedtuple("NestMap", "src_w src_h padding islands targets target_heights")
 
-def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nestmap_offset):
+def nest(context, objects, uv_proj_name, uv_name, render_size, tex_w, tex_h, nestmap_name, nestmap_offset):
     '''Perform nesting of a group of objects to a minimal (not optimal) set of nestmaps
     Eventually splitting objects that can't fit into a single nestmap.
     '''
@@ -158,7 +210,7 @@ def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nes
                 print(f'. Nesting succeeded.')
                 # Success: store result for later nestmap render
                 tick_time = time.time()
-                render_nestmap(context, selection, nestmap, nestmap_name,  nestmap_offset + nestmap_index)
+                render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
                 render_length = time.time() - tick_time
                 nestmap_index = nestmap_index + 1
                 for block in selection:
@@ -263,7 +315,7 @@ def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nes
                     bm_copy.free()
                     nestmap = NestMap(src_w, src_h, padding, processed_islands, targets[0:1], target_heights[0:1])
                     tick_time = time.time()
-                    render_nestmap(context, [NestBlock(obj_copy, None, processed_islands, processed_pix_count)], nestmap, nestmap_name, nestmap_offset + nestmap_index)
+                    render_nestmap(context, [NestBlock(obj_copy, None, processed_islands, processed_pix_count)], uv_proj_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
                     render_length = time.time() - tick_time
                     nestmap_index = nestmap_index + 1
                     print(f'. {len(processed_islands)} islands were nested on the first page and kept.')
@@ -281,7 +333,56 @@ def nest(context, objects, uv_name, render_size, tex_w, tex_h, nestmap_name, nes
     return (nestmap_index, splitted_objects)
 
 
-def render_nestmap(context, selection, nestmap, nestmap_name, nestmap_index):
+def get_nearest_opaque_pos(image, dx, dy, padding, src_w, src_h):
+    ''' Find the nearest opaque (or at least less transparent) point position in the provided image
+    Search is performed up to the given padding distance
+    '''
+    best_pos = 4 * (   dx  +    dy  * src_w   )
+    best_alpha = image[best_pos+3]
+    best_dist = (padding+1) * (padding+1) * 2
+    for d in range(1, padding):
+        for sx in range(dx-d, dx+d+1):
+            if 0 <= sx and sx < src_w:
+                if 0 <= dy-d and dy-d < src_h:
+                    p3 = 4 * (sx + (dy-d) * src_w)
+                    if image[p3+3] >= best_alpha:
+                        dist = sx*sx+d*d
+                        if image[p3+3] > best_alpha or dist < best_dist:
+                            best_pos = p3
+                            best_dist = dist
+                            best_alpha = image[p3+3]
+                if 0 <= dy+d and dy+d < src_h:
+                    p3 = 4 * (sx + (dy+d) * src_w)
+                    if image[p3+3] >= best_alpha:
+                        dist = sx*sx+d*d
+                        if image[p3+3] > best_alpha or dist < best_dist:
+                            best_pos = p3
+                            best_dist = dist
+                            best_alpha = image[p3+3]
+        for sy in range(dy-d +1, dy+d+1 -1):
+            if 0 <= sy and sy < src_h:
+                if 0 <= dx-d and dx-d < src_w:
+                    p3 = 4 * ((dx-d) + sy * src_w)
+                    if image[p3+3] >= best_alpha:
+                        dist = sy*sy+d*d
+                        if image[p3+3] > best_alpha or dist < best_dist:
+                            best_pos = p3
+                            best_dist = dist
+                            best_alpha = image[p3+3]
+                if 0 <= dx+d and dx+d < src_w:
+                    p3 = 4 * ((dx+d) + sy * src_w)
+                    if image[p3+3] >= best_alpha:
+                        dist = sy*sy+d*d
+                        if image[p3+3] > best_alpha or dist < best_dist:
+                            best_pos = p3
+                            best_dist = dist
+                            best_alpha = image[p3+3]
+        if best_alpha == 1.0 and best_dist <= (d+1)*(d+1):
+            return best_pos
+    return best_pos
+
+
+def render_nestmap(context, selection, uv_name, nestmap, nestmap_name, nestmap_index):
     """
     TODO implement GPU rendering and lightmap seams fading
     
@@ -300,39 +401,65 @@ def render_nestmap(context, selection, nestmap, nestmap_name, nestmap_index):
     n_render_groups = vlm_utils.get_n_render_groups(context)
     nestmaps = [np.zeros((len(target) * height * 4), 'f') for target, height in zip(targets, target_heights)]
     with_alpha = False
+    mask_path = vlm_utils.get_bakepath(context, type='MASKS')
     render_path = vlm_utils.get_bakepath(context, type='RENDERS')
-    # FIXME sort by bake_lighting to avoid constantly loading/unloading all renders
-    for obj_name in {obj.name for (obj, _, _, _) in selection}:
+    padding_threshold = seam_threshold = 0.99
+    # Load the render masks
+    mask_data = []
+    for i in range(n_render_groups):
+        path = f"{mask_path}Mask Group {i}.png"
+        loaded, render = vlm_utils.get_image_or_black(path, black_is_none=True)
+        if render:
+            pixel_data = np.zeros((src_w * src_h * 4), 'f') # using numpy is way faster
+            render.pixels.foreach_get(pixel_data)
+            mask_data.append(pixel_data)
+            if loaded == 'loaded': bpy.data.images.remove(render)
+        else:
+            mask_data.append(None)
+    render_data = []
+    loaded_bake_lighting = None
+    for obj_name in sorted(list({obj.name for (obj, _, _, _) in selection}), key=lambda x:bpy.data.objects[x].vlmSettings.bake_lighting):
         obj = bpy.data.objects[obj_name]
-        # Cut off pixels below the lightmap threshold to avoid seams:
-        # v => (v + rgb_offset) * rgb_scale * hdr_scale
         hdr_range = obj.vlmSettings.bake_hdr_range
         if obj.vlmSettings.bake_type == 'lightmap':
+            # Cut off pixels below the lightmap threshold to avoid seams:
+            # v => (v + rgb_offset) * (hdr_range / (hdr_range + rgb_offset)) * hdr_scale
             rgb_offset = -vlm_utils.get_lm_threshold() * 2
-            rgb_scale = hdr_range / (hdr_range + rgb_offset)
+            rgb_offset = 0.0 # FIXME disabled basic seam removal for HDR testing
+            rgb_scale = min(8.0, hdr_range / (hdr_range + rgb_offset))
             rgb_scale = rgb_scale * vlm_utils.get_hdr_scale(obj)
+            rgb_scale = 1.0
         else:
             rgb_offset = 0.0
             rgb_scale = 1.0
-        print(f'. Copying renders (RGB rescaling offset={rgb_offset:6.3f} scale={rgb_scale:6.3f} hdr range={hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
-        # Load the render 
-        render_data = []
-        for i in range(n_render_groups):
-            path = f"{render_path}{obj.vlmSettings.bake_lighting} - Group {i}.exr"
-            loaded, render = vlm_utils.get_image_or_black(path, black_is_none=True)
-            if render:
-                pixel_data = np.zeros((src_w * src_h * 4), 'f') # using numpy is way faster
-                render.pixels.foreach_get(pixel_data)
-                render_data.append(pixel_data)
-                if loaded == 'loaded': bpy.data.images.remove(render)
-            else:
-                render_data.append(None)
+        print(f'. Copying renders (RGB rescaling offset={rgb_offset:6.3f} scale={rgb_scale:6.3f} HDR range={hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
+        # Load the render (if not already loaded)
+        if obj.vlmSettings.bake_lighting != loaded_bake_lighting:
+            render_data.clear()
+            for i in range(n_render_groups):
+                path = f"{render_path}{obj.vlmSettings.bake_lighting} - Group {i}.exr"
+                loaded, render = vlm_utils.get_image_or_black(path, black_is_none=True)
+                if render:
+                    pixel_data = np.zeros((src_w * src_h * 4), 'f') # using numpy is way faster
+                    render.pixels.foreach_get(pixel_data)
+                    render_data.append(pixel_data)
+                    if loaded == 'loaded': bpy.data.images.remove(render)
+                else:
+                    render_data.append(None)
+            loaded_bake_lighting = obj.vlmSettings.bake_lighting
+
+        # Offscreen surface where we render the seam fading mask for lightmaps
+        offscreen = gpu.types.GPUOffScreen(src_w, src_h)
+        vertex_shader = 'in vec2 pos; in vec4 col; uniform vec2 ofs; out vec4 colInterp; void main() { colInterp = col; gl_Position = vec4(2.0 * (pos + ofs) - vec2(1.0), 0.0, 1.0); }'
+        fragment_shader = 'in vec4 colInterp; out vec4 FragColor; void main() { FragColor = colInterp; }'
+        shader_draw = gpu.types.GPUShader(vertex_shader, fragment_shader)
+        gpu.state.blend_set('NONE')
+
         # Render to the packed nest map
         for island in islands:
-            island_obj, _ = island['source']
+            island_obj, bm = island['source']
             if island_obj != obj: continue
             n, x, y, rot = island['place']
-            unpadded_mask = island['unpadded_mask']
             mask = island['masks'][rot]
             mask_w = len(mask)
             min_x, min_y = island['min_i']
@@ -350,30 +477,58 @@ def render_nestmap(context, selection, nestmap, nestmap_name, nestmap_index):
                     print(f'ERROR: object {obj.name} was not splitted but has parts on multiple nestmaps')
                 obj.vlmSettings.bake_nestmap = nestmap_index
             island_render = render_data[island_render_group]
+            island_group_mask = mask_data[island_render_group]
             target_mask = targets[n]
             target_w = len(target_mask)
             target_h = target_heights[n]
             target_tex = nestmaps[n]
 
-            # Identify opaque islands to process padding accordingly by fixing alpha on rendered borders (lightmaps are always opaque)
-            if obj.vlmSettings.bake_type == 'lightmap':
-                is_opaque = False # No border padding for lightmaps
-            elif obj.vlmSettings.bake_type == 'active':
-                is_opaque = False # No border padding for parts marked as translucent by the user
-            else: # Apply border padding if the part is opaque
-                alpha = 0
-                n_alpha = 0
-                for px, col_mask in enumerate(unpadded_mask):
-                    for span in col_mask:
-                        for py in range(span[0] + 1, span[1]):
-                            dx = px + min_x - padding
-                            dy = py + min_y - padding
-                            if 0 <= dx and dx < src_w and 0 <= dy and dy < src_h:
-                                alpha = alpha + island_render[4*(dx + dy*src_w) + 3]
-                                n_alpha = n_alpha + 1
-                is_opaque = alpha/n_alpha > 0.98 if n_alpha >= 32 else False
-                #if n_alpha > 64: print(f'. Translucency: {alpha/n_alpha:>6.1%} for {n_alpha} points')
-            with_alpha = with_alpha or not is_opaque
+            # Compute lightmap's seam fading mask
+            seam_fade = 1.0
+            is_lightmap = island_obj.vlmSettings.bake_type == 'lightmap'
+            if is_lightmap:
+                pts=[]
+                pts_col=[]
+                lines=[]
+                lines_col=[]
+                color_layer = bm.loops.layers.color.verify()
+                uv_layer = bm.loops.layers.uv[uv_name]
+                for face in island['faces']:
+                    prev_uv = first_uv = prev_col = first_col = None
+                    for loop in face.loops:
+                        uv = loop[uv_layer].uv
+                        col = loop[color_layer]
+                        pts.append(uv)
+                        pts_col.append(col)
+                        if prev_uv:
+                            lines.append(prev_uv)
+                            lines_col.append(prev_col)
+                            lines.append(uv)
+                            lines_col.append(col)
+                        else:
+                            first_uv = uv
+                            first_col = col
+                        prev_uv = uv
+                        prev_col = col
+                    lines.append(prev_uv)
+                    lines_col.append(prev_col)
+                    lines.append(first_uv)
+                    lines_col.append(first_col)
+                with offscreen.bind():
+                    fb = gpu.state.active_framebuffer_get()
+                    fb.clear(color=(0.0, 0.0, 0.0, 0.0))
+                    shader_draw.bind()
+                    tri_batch = batch_for_shader(shader_draw, 'TRIS', {"pos": pts, "col": pts_col})
+                    pt_batch = batch_for_shader(shader_draw, 'POINTS', {"pos": pts, "col": pts_col})
+                    line_batch = batch_for_shader(shader_draw, 'LINES', {"pos": lines, "col": lines_col})
+                    for px in sorted(range(-padding, padding+1), key=lambda x:abs(x), reverse=True):
+                        for py in sorted(range(-padding, padding+1), key=lambda x:abs(x), reverse=True):
+                            shader_draw.uniform_float("ofs", (px/float(src_w), py/float(src_h)) )
+                            tri_batch.draw(shader_draw)
+                            pt_batch.draw(shader_draw)
+                            line_batch.draw(shader_draw)
+                seam_data = offscreen.texture_color.read()
+                seam_data.dimensions = src_w * src_h * 4
                 
             for px, col_mask in enumerate(mask):
                 for span in col_mask:
@@ -396,43 +551,20 @@ def render_nestmap(context, selection, nestmap, nestmap_name, nestmap_index):
                             if 0 <= dx and dx < src_w and 0 <= dy and dy < src_h:
                                 p  = 4 * ((x+px) + (y+py) * target_w)
                                 p2 = 4 * (   dx  +    dy  * src_w   )
-                                if is_opaque and island_render[p2+3] < 1:
-                                    # border point: search nearest opaque (non border) color
-                                    best_alpha = island_render[p2+3]
-                                    best_pos = p2
-                                    for d in range(1, padding + 1):
-                                        for sx in range(dx-d, dx+d+1):
-                                            if 0 <= sx and sx < src_w:
-                                                if 0 <= dy-d and dy-d < src_h:
-                                                    p3 = 4 * (sx + (dy-d) * src_w)
-                                                    if island_render[p3+3] > best_alpha:
-                                                        best_alpha = island_render[p3+3]
-                                                        best_pos = p3
-                                                if 0 <= dy+d and dy+d < src_h:
-                                                    p3 = 4 * (sx + (dy+d) * src_w)
-                                                    if island_render[p3+3] > best_alpha:
-                                                        best_alpha = island_render[p3+3]
-                                                        best_pos = p3
-                                        for sy in range(dy-d +1, dy+d+1 -1):
-                                            if 0 <= sy and sy < src_h:
-                                                if 0 <= dx-d and dx-d < src_w:
-                                                    p3 = 4 * ((dx-d) + sy * src_w)
-                                                    if island_render[p3+3] > best_alpha:
-                                                        best_alpha = island_render[p3+3]
-                                                        best_pos = p3
-                                                if 0 <= dx+d and dx+d < src_w:
-                                                    p3 = 4 * ((dx+d) + sy * src_w)
-                                                    if island_render[p3+3] > best_alpha:
-                                                        best_alpha = island_render[p3+3]
-                                                        best_pos = p3
-                                        if best_alpha >= 1: break
-                                    for j in range(3):
-                                        target_tex[p+j] = (island_render[best_pos+j] + rgb_offset) * rgb_scale
-                                    target_tex[p+3] = 1
-                                else:
-                                    for j in range(3):
-                                        target_tex[p+j] = (island_render[p2+j] + rgb_offset) * rgb_scale
-                                    target_tex[p+3] = island_render[p2+3]
+                                if island_group_mask[p2+3] < padding_threshold: # border point: search nearest non border point
+                                    p2 = get_nearest_opaque_pos(island_group_mask, dx, dy, padding + 1, src_w, src_h)
+                                if is_lightmap:
+                                    s2 = p2
+                                    if seam_data[s2+3] < seam_threshold: # outside of seam mask: search nearest seam mask point
+                                        s2 = get_nearest_opaque_pos(seam_data, dx, dy, padding + 1, src_w, src_h)
+                                    seam_fade = seam_data[s2] / 255.0
+                                target_tex[p+0] = (island_render[p2+0] + rgb_offset) * rgb_scale * seam_fade
+                                target_tex[p+1] = (island_render[p2+1] + rgb_offset) * rgb_scale * seam_fade
+                                target_tex[p+2] = (island_render[p2+2] + rgb_offset) * rgb_scale * seam_fade
+                                #target_tex[p+0] = target_tex[p+1] = target_tex[p+2] = seam_fade
+                                target_tex[p+3] =  island_render[p2+3]
+                                if island_render[p2+3] < 1: with_alpha = True
+    render_data.clear()
 
     # Save the rendered nestmaps
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
@@ -488,7 +620,8 @@ def prepare_nesting(obj, render_size, padding, uv_name):
     uv_layer = bm.loops.layers.uv[uv_name]
     ftv, vtf = create_vert_face_db([f for f in bm.faces], uv_layer)
     islands = get_island(bm, ftv, vtf, uv_layer)
-
+    islands = get_merged_overlapping_islands(islands, uv_layer)
+    
     # Compute island masks by rendering masks then creating a simplified span view
     offscreen = gpu.types.GPUOffScreen(src_w, src_h)
     vertex_shader = 'in vec2 pos; uniform vec2 ofs; void main() { gl_Position = vec4(2.0 * (pos + ofs) - vec2(1.0), 0.0, 1.0); }'
@@ -538,39 +671,6 @@ def prepare_nesting(obj, render_size, padding, uv_name):
         with offscreen.bind():
             fb = gpu.state.active_framebuffer_get()
             fb.clear(color=(0.0, 0.0, 0.0, 0.0))
-            shader_draw.bind()
-            shader_draw.uniform_float("ofs", (0.0, 0.0))
-            tri_batch.draw(shader_draw)
-        buffer = offscreen.texture_color.read()
-        buffer.dimensions = src_w * src_h * 4
-
-        if False:
-            pack_image = bpy.data.images.new(f'{obj.name} - Island {index}', src_w, src_h, alpha=True)
-            pack_image.pixels = [v / 255 for v in buffer]
-            pack_image.filepath_raw = bpy.path.abspath(f'//{obj.name} - Island {index}.png')
-            pack_image.file_format = 'PNG'
-            pack_image.save()
-            print(f'. Island mask saved to {pack_image.filepath_raw}')
-            bpy.data.images.remove(pack_image)
-
-        island_hor = []
-        for x in range(island_w):
-            ymin = -1
-            spans = []
-            for y in range(island_h):
-                if buffer[4 * (x + y * src_w)] > 0:
-                    if ymin == -1: ymin = y
-                else:
-                    if ymin != -1:
-                        spans.append((ymin, y-1, y-1-ymin + 1))
-                        ymin = -1
-            if ymin != -1:
-                spans.append((ymin, island_h-1, island_h-1-ymin + 1))
-            island_hor.append(spans)
-        island['unpadded_mask'] = island_hor
-
-        with offscreen.bind():
-            fb = gpu.state.active_framebuffer_get()
             shader_draw.bind()
             for px in range(-padding, padding+1):
                 for py in range(-padding, padding+1):
@@ -624,7 +724,6 @@ def prepare_nesting(obj, render_size, padding, uv_name):
         island['source'] = (obj, bm)
         island['masks'] = island_masks
         island['pixcount'] = island_pix_count
-        # print(f'. Island #{index:>3}/{len(islands)} placement mask computed (size: {island_w:>4}x{island_h:>4}, pixcount: {island_pix_count:>7}px, fill rate: {island_pix_count/(island_w*island_h):>6.1%})')
         
     offscreen.free()
     print(f'. Nesting prepared ({len(islands):>3} islands, {total_pix_count:>7}px, {src_w}x{src_h} renders) for {obj.name}')

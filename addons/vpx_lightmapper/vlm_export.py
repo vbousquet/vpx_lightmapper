@@ -510,8 +510,8 @@ def export_vpx(op, context):
             break
         is_hdr = next( (o for o in objects if o.vlmSettings.bake_hdr_range > 1.0), None) is not None
         base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}')
-        #nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.png' # VPX does not support HDR, png are like webp but bigger
-        nestmap_path = f'{base_path}.webp'
+        nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.webp' # VPX does not support HDR
+        #nestmap_path = f'{base_path}.webp'
         if not os.path.exists(nestmap_path):
             op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
             return {'CANCELLED'}
@@ -540,7 +540,7 @@ def export_vpx(op, context):
         dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
         #print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (Format: {"EXR" if is_hdr else "PNG"})')
-        print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image')
+        print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
         nestmap_index += 1
         n_images += 1
 
@@ -594,6 +594,72 @@ def export_vpx(op, context):
                         br.skip(11 * 4)
                 elif br.tag == "PHMA":
                     phma_pos = br.pos
+                elif br.tag == "CODE":
+                    code_pos = br.pos
+                    code = br.get_string()
+                    br.pos = code_pos
+                    br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
+
+                    new_code = ""
+                    pending = None
+                    
+                    def push_lampz(lightmaps):
+                        code = ''
+                        light_processed = []
+                        for obj in sorted(lightmaps, key=lambda x: x.vlmSettings.bake_sync_light):
+                            vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
+                            lampz_id = '0'
+                            # try to identify lights and flashers with the pattern 'l11' or 'f11'
+                            if vpx_name:
+                                id = re.fullmatch(r'[lfLF]([0-9]+)', vpx_name)
+                                if id:
+                                    lampz_id = f'1{id[1]}' if vpx_name.startswith('f') else id[1]
+                                    if lampz_id not in light_processed:
+                                        code += f'	Lampz.MassAssign({lampz_id}) = {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
+                                        light_processed.append(lampz_id)
+                                else:
+                                    if vpx_name not in light_processed:
+                                        code += f'	\' Sync on {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
+                                        light_processed.append(vpx_name)
+                            hdr_scale = vlm_utils.get_hdr_scale(obj)
+                            code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, {100.0/hdr_scale:6.2f}, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
+                        return code
+                    
+                    def push_lightmap_move(lightmaps):
+                        code = ''
+                        for obj in sorted(lightmaps, key=lambda x: x.vlmSettings.bake_sync_light):
+                            sync = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
+                            if sync and sync.vlmSettings.movable_script != '':
+                                code += f'	{elem_ref(export_name(obj.name))}{sync.vlmSettings.movable_script} \' VLM.Props;{obj.vlmSettings.bake_sync_trans};{"LM" if obj.vlmSettings.bake_type=="lightmap" else "BM"}\n'
+                        return code
+                    
+                    def push_pending(pending):
+                        if not pending: return ''
+                        if pending[0] == 0: # Lampz
+                            return push_lampz([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_lighting == pending[1]])
+                        if pending[0] == 1: # Movable lightmap
+                            return push_lightmap_move([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_sync_trans == pending[1]])
+                    for line in code.splitlines():
+                        if '\' VLM.Lampz;' in line:
+                            new_pending = (0, *(line.split('\' VLM.Lampz;',1)[1].split(';')))
+                            if new_pending != pending:
+                                new_code += push_pending(pending)
+                                pending = new_pending
+                        elif '\' VLM.Props;' in line:
+                            new_pending = (1, *(line.split('\' VLM.Props;',1)[1].split(';')))
+                            if new_pending != pending:
+                                new_code += push_pending(pending)
+                                pending = new_pending
+                        else:
+                            new_code += push_pending(pending)
+                            pending = None
+                            new_code += line
+                            new_code += "\n"
+                    new_code += push_pending(pending)
+                        
+                    wr = biff_io.BIFF_writer()
+                    wr.write_string(new_code)
+                    br.insert_data(wr.get_data())
                 else:
                     br.skip_tag()
             # modify existing data to add missing VLM materials
@@ -742,26 +808,14 @@ def export_vpx(op, context):
             if id:
                 lampz_id = f'1{id[1]}' if vpx_name.startswith('f') else id[1]
                 if lampz_id not in light_processed:
-                    code += f'	Lampz.MassAssign({lampz_id}) = {vpx_name}\n'
+                    code += f'	Lampz.MassAssign({lampz_id}) = {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
                     light_processed.append(lampz_id)
             else:
                 if vpx_name not in light_processed:
-                    code += f"	' Sync on {vpx_name}\n"
+                    code += f'	\' Sync on {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
                     light_processed.append(vpx_name)
         hdr_scale = vlm_utils.get_hdr_scale(obj)
-        code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, {100.0/hdr_scale:6.2f}, "\n'
-    code += 'End Sub\n'
-
-    code += "\n"
-    code += "\n"
-    code += "' ===============================================================\n"
-    code += "' The following code can be copy/pasted to disable baked lights\n"
-    code += "' Lights are not removed on export since they are needed for ball\n"
-    code += "' reflections and may be used for lightmap synchronisation.\n"
-    code += "\n"
-    code += 'Sub HideLightHelper\n'
-    for light in sorted(baked_vpx_lights):
-        code += f'	{light}.Visible = False\n'
+        code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, {100.0/hdr_scale:6.2f}, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
     code += 'End Sub\n'
 
     code += "\n"
@@ -776,7 +830,19 @@ def export_vpx(op, context):
     for obj in movables:
         sync = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
         if sync and sync.vlmSettings.movable_script != '':
-            code += f'	{elem_ref(export_name(obj.name))}{sync.vlmSettings.movable_script}\n'
+            code += f'	{elem_ref(export_name(obj.name))}{sync.vlmSettings.movable_script} \' VLM.Props;{obj.vlmSettings.bake_sync_trans};{"LM" if obj.vlmSettings.bake_type=="lightmap" else "BM"}\n'
+    code += 'End Sub\n'
+
+    code += "\n"
+    code += "\n"
+    code += "' ===============================================================\n"
+    code += "' The following code can be copy/pasted to disable baked lights\n"
+    code += "' Lights are not removed on export since they are needed for ball\n"
+    code += "' reflections and may be used for lightmap synchronisation.\n"
+    code += "\n"
+    code += 'Sub HideLightHelper\n'
+    for light in sorted(baked_vpx_lights):
+        if len(light) > 0: code += f'	{light}.Visible = False\n'
     code += 'End Sub\n'
 
     code += "\n"

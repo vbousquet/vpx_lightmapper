@@ -47,6 +47,8 @@ def render_nestmaps(op, context):
 
     # reset UV of target objects (2 layers: 1 for default view projected, 1 for nested UV)
     to_nest = [o for o in result_col.all_objects]
+    to_nest_ldr = []
+    to_nest_hdr = []
     for obj in to_nest:
         uvs = [uv for uv in obj.data.uv_layers]
         while uvs:
@@ -54,10 +56,20 @@ def render_nestmaps(op, context):
         obj.data.uv_layers.new(name='UVMap Nested')
         vlm_utils.project_uv(camera, obj, proj_x, proj_y)
         obj.data.uv_layers.new(name='UVMap')
+        if obj.vlmSettings.bake_type == 'active' or obj.vlmSettings.bake_hdr_range <= 1.0:
+            to_nest_ldr.append(obj)
+        else: # VPX only supports opaque HDR
+            to_nest_hdr.append(obj)
 
     # Perform the actual island nesting and nestmap generation
     max_tex_size = min(4096, 2 * opt_tex_size)
-    n_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap Nested', render_size, max_tex_size, max_tex_size, 'Nestmap', 0)
+    if True:
+        n_ldr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, 'Nestmap', 0)
+        print('\n')
+        n_hdr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_hdr, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, 'Nestmap', n_ldr_nestmaps)
+        n_nestmaps = n_ldr_nestmaps + n_hdr_nestmaps
+    else:
+        n_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap Nested', render_size, max_tex_size, max_tex_size, 'Nestmap', 0)
 
     # Restore initial state
     bpy.ops.object.select_all(action='DESELECT')
@@ -65,5 +77,5 @@ def render_nestmaps(op, context):
         obj.select_set(True)
         context.view_layer.objects.active = obj
     context.scene.vlmSettings.last_bake_step = 'nestmaps'
-    print(f'Nestmap generation finished ({n_nestmaps} nestmaps generated for {len(to_nest)} objects) in {str(datetime.timedelta(seconds=time.time() - start_time))}.')
+    print(f'\nNestmap generation finished ({n_nestmaps} nestmaps generated for {len(to_nest)} objects) in {str(datetime.timedelta(seconds=time.time() - start_time))}.')
     return {'FINISHED'}

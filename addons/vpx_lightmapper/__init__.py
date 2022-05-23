@@ -262,7 +262,6 @@ class VLM_Object_props(PropertyGroup):
     use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot pos instead of Rot.", default = False)
     # Bake result properties (for object inside the bake result collection)
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
-    # bake_objects: PointerProperty(name="Bake", type=bpy.types.Collection, description="Bake collection included in this bake/lightmap")
     bake_objects: StringProperty(name="Bake", description="Bake collections included in this bake/lightmap", default="")
     bake_sync_light: StringProperty(name="Sync Light", description="Object to sync light state on", default="")
     bake_sync_trans: StringProperty(name="Sync Trans", description="Object to sync transform on", default="")

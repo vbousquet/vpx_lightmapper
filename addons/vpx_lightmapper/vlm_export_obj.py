@@ -46,8 +46,9 @@ def export_obj(op, context):
         uvs = [uv for uv in dup.data.uv_layers]
         while uvs:
             dup.data.uv_layers.remove(uvs.pop())
-        uv_layer = dup.data.uv_layers.new(name='UVMap')
-        vlm_utils.project_uv(camera, dup, proj_x, proj_y)
+        obj.data.uv_layers.new(name='UVMap Nested')
+        vlm_utils.project_uv(camera, obj, proj_x, proj_y)
+        obj.data.uv_layers.new(name='UVMap')
         to_nest.append(dup)
 
     # Perform the actual island nesting and packmap generation
@@ -55,7 +56,7 @@ def export_obj(op, context):
     if len([o for o in selected_objects if o.vlmSettings.bake_lighting != '']) == 1:
         export_name = next((o for o in selected_objects if o.vlmSettings.bake_lighting != '')).name
     max_tex_size = min(4096, 2 * opt_tex_size)
-    n_nestmap, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap', render_size, max_tex_size, max_tex_size, export_name, 0)
+    n_nestmap, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, export_name, 0)
     to_nest.extend(splitted_objects)
 
     # Export Wavefront objects

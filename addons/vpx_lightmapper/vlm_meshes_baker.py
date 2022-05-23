@@ -80,6 +80,8 @@ def create_bake_meshes(op, context):
 
     # Bake mesh generation settings
     opt_backface_limit_angle = context.scene.vlmSettings.remove_backface
+    opt_limited_dissolve_limit = radians(5)
+    opt_merge_double_limit = 0.001 * global_scale
     opt_vpx_reflection = context.scene.vlmSettings.keep_pf_reflection_faces
     opt_lod_threshold = 16 * opt_tex_size / 4096  # start LOD for biggest face below 16x16 pixels for 4K renders (1 pixel for 256px renders)
     opt_lod_threshold = int(opt_lod_threshold * opt_lod_threshold)
@@ -153,17 +155,12 @@ def create_bake_meshes(op, context):
             dup = bpy.data.objects[obj_name].copy()
             dup.data = dup.data.copy()
             result_col.objects.link(dup)
+            bpy.ops.object.select_all(action='DESELECT')
+            dup.select_set(True)
+            context.view_layer.objects.active = dup
             dup_name = dup.name
             if dup.type != 'MESH':
-                bpy.ops.object.select_all(action='DESELECT')
-                dup.select_set(True)
-                context.view_layer.objects.active = dup
                 bpy.ops.object.convert(target='MESH')
-                bpy.ops.object.mode_set(mode='EDIT')
-                bpy.ops.mesh.reveal()
-                bpy.ops.mesh.select_all(action='SELECT')
-                bpy.ops.mesh.dissolve_limited(angle_limit = radians(0.1))
-                bpy.ops.object.mode_set(mode='OBJECT')
                 dup = bpy.data.objects[dup_name]
             dup.data.free_normals_split()
             dup.data.use_auto_smooth = False
@@ -196,8 +193,8 @@ def create_bake_meshes(op, context):
             bpy.ops.object.mode_set(mode = 'EDIT')
             bpy.ops.mesh.reveal()
             bpy.ops.mesh.select_all(action='SELECT')
-            bpy.ops.mesh.remove_doubles(threshold = 0.001 * global_scale)
-            bpy.ops.mesh.dissolve_limited(angle_limit = radians(0.1))
+            bpy.ops.mesh.remove_doubles(threshold = opt_merge_double_limit)
+            bpy.ops.mesh.dissolve_limited(angle_limit = opt_limited_dissolve_limit)
             bpy.ops.mesh.delete_loose()
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.object.mode_set(mode = 'OBJECT')
@@ -209,8 +206,7 @@ def create_bake_meshes(op, context):
             triangle_loops = bm.calc_loop_triangles()
             areas = {face: 0.0 for face in bm.faces} 
             for loop in triangle_loops:
-                face = loop[0].face
-                areas[face] = areas[face] + vlm_utils.tri_area( *(Vector( (*l[uv_loop].uv, 0) ) for l in loop) )
+                areas[loop[0].face] += vlm_utils.tri_area( *(Vector( (*l[uv_loop].uv, 0) ) for l in loop) )
             bm.free()
             max_size = int(max(areas.values()) * proj_x * proj_y)
             if max_size < opt_lod_threshold:
@@ -255,6 +251,9 @@ def create_bake_meshes(op, context):
         override["object"] = override["active_object"] = bake_target
         override["selected_objects"] = override["selected_editable_objects"] = [bake_target]
         bpy.ops.object.shade_flat(override)
+
+        # if bake_name == 'Parts':
+            # return {'FINISHED'}
 
         bpy.ops.object.select_all(action='DESELECT')
         bake_target.select_set(True)
@@ -304,8 +303,8 @@ def create_bake_meshes(op, context):
         n_faces = len(bake_target.data.polygons)
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.mesh.remove_doubles(threshold = 0.001 * global_scale)
-        bpy.ops.mesh.dissolve_limited(angle_limit = radians(0.1))
+        bpy.ops.mesh.remove_doubles(threshold = opt_merge_double_limit)
+        bpy.ops.mesh.dissolve_limited(angle_limit = opt_limited_dissolve_limit)
         bpy.ops.mesh.delete_loose()
         bpy.ops.mesh.select_all(action='SELECT')
         bpy.ops.object.mode_set(mode='OBJECT')
@@ -363,8 +362,8 @@ def create_bake_meshes(op, context):
         bpy.ops.object.mode_set(mode='OBJECT')
         
         # Add a white vertex color layer for lightmap seam fading
-        # if not bake_mesh.vertex_colors:
-            # bake_mesh.vertex_colors.new()
+        if not bake_mesh.vertex_colors:
+            bake_mesh.vertex_colors.new()
         
         print(f'. Base solid mesh has {len(bake_mesh.polygons)} tris and {len(bake_mesh.vertices)} vertices')
         bake_meshes.append((bake_col, bake_name, bake_mesh, sync_obj, is_spinner, use_obj_pos))
@@ -681,7 +680,7 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, 
                 face = bm.faces[face_index]
                 if face.material_index > -1 and imaps[face.material_index + 1] and imaps[face.material_index + 1][4 * xy] > lm_threshold:
                     face.tag = True
-    if True:
+    if False:
         # Basic pruning: just remove the face under a lighting threshold
         faces = [face for face in bm.faces if not face.tag]
         if faces: bmesh.ops.delete(bm, geom=faces, context='FACES')
