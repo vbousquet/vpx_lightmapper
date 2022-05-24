@@ -339,64 +339,44 @@ def get_nearest_opaque_pos(image, dx, dy, padding, src_w, src_h):
     '''
     best_pos = 4 * (   dx  +    dy  * src_w   )
     best_alpha = image[best_pos+3]
-    best_dist = (padding+1) * (padding+1) * 2
+    best_dist = (padding+1) * (padding+1)
     for d in range(1, padding):
-        for sx in range(dx-d, dx+d+1):
+        if best_alpha == 1.0 and best_dist <= (d+1)*(d+1):
+            return best_pos
+        for i in range(-d, d+1):
+            dist = i*i+d*d
+            sx = dx + i
+            sy = dy + i
             if 0 <= sx and sx < src_w:
                 if 0 <= dy-d and dy-d < src_h:
                     p3 = 4 * (sx + (dy-d) * src_w)
-                    if image[p3+3] >= best_alpha:
-                        dist = sx*sx+d*d
-                        if image[p3+3] > best_alpha or dist < best_dist:
-                            best_pos = p3
-                            best_dist = dist
-                            best_alpha = image[p3+3]
+                    if image[p3+3] > best_alpha or (image[p3+3] == best_alpha and dist < best_dist):
+                        best_pos = p3
+                        best_dist = dist
+                        best_alpha = image[p3+3]
                 if 0 <= dy+d and dy+d < src_h:
                     p3 = 4 * (sx + (dy+d) * src_w)
-                    if image[p3+3] >= best_alpha:
-                        dist = sx*sx+d*d
-                        if image[p3+3] > best_alpha or dist < best_dist:
-                            best_pos = p3
-                            best_dist = dist
-                            best_alpha = image[p3+3]
-        for sy in range(dy-d +1, dy+d+1 -1):
+                    if image[p3+3] > best_alpha or (image[p3+3] == best_alpha and dist < best_dist):
+                        best_pos = p3
+                        best_dist = dist
+                        best_alpha = image[p3+3]
             if 0 <= sy and sy < src_h:
                 if 0 <= dx-d and dx-d < src_w:
                     p3 = 4 * ((dx-d) + sy * src_w)
-                    if image[p3+3] >= best_alpha:
-                        dist = sy*sy+d*d
-                        if image[p3+3] > best_alpha or dist < best_dist:
-                            best_pos = p3
-                            best_dist = dist
-                            best_alpha = image[p3+3]
+                    if image[p3+3] > best_alpha or (image[p3+3] == best_alpha and dist < best_dist):
+                        best_pos = p3
+                        best_dist = dist
+                        best_alpha = image[p3+3]
                 if 0 <= dx+d and dx+d < src_w:
                     p3 = 4 * ((dx+d) + sy * src_w)
-                    if image[p3+3] >= best_alpha:
-                        dist = sy*sy+d*d
-                        if image[p3+3] > best_alpha or dist < best_dist:
-                            best_pos = p3
-                            best_dist = dist
-                            best_alpha = image[p3+3]
-        if best_alpha == 1.0 and best_dist <= (d+1)*(d+1):
-            return best_pos
+                    if image[p3+3] > best_alpha or (image[p3+3] == best_alpha and dist < best_dist):
+                        best_pos = p3
+                        best_dist = dist
+                        best_alpha = image[p3+3]
     return best_pos
 
 
 def render_nestmap(context, selection, uv_name, nestmap, nestmap_name, nestmap_index):
-    """
-    TODO implement GPU rendering and lightmap seams fading
-    
-    For each island:
-    - render mask of island, with padding and fading:
-      . render opaque tris/lines/points for each of the padding x/y, with a value of 1 for red channel, interpolated vertex color for blue channel
-      . render opaque tris/lines/points at the center, with a value of 1 for green channel
-      => red channel is full mask, green channel is untouched mask, blue channel is fading
-    - perform data transfer, using mask for fading and padding search: read mask and depending on its value
-      . (0,.,.) => Discard
-      . (1,a,1) => Copy, multiplied by 'a'
-      . alpha < 0 => perform opaque padding for opaque islands
-    
-    """
     src_w, src_h, padding, islands, targets, target_heights = nestmap
     n_render_groups = vlm_utils.get_n_render_groups(context)
     nestmaps = [np.zeros((len(target) * height * 4), 'f') for target, height in zip(targets, target_heights)]
@@ -558,11 +538,15 @@ def render_nestmap(context, selection, uv_name, nestmap, nestmap_name, nestmap_i
                                     if seam_data[s2+3] < seam_threshold: # outside of seam mask: search nearest seam mask point
                                         s2 = get_nearest_opaque_pos(seam_data, dx, dy, padding + 1, src_w, src_h)
                                     seam_fade = seam_data[s2] / 255.0
+                                #target_tex[p+0] = target_tex[p+1] = target_tex[p+2] = seam_fade
                                 target_tex[p+0] = (island_render[p2+0] + rgb_offset) * rgb_scale * seam_fade
                                 target_tex[p+1] = (island_render[p2+1] + rgb_offset) * rgb_scale * seam_fade
                                 target_tex[p+2] = (island_render[p2+2] + rgb_offset) * rgb_scale * seam_fade
-                                #target_tex[p+0] = target_tex[p+1] = target_tex[p+2] = seam_fade
                                 target_tex[p+3] =  island_render[p2+3]
+                                # target_tex[p+0] = seam_fade # Red is lightmap seam fading
+                                # target_tex[p+1] = island_render[p2+3] # Green is source render alpha
+                                # target_tex[p+2] = island_render[4 * (   dx  +    dy  * src_w   )+3] # Blue is unpadded source render alpha
+                                # target_tex[p+3] =  1.0
                                 if island_render[p2+3] < 1: with_alpha = True
     render_data.clear()
 
