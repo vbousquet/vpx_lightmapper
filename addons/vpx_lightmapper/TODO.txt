@@ -1,13 +1,17 @@
 TODO
+- fix artefact on lane guide in Warlok (due to normals being turned backwards when building bake mesh)
+
+- fix VPX in order to be able to use a playfield_mesh for the playfield (to get the correct physics setup for playfield)
+- fix VPX rendering reflection in playfield holes
+- VPX potential optimizations: Unshaded path can be more efficient (single tex fetch) => Tested, 1.5ms speedup on a 22ms render time on a GTX650. Is it really worth the effort ?
+- VPX potential optimizations: HDR texture should be half float (64b instead of 128b, or even 48b without alpha channel) to improve cache hit and limit memory bandwidth consumption (but HDR is not working anyway due to DX9 downscaling the texture)
+
 - Implement surface positionning relative to a ramp
 - Add support for loading embedded LZW encoded bmp files (very seldom, just one identified in the full example table)
 - JP's Star Trek has a wrong texture positionning (panel above ramp)
 - Support 'active' (i.e. non opaque bake) objects for the occluder selection
 - Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled
 
-
-- fix VPX in order to be able to use a playfield_mesh for the playfield (to get the correct physics setup for playfield)
-- fix VPX rendering reflection in playfield holes
 
 
 Rewrite the documentation with a step by step guide (and corresponding vpx/blend files):
@@ -20,17 +24,11 @@ o Step 6: transparent parts & 'bake mask' feature
 . Step 7: better playfield with 3D wood
 . Step 8: 3D inserts
 
-
-VPX potential optimizations 
-- Unshaded path can be more efficient (single tex fetch) => Tested, 1.5ms speedup on a 22ms render time on a GTX650. Is it really worth the effort ?
-- HDR texture should be half float (64b instead of 128b, or even 48b without alpha channel) to improve cache hit and limit memory bandwidth consumption (but HDR is not working anyway due to DX9 downscaling the texture)
-
-
-
-
-
-
 Closed items:
+- do not take in account 'bake mask' when rendering padding mask
+- fix incorrect padding of nestmaps (wrong distance in padding search)
+- support multiple sync script
+- script: for Lampz, don't massassign to a lamp not found in the vpx file
 - rewrite a clean lightmap seam fader => deactivated color offset, and finished fading on adjacent faces
 - fix HDR range scaling => ideally it should just use EXR for HDR lightmaps, and fix VPX where needed => seems ok right now
 - overlapping islands should be nested together (considered as a single island by the nestmapper, perhaps with a way to limit this for very large overlays)
