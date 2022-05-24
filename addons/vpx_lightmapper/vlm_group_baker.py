@@ -229,14 +229,14 @@ def render_group_masks(op, context):
         linked_objects = []
         for obj in bake_col.all_objects:
             if obj.vlmSettings.render_group == group_index and not obj.vlmSettings.indirect_only:
-                if obj.vlmSettings.bake_mask and obj.vlmSettings.bake_mask not in linked_objects:
-                    scene.collection.objects.link(obj.vlmSettings.bake_mask)
-                    linked_objects.append(obj.vlmSettings.bake_mask)
+                # if obj.vlmSettings.bake_mask and obj.vlmSettings.bake_mask not in linked_objects:
+                    # scene.collection.objects.link(obj.vlmSettings.bake_mask)
+                    # linked_objects.append(obj.vlmSettings.bake_mask)
                 if obj.vlmSettings.bake_to: obj = obj.vlmSettings.bake_to
                 if obj not in linked_objects:
                     scene.collection.objects.link(obj)
                     linked_objects.append(obj)
-        print(f'\n. Rendering group #{group_index}/{n_render_groups} ({len(linked_objects)} objects)')
+        print(f'\n. Rendering group #{group_index+1}/{n_render_groups} ({len(linked_objects)} objects)')
         
         scene.render.filepath = f'{bakepath}Mask Group {group_index}.png'
         scene.render.image_settings.file_format = 'PNG'
