@@ -84,6 +84,7 @@ def create_bake_meshes(op, context):
     opt_merge_double_limit = 0.001 * global_scale
     opt_vpx_reflection = context.scene.vlmSettings.keep_pf_reflection_faces
     opt_lod_threshold = 16 * opt_tex_size / 4096  # start LOD for biggest face below 16x16 pixels for 4K renders (1 pixel for 256px renders)
+    #opt_lod_threshold = 0 # Disable LOD
     opt_lod_threshold = int(opt_lod_threshold * opt_lod_threshold)
     opt_lightmap_prune_res = min(256, opt_tex_size) # resolution used in the algorithm for unlit face pruning (artefact observed at 256)
     prunemap_width = int(opt_lightmap_prune_res * opt_ar)
@@ -280,7 +281,7 @@ def create_bake_meshes(op, context):
                     pass
                 else:
                     face_center = face.calc_center_bounds()
-                    dot_value = normal.dot(camera.location - face_center)
+                    dot_value = normal.dot((camera.location - face_center).normalized())
                     if dot_value >= dot_limit:
                         pass
                     elif opt_vpx_reflection:
