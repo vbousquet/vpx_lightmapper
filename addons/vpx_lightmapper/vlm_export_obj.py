@@ -46,9 +46,9 @@ def export_obj(op, context):
         uvs = [uv for uv in dup.data.uv_layers]
         while uvs:
             dup.data.uv_layers.remove(uvs.pop())
-        obj.data.uv_layers.new(name='UVMap Nested')
-        vlm_utils.project_uv(camera, obj, proj_x, proj_y)
-        obj.data.uv_layers.new(name='UVMap')
+        dup.data.uv_layers.new(name='UVMap Nested')
+        vlm_utils.project_uv(camera, dup, proj_x, proj_y)
+        dup.data.uv_layers.new(name='UVMap')
         to_nest.append(dup)
 
     # Perform the actual island nesting and packmap generation
