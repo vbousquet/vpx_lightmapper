@@ -60,7 +60,6 @@ def create_bake_meshes(op, context):
     print("\nCreating all bake meshes")
     start_time = time.time()
     global_scale = vlm_utils.get_global_scale(context)
-
     n_render_groups = vlm_utils.get_n_render_groups(context)
     cursor_loc = context.scene.cursor.location
     context.scene.cursor.location = camera.location # Used for sorting faces by distance from view point
@@ -80,7 +79,7 @@ def create_bake_meshes(op, context):
 
     # Bake mesh generation settings
     opt_backface_limit_angle = context.scene.vlmSettings.remove_backface
-    opt_limited_dissolve_limit = radians(5)
+    opt_limited_dissolve_limit = radians(1) # Test with 5 degrees resulted in artefact for long ball guide (on Warlok table)
     opt_merge_double_limit = 0.001 * global_scale
     opt_vpx_reflection = context.scene.vlmSettings.keep_pf_reflection_faces
     opt_lod_threshold = 16 * opt_tex_size / 4096  # start LOD for biggest face below 16x16 pixels for 4K renders (1 pixel for 256px renders)

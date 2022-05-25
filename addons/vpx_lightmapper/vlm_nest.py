@@ -96,7 +96,6 @@ def get_merged_overlapping_islands(islands, uv_layer):
                     b2 = g.loops[1][uv_layer].uv
                     c2 = g.loops[2][uv_layer].uv
                     if tri_overlaps(a1, b1, c1, a2, b2, c2):
-                        #print('. Overlapping islands merged')
                         merged = True
                         other_island['faces'].extend(island['faces'])
                         update_island_bounds(other_island, uv_layer)
@@ -449,14 +448,15 @@ def render_nestmap(context, selection, uv_name, nestmap, nestmap_name, nestmap_i
             if island_render_group < 0 or island_render_group >= len(render_data):
                 print('. Missing render group, skipping island (likely a bug)')
                 continue
-            if render_data[island_render_group] is None:
-                print('. No render (likely uninfluenced lightmap), skipping island')
-                continue
             if obj.vlmSettings.bake_nestmap != nestmap_index:
                 if obj.vlmSettings.bake_nestmap != -1:
                     print(f'ERROR: object {obj.name} was not splitted but has parts on multiple nestmaps')
                 obj.vlmSettings.bake_nestmap = nestmap_index
             island_render = render_data[island_render_group]
+            if island_render is None:
+                print('. No render (likely uninfluenced lightmap), skipping island')
+                continue
+                #island_render = np.ones((src_w * src_h * 4), 'f')
             island_group_mask = mask_data[island_render_group]
             target_mask = targets[n]
             target_w = len(target_mask)

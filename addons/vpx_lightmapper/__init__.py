@@ -318,6 +318,10 @@ class VLM_OT_select_occluded(Operator):
     bl_description = "Select occluded objects"
     bl_options = {"REGISTER", "UNDO"}
     
+    @classmethod
+    def poll(cls, context):
+        return context.object.mode == 'OBJECT'
+
     def execute(self, context):
         return vlm_occlusion.select_occluded(self, context)
 
@@ -328,6 +332,10 @@ class VLM_OT_select_indirect(Operator):
     bl_description = "Select objects that indirectly affect rendering"
     bl_options = {"REGISTER", "UNDO"}
     
+    @classmethod
+    def poll(cls, context):
+        return context.object.mode == 'OBJECT'
+
     def execute(self, context):
         for obj in context.scene.collection.all_objects:
             obj.select_set(obj.name in context.view_layer.objects and obj.vlmSettings.indirect_only)
@@ -556,7 +564,7 @@ class VLM_OT_select_render_group(Operator):
     
     @classmethod
     def poll(cls, context):
-        return len(set((obj.vlmSettings.render_group for obj in context.selected_objects if obj.vlmSettings.render_group >= 0))) == 1
+        return context.object.mode == 'OBJECT' and len(set((obj.vlmSettings.render_group for obj in context.selected_objects if obj.vlmSettings.render_group >= 0))) == 1
 
     def execute(self, context):
         context.scene.vlmSettings.render_group_select = next((obj.vlmSettings.render_group for obj in context.selected_objects if obj.vlmSettings.render_group >= 0))
@@ -571,7 +579,7 @@ class VLM_OT_select_nestmap_group(Operator):
     
     @classmethod
     def poll(cls, context):
-        return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_nestmap >= 0), None) is not None
+        return context.object.mode == 'OBJECT' and next((obj for obj in context.selected_objects if obj.vlmSettings.bake_nestmap >= 0), None) is not None
 
     def execute(self, context):
         for obj in [obj for obj in context.selected_objects if obj.vlmSettings.bake_nestmap >= 0]:
