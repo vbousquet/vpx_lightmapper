@@ -360,7 +360,8 @@ def get_lightings(context):
                 light_group = [l for l in lights if tuple(sorted(set(l.vlmSettings.vpx_object.split(';')))) == vpx_lights]
                 name = f"{light_col.name}-{vpx_lights[0]}"
                 light_scenarios.append( [name, True, light_col, light_group, None] )
-    return sorted(light_scenarios, key=lambda scenario: scenario[0])
+    # Sort by scenario name, starting by scenarios with custom world
+    return sorted(light_scenarios, key=lambda scenario: f'0{scenario[0]}' if scenario[2].vlmSettings.world else f'1{scenario[0]}')
 
 
 def get_n_lightings(context):
