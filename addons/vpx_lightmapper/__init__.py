@@ -180,6 +180,7 @@ class VLM_Scene_props(PropertyGroup):
         name='Last Bake Step',
         default='unstarted'
     )
+    batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
     tex_size: EnumProperty(
         items=[
             ('256', '256', '256x256', '', 256),
@@ -196,6 +197,7 @@ class VLM_Scene_props(PropertyGroup):
     padding: IntProperty(name="Padding", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
     keep_pf_reflection_faces: BoolProperty(name="Keep playfield reflection", description="Keep faces only visible through playfield reflection", default = False)
+    max_lighting: IntProperty(name="Max Light.", description="Maximum number of lighting scenario baked simultaneously at 4K (0 = no limit)", default = 0, min = 0)
     # Exporter options
     enable_vpx_reflection: BoolProperty(name="Enable VPX reflection", description="Enable VPX playfield reflection for exported models and lightmaps. Note that this will usually leads to 'double' reflections since indirect light is already baked.", default = False)
     export_mode: EnumProperty(
@@ -387,6 +389,35 @@ class VLM_OT_render_nestmaps(Operator):
         return vlm_nestmap_baker.render_nestmaps(self, context)
 
 
+class VLM_OT_batch_bake(Operator):
+    bl_idname = "vlm.batch_bake_operator"
+    bl_label = "Batch All"
+    bl_description = "Performs all the bake steps in a batch, then export an updated VPX table (lengthy operation)"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        start_time = time.time()
+        print(f"\nStarting complete bake batch...")
+        if context.scene.vlmSettings.batch_inc_group:
+            result = vlm_group_baker.compute_render_groups(self, context)
+            if 'FINISHED' not in result: return result
+            bpy.ops.wm.save_mainfile()
+        result = vlm_render_baker.render_all_groups(self, context)
+        if 'FINISHED' not in result: return result
+        bpy.ops.wm.save_mainfile()
+        result = vlm_meshes_baker.create_bake_meshes(self, context)
+        if 'FINISHED' not in result: return result
+        bpy.ops.wm.save_mainfile()
+        result = vlm_nestmap_baker.render_nestmaps(self, context)
+        if 'FINISHED' not in result: return result
+        bpy.ops.wm.save_mainfile()
+        result = vlm_export.export_vpx(self, context)
+        if 'FINISHED' not in result: return result
+        bpy.ops.wm.save_mainfile()
+        print(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}")
+        return {'FINISHED'}
+
+
 class VLM_OT_export_vpx(Operator):
     bl_idname = "vlm.export_vpx_operator"
     bl_label = "5. Export VPX"
@@ -450,29 +481,6 @@ class VLM_OT_export_pov(Operator):
         if context.scene.render.pixel_aspect_x != 1 or context.scene.render.pixel_aspect_y != 1:
             print(f"WARNING: Blender's pixel aspect is not squared: {context.scene.render.pixel_aspect_x}, {context.scene.render.pixel_aspect_y}")
         print(f"Use VPX 'F6' mode to move camera to ({round(-scale*camera_object.location[1])}, {round(scale*camera_object.location[0])}, {round(scale*camera_object.location[2])})\n")
-        return {'FINISHED'}
-
-
-class VLM_OT_batch_bake(Operator):
-    bl_idname = "vlm.batch_bake_operator"
-    bl_label = "Batch All"
-    bl_description = "Performs all the bake steps in a batch, then export an updated VPX table (lengthy operation)"
-    bl_options = {"REGISTER", "UNDO"}
-    
-    def execute(self, context):
-        start_time = time.time()
-        print(f"\nStarting complete bake batch...")
-        result = vlm_group_baker.compute_render_groups(self, context)
-        if 'FINISHED' not in result: return result
-        result = vlm_render_baker.render_all_groups(self, context)
-        if 'FINISHED' not in result: return result
-        result = vlm_meshes_baker.create_bake_meshes(self, context)
-        if 'FINISHED' not in result: return result
-        result = vlm_nestmap_baker.render_nestmaps(self, context)
-        if 'FINISHED' not in result: return result
-        result = vlm_export.export_vpx(self, context)
-        if 'FINISHED' not in result: return result
-        print(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}")
         return {'FINISHED'}
 
 
@@ -730,6 +738,7 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         if vlmProps.last_bake_step == 'meshes': step = 3
         if vlmProps.last_bake_step == 'nestmaps': step = 4
         layout.prop(vlmProps, "tex_size")
+        layout.prop(vlmProps, "max_lighting")
         layout.prop(vlmProps, "padding")
         layout.prop(vlmProps, "remove_backface", text='Backface')
         layout.prop(vlmProps, "keep_pf_reflection_faces")
@@ -746,6 +755,7 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         row.operator(VLM_OT_render_nestmaps.bl_idname, icon='TEXTURE_DATA', text='Nestmaps', emboss=step>2)
         row.operator(VLM_OT_export_vpx.bl_idname, icon='EXPORT', text='Export', emboss=step>3)
         row.operator(VLM_OT_batch_bake.bl_idname)
+        layout.prop(vlmProps, "batch_inc_group", expand=True)
 
 
 class VLM_PT_Col_Props(bpy.types.Panel):

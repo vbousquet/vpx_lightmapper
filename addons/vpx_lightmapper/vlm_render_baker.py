@@ -270,7 +270,10 @@ def render_all_groups(op, context):
     bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
     opt_tex_size = int(context.scene.vlmSettings.tex_size)
-    max_scenarios_in_batch = int(8 * 4096 / opt_tex_size)
+    if context.scene.vlmSettings.max_lighting == 0:
+        max_scenarios_in_batch = 1024
+    else:
+        max_scenarios_in_batch = int(context.scene.vlmSettings.max_lighting * 4096 / opt_tex_size)
     opt_force_render = False # Force rendering even if cache is available
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     n_render_groups = vlm_utils.get_n_render_groups(context)
