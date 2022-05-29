@@ -635,7 +635,7 @@ def export_vpx(op, context):
                             has_solid_bake_mat = True
                         elif name == 'VLM.Bake.Active':
                             has_active_bake_mat = True
-                        elif name == 'VLM.Light':
+                        elif name == 'VLM.Lightmap':
                             has_light_mat = True
                         br.skip(11 * 4)
                 elif br.tag == "PHMA":
