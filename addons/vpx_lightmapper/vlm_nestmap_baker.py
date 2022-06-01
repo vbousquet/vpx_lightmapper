@@ -37,11 +37,9 @@ def render_nestmaps(op, context):
     bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
     vlm_utils.mkpath(bakepath)
     selected_objects = list(context.selected_objects)
-    opt_tex_size = int(context.scene.vlmSettings.tex_size)
-    opt_ar = context.scene.vlmSettings.render_aspect_ratio
-    proj_x = opt_tex_size * context.scene.render.pixel_aspect_x * opt_ar
-    proj_y = opt_tex_size * context.scene.render.pixel_aspect_y
-    render_size = (int(opt_tex_size * opt_ar), opt_tex_size)
+    render_size = vlm_utils.get_render_size(context)
+    proj_x = render_size[0] * context.scene.render.pixel_aspect_x
+    proj_y = render_size[1] * context.scene.render.pixel_aspect_y
     lc = vlm_collections.find_layer_collection(context.view_layer.layer_collection, result_col)
     if lc: lc.exclude = False
 
@@ -62,7 +60,7 @@ def render_nestmaps(op, context):
             to_nest_hdr.append(obj)
 
     # Perform the actual island nesting and nestmap generation
-    max_tex_size = min(4096, 2 * opt_tex_size)
+    max_tex_size = min(8192, int(2 * context.scene.vlmSettings.tex_size))
     if True:
         print('\nNesting all LDR parts')
         n_ldr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, 'Nestmap', 0)

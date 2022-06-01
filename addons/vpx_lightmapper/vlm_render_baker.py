@@ -269,11 +269,10 @@ def render_all_groups(op, context):
     start_time = time.time()
     bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
-    opt_tex_size = int(context.scene.vlmSettings.tex_size)
     if context.scene.vlmSettings.max_lighting == 0:
         max_scenarios_in_batch = 1024
     else:
-        max_scenarios_in_batch = int(context.scene.vlmSettings.max_lighting * 4096 / opt_tex_size)
+        max_scenarios_in_batch = int(context.scene.vlmSettings.max_lighting * 4096 / int(context.scene.vlmSettings.render_height))
     opt_force_render = False # Force rendering even if cache is available
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     n_render_groups = vlm_utils.get_n_render_groups(context)
@@ -298,8 +297,9 @@ def render_all_groups(op, context):
     scene.render.engine = 'CYCLES'
     scene.render.use_border = False
     scene.render.use_crop_to_border = False
-    scene.render.resolution_y = opt_tex_size
-    scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio)
+    render_size = vlm_utils.get_render_size(context)
+    scene.render.resolution_x = render_size[0]
+    scene.render.resolution_y = render_size[1]
     scene.render.film_transparent = True
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'

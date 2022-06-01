@@ -400,18 +400,8 @@ def render_nestmap(context, selection, uv_name, nestmap, nestmap_name, nestmap_i
     for obj_name in sorted(list({obj.name for (obj, _, _, _) in selection}), key=lambda x:bpy.data.objects[x].vlmSettings.bake_lighting):
         obj = bpy.data.objects[obj_name]
         hdr_range = obj.vlmSettings.bake_hdr_range
-        if obj.vlmSettings.bake_type == 'lightmap':
-            # Cut off pixels below the lightmap threshold to avoid seams:
-            # v => (v + rgb_offset) * (hdr_range / (hdr_range + rgb_offset)) * hdr_scale
-            rgb_offset = -vlm_utils.get_lm_threshold() * 2
-            rgb_offset = 0.0 # FIXME disabled basic seam removal for HDR testing
-            rgb_scale = min(8.0, hdr_range / (hdr_range + rgb_offset))
-            rgb_scale = rgb_scale * vlm_utils.get_hdr_scale(obj)
-            rgb_scale = 1.0
-        else:
-            rgb_offset = 0.0
-            rgb_scale = 1.0
-        print(f'. Copying renders (RGB rescaling offset={rgb_offset:6.3f} scale={rgb_scale:6.3f} HDR range={hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
+        rgb_scale = vlm_utils.get_hdr_scale(obj)
+        print(f'. Copying renders (RGB scale={rgb_scale:6.3f} HDR range={hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
         # Load the render (if not already loaded)
         if obj.vlmSettings.bake_lighting != loaded_bake_lighting:
             render_data.clear()
@@ -538,15 +528,10 @@ def render_nestmap(context, selection, uv_name, nestmap, nestmap_name, nestmap_i
                                     if seam_data[s2+3] < seam_threshold: # outside of seam mask: search nearest seam mask point
                                         s2 = get_nearest_opaque_pos(seam_data, dx, dy, padding + 1, src_w, src_h)
                                     seam_fade = seam_data[s2] / 255.0
-                                #target_tex[p+0] = target_tex[p+1] = target_tex[p+2] = seam_fade
-                                target_tex[p+0] = (island_render[p2+0] + rgb_offset) * rgb_scale * seam_fade
-                                target_tex[p+1] = (island_render[p2+1] + rgb_offset) * rgb_scale * seam_fade
-                                target_tex[p+2] = (island_render[p2+2] + rgb_offset) * rgb_scale * seam_fade
-                                target_tex[p+3] =  island_render[p2+3]
-                                # target_tex[p+0] = seam_fade # Red is lightmap seam fading
-                                # target_tex[p+1] = island_render[p2+3] # Green is source render alpha
-                                # target_tex[p+2] = island_render[4 * (   dx  +    dy  * src_w   )+3] # Blue is unpadded source render alpha
-                                # target_tex[p+3] =  1.0
+                                target_tex[p+0] = island_render[p2+0] * rgb_scale * seam_fade
+                                target_tex[p+1] = island_render[p2+1] * rgb_scale * seam_fade
+                                target_tex[p+2] = island_render[p2+2] * rgb_scale * seam_fade
+                                target_tex[p+3] = island_render[p2+3]
                                 if island_render[p2+3] < 1: with_alpha = True
     render_data.clear()
 

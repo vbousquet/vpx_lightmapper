@@ -28,11 +28,9 @@ def export_obj(op, context):
     vlm_utils.mkpath(bakepath)
     selected_objects = list(context.selected_objects)
 
-    opt_tex_size = int(context.scene.vlmSettings.tex_size)
-    opt_ar = context.scene.vlmSettings.render_aspect_ratio
-    proj_x = opt_tex_size * context.scene.render.pixel_aspect_x * opt_ar
-    proj_y = opt_tex_size * context.scene.render.pixel_aspect_y
-    render_size = (int(opt_tex_size * context.scene.vlmSettings.render_aspect_ratio), opt_tex_size)
+    render_size = vlm_utils.get_render_size(context)
+    proj_x = render_size[0] * context.scene.render.pixel_aspect_x
+    proj_y = render_size[1] * context.scene.render.pixel_aspect_y
 
     # Duplicate and reset UV of target objects
     to_nest = []
@@ -55,7 +53,7 @@ def export_obj(op, context):
     export_name = 'ExportObj'
     if len([o for o in selected_objects if o.vlmSettings.bake_lighting != '']) == 1:
         export_name = next((o for o in selected_objects if o.vlmSettings.bake_lighting != '')).name
-    max_tex_size = min(4096, 2 * opt_tex_size)
+    max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size * 2))
     n_nestmap, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, export_name, 0)
     to_nest.extend(splitted_objects)
 

@@ -65,9 +65,9 @@ def compute_render_groups(op, context):
     print(f"\nEvaluating render groups")
     opt_mask_size = 1024 # Height used for the object masks
     opt_force_render = False # Force rendering even if cache is available
-    opt_tex_size = int(context.scene.vlmSettings.tex_size)
     # at least 2 pixels padding around each objects to avoid overlaps, and help clean island spliting
-    opt_mask_pad = math.ceil(opt_mask_size * 2 / opt_tex_size)
+    render_size = vlm_utils.get_render_size(context)
+    opt_mask_pad = math.ceil(opt_mask_size * 2 / render_size[1])
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
 
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
@@ -187,8 +187,6 @@ def render_group_masks(op, context):
     start_time = time.time()
     bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
-    opt_tex_size = int(context.scene.vlmSettings.tex_size)
-    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
 
     # Create temp render scene, using the user render settings setup
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
@@ -203,8 +201,9 @@ def render_group_masks(op, context):
             setattr(scene.cycles, prop.identifier, getattr(context.scene.cycles, prop.identifier))
     scene.render.use_border = False
     scene.render.use_crop_to_border = False
-    scene.render.resolution_y = opt_tex_size
-    scene.render.resolution_x = int(opt_tex_size * render_aspect_ratio)
+    render_size = vlm_utils.get_render_size(context)
+    scene.render.resolution_x = render_size[0]
+    scene.render.resolution_y = render_size[1]
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
     scene.view_layers[0].use_pass_combined = True
@@ -232,7 +231,8 @@ def render_group_masks(op, context):
                 # if obj.vlmSettings.bake_mask and obj.vlmSettings.bake_mask not in linked_objects:
                     # scene.collection.objects.link(obj.vlmSettings.bake_mask)
                     # linked_objects.append(obj.vlmSettings.bake_mask)
-                if obj.vlmSettings.bake_to: obj = obj.vlmSettings.bake_to
+                if obj.vlmSettings.bake_to:
+                    obj = obj.vlmSettings.bake_to
                 if obj not in linked_objects:
                     scene.collection.objects.link(obj)
                     linked_objects.append(obj)

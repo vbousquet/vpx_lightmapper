@@ -49,6 +49,8 @@ def camera_inclination_update(self, context):
         print("Warning: Missing needed elements to fit the camera (camera, bake collection or lattice)")
         return
     
+    print(f'Fitting camera to bake objects')
+    
     # Adjust the camera
     context.scene.render.pixel_aspect_x = 1
     lattice.data = bpy.data.lattices.new('Layback')
@@ -107,7 +109,6 @@ def camera_inclination_update(self, context):
 def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col):
     camera_fov = camera_object.data.angle
     playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
-    opt_tex_size = int(context.scene.vlmSettings.tex_size)
     layback = mathutils.Matrix.Shear('XY', 4, (0, math.tan(math.radians(camera_layback) / 2)))
     camera_angle = math.radians(camera_inclination)
     camera_object.rotation_euler = mathutils.Euler((camera_angle, 0.0, 0.0), 'XYZ')
@@ -146,9 +147,11 @@ def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_
                 max_x = max(max_x, max(proj_x))
                 max_y = max(max_y, max(proj_y))
         aspect_ratio = (max_x - min_x) / (max_y - min_y)
-        context.scene.render.resolution_x = int(opt_tex_size * aspect_ratio)
-        context.scene.render.resolution_y = opt_tex_size
         context.scene.vlmSettings.render_aspect_ratio = aspect_ratio
+        render_size = vlm_utils.get_render_size(context)
+        context.scene.render.resolution_x = render_size[0]
+        context.scene.render.resolution_y = render_size[1]
+        
     # Center on render output
     camera_object.data.shift_x = 0.25 * (max_x + min_x)
     camera_object.data.shift_y = 0.25 * (max_y + min_y)

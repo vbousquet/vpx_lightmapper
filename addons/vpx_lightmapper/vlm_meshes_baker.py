@@ -72,10 +72,11 @@ def create_bake_meshes(op, context):
     
     # Texture packing
     opt_padding = context.scene.vlmSettings.padding
-    opt_tex_size = int(context.scene.vlmSettings.tex_size)
+    render_size = vlm_utils.get_render_size(context)
+    proj_x = render_size[0] * context.scene.render.pixel_aspect_x
+    proj_y = render_size[1] * context.scene.render.pixel_aspect_y
+    opt_tex_size = int(context.scene.vlmSettings.render_height)
     opt_ar = context.scene.vlmSettings.render_aspect_ratio
-    proj_x = opt_tex_size * context.scene.render.pixel_aspect_x * opt_ar
-    proj_y = opt_tex_size * context.scene.render.pixel_aspect_y
 
     # Bake mesh generation settings
     opt_backface_limit_angle = context.scene.vlmSettings.remove_backface
@@ -304,7 +305,7 @@ def create_bake_meshes(op, context):
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.mesh.select_all(action='SELECT')
         bpy.ops.mesh.remove_doubles(threshold = opt_merge_double_limit)
-        bpy.ops.mesh.dissolve_limited(angle_limit = opt_limited_dissolve_limit)
+        #bpy.ops.mesh.dissolve_limited(angle_limit = opt_limited_dissolve_limit) # don't do it twice: it's not worth and it makes it impossible to mimic in the render stage through modifiers
         bpy.ops.mesh.delete_loose()
         bpy.ops.mesh.select_all(action='SELECT')
         bpy.ops.object.mode_set(mode='OBJECT')

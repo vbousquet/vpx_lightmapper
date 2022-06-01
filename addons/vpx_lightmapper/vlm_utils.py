@@ -41,9 +41,8 @@ def get_global_scale(context):
 
 def get_lm_threshold():
     ''' 
-    The lightmap influence threshold used for pruning uinfluenced lightmap faces
-    - Face with a max RGB channel value below this value will be pruned (to limit mesh size and overdraw).
-    - Lightmap intensity will be adjusted to remove any influence below 2 times this value (to avoid seams).
+    The lightmap influence threshold used for pruning uinfluenced lightmap faces (Face 
+    with a max RGB channel value below this value will be pruned to limit mesh size and overdraw).
     '''
     #return 1.0 / (256.0 * 2.0) # Lowest threshold (2 * 1 bit precision) => 0.00195
     return 0.01
@@ -61,6 +60,13 @@ def get_hdr_scale(obj):
         return 1.0
         #return 1.0 / min(hdr_range, 4.0)
 
+
+def get_render_size(context):
+    opt_tex_size = int(context.scene.vlmSettings.render_height)
+    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
+    render_size = (int(opt_tex_size * render_aspect_ratio), opt_tex_size)
+    return render_size
+    
 
 # 3D tri area ABC is half the length of AB cross product AC 
 def tri_area(co1, co2, co3):

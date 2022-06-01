@@ -181,6 +181,7 @@ class VLM_Scene_props(PropertyGroup):
         default='unstarted'
     )
     batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
+    render_height: IntProperty(name="Render Height", description="Render height. Width is automatically computed. Height must be wmaller then texture size.", default = 4096, min = 0, max=8192, update=vlm_camera.camera_inclination_update)
     tex_size: EnumProperty(
         items=[
             ('256', '256', '256x256', '', 256),
@@ -737,6 +738,7 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         if vlmProps.last_bake_step == 'renders': step = 2
         if vlmProps.last_bake_step == 'meshes': step = 3
         if vlmProps.last_bake_step == 'nestmaps': step = 4
+        layout.prop(vlmProps, "render_height")
         layout.prop(vlmProps, "tex_size")
         layout.prop(vlmProps, "max_lighting")
         layout.prop(vlmProps, "padding")
