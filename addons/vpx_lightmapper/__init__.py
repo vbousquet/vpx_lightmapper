@@ -181,7 +181,7 @@ class VLM_Scene_props(PropertyGroup):
         default='unstarted'
     )
     batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
-    render_height: IntProperty(name="Render Height", description="Render height. Width is automatically computed. Height must be wmaller then texture size.", default = 4096, min = 0, max=8192, update=vlm_camera.camera_inclination_update)
+    render_height: IntProperty(name="Render Height", description="Render height. Width is automatically computed. Height must be smaller than the texture size.", default = 4096, min = 0, max=8192, update=vlm_camera.camera_inclination_update)
     tex_size: EnumProperty(
         items=[
             ('256', '256', '256x256', '', 256),
@@ -191,7 +191,7 @@ class VLM_Scene_props(PropertyGroup):
             ('4096', '4096', '4096x4096', '', 4096),
             ('8192', '8192', '8192x8192', '', 8192),
         ],
-        name='Render size',
+        name='Texture size', description="Size of the exported texture. This size must be greater than the render height.",
         default='256', update=vlm_camera.camera_inclination_update
     )
     render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
@@ -323,7 +323,7 @@ class VLM_OT_select_occluded(Operator):
     
     @classmethod
     def poll(cls, context):
-        return context.object.mode == 'OBJECT'
+        return context.mode == 'OBJECT'
 
     def execute(self, context):
         return vlm_occlusion.select_occluded(self, context)
@@ -337,7 +337,7 @@ class VLM_OT_select_indirect(Operator):
     
     @classmethod
     def poll(cls, context):
-        return context.object.mode == 'OBJECT'
+        return context.mode == 'OBJECT'
 
     def execute(self, context):
         for obj in context.scene.collection.all_objects:
@@ -573,7 +573,7 @@ class VLM_OT_select_render_group(Operator):
     
     @classmethod
     def poll(cls, context):
-        return context.object.mode == 'OBJECT' and len(set((obj.vlmSettings.render_group for obj in context.selected_objects if obj.vlmSettings.render_group >= 0))) == 1
+        return context.mode == 'OBJECT' and len(set((obj.vlmSettings.render_group for obj in context.selected_objects if obj.vlmSettings.render_group >= 0))) == 1
 
     def execute(self, context):
         context.scene.vlmSettings.render_group_select = next((obj.vlmSettings.render_group for obj in context.selected_objects if obj.vlmSettings.render_group >= 0))
@@ -588,7 +588,7 @@ class VLM_OT_select_nestmap_group(Operator):
     
     @classmethod
     def poll(cls, context):
-        return context.object.mode == 'OBJECT' and next((obj for obj in context.selected_objects if obj.vlmSettings.bake_nestmap >= 0), None) is not None
+        return context.mode == 'OBJECT' and next((obj for obj in context.selected_objects if obj.vlmSettings.bake_nestmap >= 0), None) is not None
 
     def execute(self, context):
         for obj in [obj for obj in context.selected_objects if obj.vlmSettings.bake_nestmap >= 0]:

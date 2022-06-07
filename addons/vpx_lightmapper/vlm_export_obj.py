@@ -53,7 +53,11 @@ def export_obj(op, context):
     export_name = 'ExportObj'
     if len([o for o in selected_objects if o.vlmSettings.bake_lighting != '']) == 1:
         export_name = next((o for o in selected_objects if o.vlmSettings.bake_lighting != '')).name
-    max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size * 2))
+    max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size))
+    if max(render_size) < max_tex_size:
+        op.report({'ERROR'}, 'Texture size must be greater than render height')
+        return {'CANCELLED'}
+
     n_nestmap, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, export_name, 0)
     to_nest.extend(splitted_objects)
 

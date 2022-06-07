@@ -62,9 +62,9 @@ def get_hdr_scale(obj):
 
 
 def get_render_size(context):
-    opt_tex_size = int(context.scene.vlmSettings.render_height)
+    opt_render_height = int(context.scene.vlmSettings.render_height)
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
-    render_size = (int(opt_tex_size * render_aspect_ratio), opt_tex_size)
+    render_size = (int(opt_render_height * render_aspect_ratio), opt_render_height)
     return render_size
     
 

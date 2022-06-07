@@ -346,7 +346,7 @@ def read_vpx(op, context, filepath):
     opt_plastic_translucency = 1.0
     opt_bevel_plastics = context.scene.vlmSettings.bevel_plastics
     opt_detect_insert_overlay = True # Place any flasher containing 'insert' in its name to the overlay collection
-    opt_tex_size = int(context.scene.vlmSettings.render_height)
+    opt_render_height = int(context.scene.vlmSettings.render_height)
     
     # Purge unlinked datas to avoid reusing them
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -1908,7 +1908,7 @@ def read_vpx(op, context, filepath):
 
     # Create a translucency map for the playfield (translucent for inserts, diffuse otherwise)
     if len(pfmesh.materials) > 0 and pfmesh.materials[0] is not None and 'TranslucencyMap' in pfmesh.materials[0].node_tree.nodes:
-        translucency_image = bpy.data.images.new('PFTranslucency', int(opt_tex_size/2), opt_tex_size, alpha=True)
+        translucency_image = bpy.data.images.new('PFTranslucency', int(opt_render_height/2), opt_render_height, alpha=True)
         translucency_image.source = 'GENERATED' # Defaults to a full translucent playfield
         translucency_image.generated_type = 'BLANK'
         translucency_image.generated_color = (0.0, 0.0, 0.0, 1.0)
@@ -1927,7 +1927,7 @@ def read_vpx(op, context, filepath):
             bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
             view_matrix = mathutils.Matrix.LocRotScale(mathutils.Vector((-1.0, 1.0, 0)), None, mathutils.Vector((2.0 / playfield_width, 2.0 / playfield_height, 0.1)))
             projection_matrix = mathutils.Matrix.OrthoProjection('XY', 4)
-            vlm_utils.render_mask(context, int(opt_tex_size / 2), opt_tex_size, translucency_image, view_matrix, projection_matrix)
+            vlm_utils.render_mask(context, int(opt_render_height / 2), opt_render_height, translucency_image, view_matrix, projection_matrix)
             vlm_collections.restore_all_col_links(cups_initial_collection)
             vlm_collections.delete_collection(tmp_col)
             translucency_image.pack()

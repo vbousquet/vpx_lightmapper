@@ -75,7 +75,7 @@ def create_bake_meshes(op, context):
     render_size = vlm_utils.get_render_size(context)
     proj_x = render_size[0] * context.scene.render.pixel_aspect_x
     proj_y = render_size[1] * context.scene.render.pixel_aspect_y
-    opt_tex_size = int(context.scene.vlmSettings.render_height)
+    opt_render_height = int(context.scene.vlmSettings.render_height)
     opt_ar = context.scene.vlmSettings.render_aspect_ratio
 
     # Bake mesh generation settings
@@ -83,10 +83,10 @@ def create_bake_meshes(op, context):
     opt_limited_dissolve_limit = radians(1) # Test with 5 degrees resulted in artefact for long ball guide (on Warlok table)
     opt_merge_double_limit = 0.001 * global_scale
     opt_vpx_reflection = context.scene.vlmSettings.keep_pf_reflection_faces
-    opt_lod_threshold = 16 * opt_tex_size / 4096  # start LOD for biggest face below 16x16 pixels for 4K renders (1 pixel for 256px renders)
+    opt_lod_threshold = 16 * opt_render_height / 4096  # start LOD for biggest face below 16x16 pixels for 4K renders (1 pixel for 256px renders)
     #opt_lod_threshold = 0 # Disable LOD
     opt_lod_threshold = int(opt_lod_threshold * opt_lod_threshold)
-    opt_lightmap_prune_res = min(256, opt_tex_size) # resolution used in the algorithm for unlit face pruning (artefact observed at 256)
+    opt_lightmap_prune_res = min(256, opt_render_height) # resolution used in the algorithm for unlit face pruning (artefact observed at 256)
     prunemap_width = int(opt_lightmap_prune_res * opt_ar)
     prunemap_height = opt_lightmap_prune_res
 

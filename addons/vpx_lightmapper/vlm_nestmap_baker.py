@@ -60,7 +60,11 @@ def render_nestmaps(op, context):
             to_nest_hdr.append(obj)
 
     # Perform the actual island nesting and nestmap generation
-    max_tex_size = min(8192, int(2 * context.scene.vlmSettings.tex_size))
+    max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size))
+    if max(render_size) < max_tex_size:
+        op.report({'ERROR'}, 'Texture size must be greater than render height')
+        return {'CANCELLED'}
+
     if True:
         print('\nNesting all LDR parts')
         n_ldr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, 'Nestmap', 0)
