@@ -12,7 +12,7 @@ TODO
 
 
 
-Rewrite the documentation with a step by step guide (and corresponding vpx/blend files):
+Rewrite the documentation (move it to Github Wiki) with a step by step guide (and corresponding vpx/blend files):
 . Step 1: installation & quick walk through
 x Step 2: baking the blank table
 . Step 3: adding a light
@@ -21,6 +21,7 @@ x Step 2: baking the blank table
 o Step 6: transparent parts & 'bake mask' feature
 . Step 7: better playfield with 3D wood
 . Step 8: 3D inserts
+
 
 Closed items:
 - Layback lattice breaks the split normals: we should rotate them accordingly when this is toggled => not critical
