@@ -17,7 +17,7 @@ bl_info = {
     "name": "Visual Pinball X Light Mapper",
     "author": "Vincent Bousquet",
     "version": (0, 0, 2),
-    "blender": (3, 1, 0),
+    "blender": (3, 2, 0),
     "description": "Import/Export Visual Pinball X tables with automated light baking",
     "warning": "Requires installation of external dependencies",
     "wiki_url": "",
