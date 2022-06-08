@@ -181,7 +181,7 @@ class VLM_Scene_props(PropertyGroup):
         default='unstarted'
     )
     batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
-    render_height: IntProperty(name="Render Height", description="Render height. Width is automatically computed. Height must be smaller than the texture size.", default = 4096, min = 0, max=8192, update=vlm_camera.camera_inclination_update)
+    render_height: IntProperty(name="Render Height", description="Render height. Width is automatically computed. Height must be smaller than the texture size.", default = 256, min = 0, max=8192, update=vlm_camera.camera_inclination_update)
     tex_size: EnumProperty(
         items=[
             ('256', '256', '256x256', '', 256),
