@@ -54,7 +54,7 @@ def export_obj(op, context):
     if len([o for o in selected_objects if o.vlmSettings.bake_lighting != '']) == 1:
         export_name = next((o for o in selected_objects if o.vlmSettings.bake_lighting != '')).name
     max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size))
-    if max(render_size) < max_tex_size:
+    if max(render_size) > max_tex_size:
         op.report({'ERROR'}, 'Texture size must be greater than render height')
         return {'CANCELLED'}
 

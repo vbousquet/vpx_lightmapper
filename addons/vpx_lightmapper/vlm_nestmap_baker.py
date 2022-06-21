@@ -61,7 +61,7 @@ def render_nestmaps(op, context):
 
     # Perform the actual island nesting and nestmap generation
     max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size))
-    if max(render_size) < max_tex_size:
+    if max(render_size) > max_tex_size:
         op.report({'ERROR'}, 'Texture size must be greater than render height')
         return {'CANCELLED'}
 
