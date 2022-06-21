@@ -48,19 +48,6 @@ def get_lm_threshold():
     return 0.01
 
 
-def get_hdr_scale(obj):
-    '''Compute HDR scaling to fit in a LDR texture (VPX does not support HDR images)
-    '''
-    hdr_range = obj.vlmSettings.bake_hdr_range
-    if obj.vlmSettings.bake_type != 'lightmap':
-        return 1.0
-    elif hdr_range < 1.0:
-        return 1.0
-    else:
-        return 1.0
-        #return 1.0 / min(hdr_range, 4.0)
-
-
 def get_render_size(context):
     opt_render_height = int(context.scene.vlmSettings.render_height)
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio

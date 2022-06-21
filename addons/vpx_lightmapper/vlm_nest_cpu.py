@@ -332,130 +332,200 @@ def nest(context, objects, uv_proj_name, uv_name, render_size, tex_w, tex_h, nes
     return (nestmap_index, splitted_objects)
 
 
-def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nestmap_index):
+def get_border_factor(mask, dx, dy, padding, src_w, src_h):
+    alpha = 0.0
+    sum = 0.0
+    for i in range(-padding, +padding+1):
+        for j in range(-padding, +padding+1):
+            sx = dx + i
+            sy = dy + j
+            if 0 <= sx and sx < src_w and 0 <= sy and sy < src_h:
+                dist = i*i+j*j
+                factor = 1.0 / (1.0 + dist*dist)
+                sum = sum + factor
+                p3 = 4 * (sx + sy * src_w)
+                alpha += factor * mask[p3+3]
+    if sum > 0.0:
+        return alpha / sum
+    else:
+        return 0.0
+
+
+def get_nearest_opaque_color(image, mask, dx, dy, padding, src_w, src_h):
+    ''' Find the nearest opaque (or at least less transparent) points in the provided image
+    Search is performed up to the given padding distance
+    If more than one point fullfill the conditions, the value is averaged by distance
+    '''
+    sum = 0.0
+    best_color = (0.0, 0.0, 0.0)
+    for i in range(-padding, +padding+1):
+        for j in range(-padding, +padding+1):
+            sx = dx + i
+            sy = dy + j
+            if 0 <= sx and sx < src_w and 0 <= sy and sy < src_h:
+                p3 = 4 * (sx + sy * src_w)
+                dist = i*i+j*j
+                factor = mask[p3+3] * mask[p3+3] / (1.0 + dist*dist)
+                best_color = (best_color[0] + factor * image[p3+0], best_color[1] + factor * image[p3+1], best_color[2] + factor * image[p3+2])
+                sum += factor
+    if sum > 0.0:
+        return (best_color[0] / sum, best_color[1] / sum, best_color[2] / sum)
+    else:
+        return best_color
+
+    p3 = 4 * (dx + dy * src_w)
+    best_alpha = mask[p3+3]
+    # best_color = (image[p3+0], image[p3+1], image[p3+2])
+    factor = mask[p3+3] * mask[p3+3] / (1.0 + 0.0)
+    best_color = (factor * image[p3+0], factor * image[p3+1], factor * image[p3+2])
+    best_color_factor = factor
+    for d in range(1, padding):
+        for i in range(-d, d+1):
+            dist = i*i+d*d
+            factor = 1.0 / dist
+            sx = dx + i
+            sy = dy + i
+            if 0 <= sx and sx < src_w:
+                if 0 <= dy-d and dy-d < src_h:
+                    p3 = 4 * (sx + (dy-d) * src_w)
+                    factor = mask[p3+3] * mask[p3+3] / (1.0 + dist)
+                    best_color = (best_color[0] + factor * image[p3+0], best_color[1] + factor * image[p3+1], best_color[2] + factor * image[p3+2])
+                    best_color_factor += factor
+                    # if mask[p3+3] > best_alpha:
+                        # best_alpha = mask[p3+3]
+                        # best_color = (factor * image[p3+0], factor * image[p3+1], factor * image[p3+2])
+                        # best_color_factor = factor
+                    # elif mask[p3+3] == best_alpha:
+                        # best_color = (best_color[0] + factor * image[p3+0], best_color[1] + factor * image[p3+1], best_color[2] + factor * image[p3+2])
+                        # best_color_factor += factor
+                if 0 <= dy+d and dy+d < src_h:
+                    p3 = 4 * (sx + (dy+d) * src_w)
+                    factor = mask[p3+3] * mask[p3+3] / (1.0 + dist)
+                    best_color = (best_color[0] + factor * image[p3+0], best_color[1] + factor * image[p3+1], best_color[2] + factor * image[p3+2])
+                    best_color_factor += factor
+                    # if mask[p3+3] > best_alpha:
+                        # best_alpha = mask[p3+3]
+                        # best_color = (factor * image[p3+0], factor * image[p3+1], factor * image[p3+2])
+                        # best_color_factor = factor
+                    # elif image[p3+3] == best_alpha:
+                        # best_color = (best_color[0] + factor * image[p3+0], best_color[1] + factor * image[p3+1], best_color[2] + factor * image[p3+2])
+                        # best_color_factor += factor
+            if 0 <= sy and sy < src_h:
+                if 0 <= dx-d and dx-d < src_w:
+                    p3 = 4 * ((dx-d) + sy * src_w)
+                    factor = mask[p3+3] * mask[p3+3] / (1.0 + dist)
+                    best_color = (best_color[0] + factor * image[p3+0], best_color[1] + factor * image[p3+1], best_color[2] + factor * image[p3+2])
+                    best_color_factor += factor
+                    # if mask[p3+3] > best_alpha:
+                        # best_alpha = mask[p3+3]
+                        # best_color = (factor * image[p3+0], factor * image[p3+1], factor * image[p3+2])
+                        # best_color_factor = factor
+                    # elif mask[p3+3] == best_alpha:
+                        # best_color = (best_color[0] + factor * image[p3+0], best_color[1] + factor * image[p3+1], best_color[2] + factor * image[p3+2])
+                        # best_color_factor += factor
+                if 0 <= dx+d and dx+d < src_w:
+                    p3 = 4 * ((dx+d) + sy * src_w)
+                    factor = mask[p3+3] * mask[p3+3] / (1.0 + dist)
+                    best_color = (best_color[0] + factor * image[p3+0], best_color[1] + factor * image[p3+1], best_color[2] + factor * image[p3+2])
+                    best_color_factor += factor
+                    # if mask[p3+3] > best_alpha:
+                        # best_alpha = mask[p3+3]
+                        # best_color = (factor * image[p3+0], factor * image[p3+1], factor * image[p3+2])
+                        # best_color_factor = factor
+                    # elif image[p3+3] == best_alpha:
+                        # best_color = (best_color[0] + factor * image[p3+0], best_color[1] + factor * image[p3+1], best_color[2] + factor * image[p3+2])
+                        # best_color_factor += factor
+    return (best_color[0] / best_color_factor, best_color[1] / best_color_factor, best_color[2] / best_color_factor)
+
+
+def get_nearest_opaque_pos(image, dx, dy, padding, src_w, src_h):
+    ''' Find the nearest opaque (or at least less transparent) point position in the provided image
+    Search is performed up to the given padding distance
+    '''
+    best_pos = 4 * (   dx  +    dy  * src_w   )
+    best_alpha = image[best_pos+3]
+    best_dist = (padding+1) * (padding+1)
+    for d in range(1, padding):
+        if best_alpha == 1.0 and best_dist <= (d+1)*(d+1):
+            return best_pos
+        for i in range(-d, d+1):
+            dist = i*i+d*d
+            sx = dx + i
+            sy = dy + i
+            if 0 <= sx and sx < src_w:
+                if 0 <= dy-d and dy-d < src_h:
+                    p3 = 4 * (sx + (dy-d) * src_w)
+                    if image[p3+3] > best_alpha or (image[p3+3] == best_alpha and dist < best_dist):
+                        best_pos = p3
+                        best_dist = dist
+                        best_alpha = image[p3+3]
+                if 0 <= dy+d and dy+d < src_h:
+                    p3 = 4 * (sx + (dy+d) * src_w)
+                    if image[p3+3] > best_alpha or (image[p3+3] == best_alpha and dist < best_dist):
+                        best_pos = p3
+                        best_dist = dist
+                        best_alpha = image[p3+3]
+            if 0 <= sy and sy < src_h:
+                if 0 <= dx-d and dx-d < src_w:
+                    p3 = 4 * ((dx-d) + sy * src_w)
+                    if image[p3+3] > best_alpha or (image[p3+3] == best_alpha and dist < best_dist):
+                        best_pos = p3
+                        best_dist = dist
+                        best_alpha = image[p3+3]
+                if 0 <= dx+d and dx+d < src_w:
+                    p3 = 4 * ((dx+d) + sy * src_w)
+                    if image[p3+3] > best_alpha or (image[p3+3] == best_alpha and dist < best_dist):
+                        best_pos = p3
+                        best_dist = dist
+                        best_alpha = image[p3+3]
+    return best_pos
+
+
+def render_nestmap(context, selection, uv_name, nestmap, nestmap_name, nestmap_index):
     src_w, src_h, padding, islands, targets, target_heights = nestmap
     n_render_groups = vlm_utils.get_n_render_groups(context)
     nestmaps = [np.zeros((len(target) * height * 4), 'f') for target, height in zip(targets, target_heights)]
+    with_alpha = False
     mask_path = vlm_utils.get_bakepath(context, type='MASKS')
     render_path = vlm_utils.get_bakepath(context, type='RENDERS')
-
-    # Offscreen surface where the nestmaps are rendered
-    offscreen_renders = []
-    has_alpha = []
-    for target, height in zip(targets, target_heights):
-        offscreen_render = gpu.types.GPUOffScreen(len(target), height, format='RGBA16F')
-        with offscreen_render.bind():
-            fb = gpu.state.active_framebuffer_get()
-            fb.clear(color=(0.0, 0.0, 0.0, 0.0))
-        offscreen_renders.append(offscreen_render)
-        has_alpha.append(False)
-    render_vs = '''
-        in vec2 pos; 
-        out vec2 uv;
-        uniform vec2 src_size;
-        uniform vec2 dst_size;
-        uniform float ref_width;
-        uniform vec2 pos_ref;
-        uniform vec2 pos_dec;
-        uniform int rot;
-        void main() {
-            gl_Position = vec4(2 * pos - vec2(1.0), 0.0, 1.0);
-            vec2 p = pos * dst_size - pos_dec;
-            if (rot == 1) {
-                p = vec2(p.y, ref_width - p.x); // 90 rotation
-            } else if (rot == 2) {
-                p = vec2(ref_width - p.x, p.y); // Flipped on X
-            } else if (rot == 3) {
-                p = vec2(p.y, p.x); // 90 rotation, Flipped on X
-            }
-            uv = (pos_ref + p) / src_size;
-        }
-        '''
-    render_fs = '''
-        in vec2 uv;
-        out vec4 FragColor;
-        uniform sampler2D island_mask;
-        uniform sampler2D render_mask;
-        uniform sampler2D render;
-        uniform vec2 src_size;
-        uniform int padding;
-        void main() {
-            if (uv.x < 0.0 || uv.x >= 1.0 || uv.y < 0.0 || uv.y >= 1.0)
-                FragColor = vec4(0.0);
-            else
-            {
-                vec2 min_uv = vec2(0.5/src_size);
-                vec2 max_uv = vec2(1.0 - 0.5/src_size);
-                float dist_sum = 0.0;
-                float inside = 0.0;
-                vec4 seam = vec4(0.0);
-                vec4 color = vec4(0.0);
-                for (int i = -padding; i <= padding; i++)
-                {
-                    for (int j = -padding; j <= padding; j++)
-                    {
-                        vec2 uv_ofs = uv + vec2(i, j) / src_size;
-                        uv_ofs = clamp(uv_ofs, min_uv, max_uv);
-                        vec2 v = vec2(i, j);
-                        float dist = dot(v, v);
-                        float dist_factor = 1.0 / (1.0 + dist * dist);
-                        dist_sum += dist_factor;
-                        seam += texture(island_mask, uv_ofs) * dist_factor;
-                        color += texture(render, uv_ofs) * dist_factor;
-                        inside += texture(render_mask, uv_ofs).a * dist_factor;
-                    }
-                }
-                inside = inside / dist_sum;
-                seam = mix(seam / dist_sum, texture(island_mask, uv), inside);
-                color = mix(color / dist_sum, texture(render, uv), inside);
-                FragColor = seam * color;
-            }
-        }'''
-    render_shader = gpu.types.GPUShader(render_vs, render_fs)
-    render_batch = batch_for_shader(render_shader, 'TRIS', { "pos": ((0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)) }, )
-        
-    # Offscreen surface where we render the seam fading mask for lightmaps
-    offscreen_seams = gpu.types.GPUOffScreen(src_w, src_h, format='RGBA8')
-    seams_vs = '''
-        in vec2 pos; 
-        in vec4 col; 
-        uniform vec2 ofs; 
-        out vec4 colInterp; 
-        void main() 
-        {        
-            colInterp = col; 
-            gl_Position = vec4(2.0 * (pos + ofs) - vec2(1.0), 0.0, 1.0); 
-        }'''
-    seams_fs = '''
-        in vec4 colInterp; 
-        out vec4 FragColor; 
-        void main() 
-        { 
-            FragColor = colInterp; 
-        }'''
-    seams_shader = gpu.types.GPUShader(seams_vs, seams_fs)
-
     # Load the render masks
     mask_data = []
-    render_data = []
     for i in range(n_render_groups):
         path = f"{mask_path}Mask Group {i}.png"
-        mask_data.append(vlm_utils.get_image_or_black(path, black_is_none=True))
+        loaded, render = vlm_utils.get_image_or_black(path, black_is_none=True)
+        if render:
+            pixel_data = np.zeros((src_w * src_h * 4), 'f') # using numpy is way faster
+            render.pixels.foreach_get(pixel_data)
+            mask_data.append(pixel_data)
+            if loaded == 'loaded': bpy.data.images.remove(render)
+        else:
+            mask_data.append(None)
+    render_data = []
     loaded_bake_lighting = None
     for obj_name in sorted(list({obj.name for (obj, _, _, _) in selection}), key=lambda x:bpy.data.objects[x].vlmSettings.bake_lighting):
         obj = bpy.data.objects[obj_name]
         print(f'. Copying renders (HDR range={obj.vlmSettings.bake_hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
-
         # Load the render (if not already loaded)
         if obj.vlmSettings.bake_lighting != loaded_bake_lighting:
-            for loaded, render in render_data:
-                if render and loaded == 'loaded':
-                    bpy.data.images.remove(render)
             render_data.clear()
             for i in range(n_render_groups):
                 path = f"{render_path}{obj.vlmSettings.bake_lighting} - Group {i}.exr"
-                render_data.append(vlm_utils.get_image_or_black(path, black_is_none=True))
+                loaded, render = vlm_utils.get_image_or_black(path, black_is_none=True)
+                if render:
+                    pixel_data = np.zeros((src_w * src_h * 4), 'f') # using numpy is way faster
+                    render.pixels.foreach_get(pixel_data)
+                    render_data.append(pixel_data)
+                    if loaded == 'loaded': bpy.data.images.remove(render)
+                else:
+                    render_data.append(None)
             loaded_bake_lighting = obj.vlmSettings.bake_lighting
+
+        # Offscreen surface where we render the seam fading mask for lightmaps
+        offscreen = gpu.types.GPUOffScreen(src_w, src_h)
+        vertex_shader = 'in vec2 pos; in vec4 col; uniform vec2 ofs; out vec4 colInterp; void main() { colInterp = col; gl_Position = vec4(2.0 * (pos + ofs) - vec2(1.0), 0.0, 1.0); }'
+        fragment_shader = 'in vec4 colInterp; out vec4 FragColor; void main() { FragColor = colInterp; }'
+        shader_draw = gpu.types.GPUShader(vertex_shader, fragment_shader)
+        gpu.state.blend_set('NONE')
 
         # Render to the packed nest map
         for island in islands:
@@ -475,103 +545,109 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
                 if obj.vlmSettings.bake_nestmap != -1:
                     print(f'ERROR: object {obj.name} was not splitted but has parts on multiple nestmaps')
                 obj.vlmSettings.bake_nestmap = nestmap_index
-            island_render = render_data[island_render_group][1]
+            island_render = render_data[island_render_group]
             if island_render is None:
                 print('. No render (likely uninfluenced lightmap), skipping island')
                 continue
-            island_group_mask = mask_data[island_render_group][1]
-            target_w = len(targets[n])
+                #island_render = np.ones((src_w * src_h * 4), 'f')
+            island_group_mask = mask_data[island_render_group]
+            target_mask = targets[n]
+            target_w = len(target_mask)
             target_h = target_heights[n]
+            target_tex = nestmaps[n]
 
-            # Compute render mask, including lightmap's seam fading
-            if island_obj.vlmSettings.bake_type != 'lightmap': has_alpha[n] = True # This could be improved to detect non opaque bakemap
-            pts=[]
-            pts_col=[]
-            lines=[]
-            lines_col=[]
-            color_layer = bm.loops.layers.color.verify()
-            uv_layer = bm.loops.layers.uv[uv_proj_name]
-            for face in island['faces']:
-                prev_uv = first_uv = prev_col = first_col = None
-                for loop in face.loops:
-                    uv = loop[uv_layer].uv
-                    col = loop[color_layer]
-                    pts.append(uv)
-                    pts_col.append(col)
-                    if prev_uv:
-                        lines.append(prev_uv)
-                        lines_col.append(prev_col)
-                        lines.append(uv)
-                        lines_col.append(col)
-                    else:
-                        first_uv = uv
-                        first_col = col
-                    prev_uv = uv
-                    prev_col = col
-                lines.append(prev_uv)
-                lines_col.append(prev_col)
-                lines.append(first_uv)
-                lines_col.append(first_col)
-            gpu.state.blend_set('NONE')
-            with offscreen_seams.bind():
-                fb = gpu.state.active_framebuffer_get()
-                fb.clear(color=(0.0, 0.0, 0.0, 0.0))
-                tri_batch = batch_for_shader(seams_shader, 'TRIS', {"pos": pts, "col": pts_col})
-                pt_batch = batch_for_shader(seams_shader, 'POINTS', {"pos": pts, "col": pts_col})
-                line_batch = batch_for_shader(seams_shader, 'LINES', {"pos": lines, "col": lines_col})
-                seams_shader.bind()
-                for px in sorted(range(-padding, padding+1), key=lambda x:abs(x), reverse=True):
-                    for py in sorted(range(-padding, padding+1), key=lambda x:abs(x), reverse=True):
-                        seams_shader.uniform_float("ofs", (px/float(src_w), py/float(src_h)) )
-                        tri_batch.draw(seams_shader)
-                        pt_batch.draw(seams_shader)
-                        line_batch.draw(seams_shader)
-                # image_data = fb.read_color(0, 0, src_w, src_h, 4, 0, 'UBYTE')
-                # image_data.dimensions = src_w * src_h * 4
-                # if 'Debug' not in bpy.data.images:
-                    # bpy.data.images.new('Debug', src_w, src_h, alpha=True, float_buffer=False)
-                # pack_image = bpy.data.images['Debug']
-                # pack_image.scale(src_w, src_h)
-                # pack_image.pixels = [v / 255 for v in image_data]
-
-            # Copy the render, applying offset, rotation, flipping, masking, border/padding fading, and lightmap seam fading
-            #gpu.state.blend_set('NONE')
-            gpu.state.blend_set('ALPHA')
-            with offscreen_renders[n].bind():
-                # print((src_w, src_h), " => ", (target_w, target_h))
-                # print((x, y), " rot= ", rot, " render group = ", island_render_group)
-                # print((min_x, min_y), " padding= ", padding)
-                # print("pos= ", (x + min_x - padding, y + min_y - padding))
-                render_shader.bind()
-                render_shader.uniform_float("src_size", (src_w, src_h))
-                render_shader.uniform_float("dst_size", (target_w, target_h))
-                render_shader.uniform_float("ref_width", mask_w)
-                render_shader.uniform_float("pos_ref", (min_x - padding, min_y - padding))
-                render_shader.uniform_float("pos_dec", (x, y))
-                render_shader.uniform_int("rot", rot)
-                render_shader.uniform_int("padding", padding)
-                render_shader.uniform_sampler("island_mask", offscreen_seams.texture_color)
-                render_shader.uniform_sampler("render_mask", gpu.texture.from_image(island_group_mask))
-                render_shader.uniform_sampler("render", gpu.texture.from_image(island_render))
-                render_batch.draw(render_shader)
-                # fb = gpu.state.active_framebuffer_get()
-                # image_data = fb.read_color(0, 0, target_w, target_h, 4, 0, 'UBYTE')
-                # image_data.dimensions = target_w * target_h * 4
-                # if 'Debug-Out' not in bpy.data.images:
-                    # bpy.data.images.new('Debug-Out', target_w, target_h, alpha=True, float_buffer=True)
-                # pack_image = bpy.data.images['Debug-Out']
-                # pack_image.scale(target_w, target_h)
-                # pack_image.pixels = [v / 255 for v in image_data]
-
-    # Cleanup loaded images
-    for loaded, render in render_data:
-        if render and loaded == 'loaded':
-            bpy.data.images.remove(render)
+            # Compute lightmap's seam fading mask
+            seam_fade = 1.0
+            is_lightmap = island_obj.vlmSettings.bake_type == 'lightmap'
+            if is_lightmap:
+                pts=[]
+                pts_col=[]
+                lines=[]
+                lines_col=[]
+                color_layer = bm.loops.layers.color.verify()
+                uv_layer = bm.loops.layers.uv[uv_name]
+                for face in island['faces']:
+                    prev_uv = first_uv = prev_col = first_col = None
+                    for loop in face.loops:
+                        uv = loop[uv_layer].uv
+                        col = loop[color_layer]
+                        pts.append(uv)
+                        pts_col.append(col)
+                        if prev_uv:
+                            lines.append(prev_uv)
+                            lines_col.append(prev_col)
+                            lines.append(uv)
+                            lines_col.append(col)
+                        else:
+                            first_uv = uv
+                            first_col = col
+                        prev_uv = uv
+                        prev_col = col
+                    lines.append(prev_uv)
+                    lines_col.append(prev_col)
+                    lines.append(first_uv)
+                    lines_col.append(first_col)
+                with offscreen.bind():
+                    fb = gpu.state.active_framebuffer_get()
+                    fb.clear(color=(0.0, 0.0, 0.0, 0.0))
+                    shader_draw.bind()
+                    tri_batch = batch_for_shader(shader_draw, 'TRIS', {"pos": pts, "col": pts_col})
+                    pt_batch = batch_for_shader(shader_draw, 'POINTS', {"pos": pts, "col": pts_col})
+                    line_batch = batch_for_shader(shader_draw, 'LINES', {"pos": lines, "col": lines_col})
+                    for px in sorted(range(-padding, padding+1), key=lambda x:abs(x), reverse=True):
+                        for py in sorted(range(-padding, padding+1), key=lambda x:abs(x), reverse=True):
+                            shader_draw.uniform_float("ofs", (px/float(src_w), py/float(src_h)) )
+                            tri_batch.draw(shader_draw)
+                            pt_batch.draw(shader_draw)
+                            line_batch.draw(shader_draw)
+                seam_data = offscreen.texture_color.read()
+                seam_data.dimensions = src_w * src_h * 4
+                
+            for px, col_mask in enumerate(mask):
+                for span in col_mask:
+                    for py in range(span[0], span[1]+1):
+                        if 0 <= x+px and x+px < target_w and 0 <= y+py and y+py < target_h:
+                            if rot == 0:
+                                dx = px
+                                dy = py
+                            elif rot == 1: # 90 rotation
+                                dx = py
+                                dy = mask_w - 1 - px
+                            elif rot == 2: # Flipped on X
+                                dx = mask_w - 1 - px
+                                dy = py
+                            elif rot == 3: # 90 rotation, Flipped on x
+                                dx = py
+                                dy = px
+                            dx = min_x - padding + dx
+                            dy = min_y - padding + dy
+                            if 0 <= dx and dx < src_w and 0 <= dy and dy < src_h:
+                                p  = 4 * ((x+px) + (y+py) * target_w)
+                                p2 = 4 * (   dx  +    dy  * src_w   )
+                                border_factor = get_border_factor(island_group_mask, dx, dy, padding + 1, src_w, src_h)
+                                if border_factor < 1.0:
+                                    a = 1.0 - border_factor
+                                    col = get_nearest_opaque_color(island_render, island_group_mask, dx, dy, padding + 1, src_w, src_h)
+                                    col = (border_factor * island_render[p2+0] + a * col[0],
+                                        border_factor * island_render[p2+1] + a * col[1],
+                                        border_factor * island_render[p2+2] + a * col[2])
+                                else:
+                                    col = (island_render[p2+0], island_render[p2+1], island_render[p2+2])
+                                # if island_group_mask[p2+3] < padding_threshold: # border point: search nearest non border point
+                                    # col = get_nearest_opaque_color(island_render, island_group_mask, dx, dy, padding + 1, src_w, src_h)
+                                # else:
+                                    # col = (island_render[p2+0], island_render[p2+1], island_render[p2+2])
+                                if is_lightmap:
+                                    if seam_data[p2+3] < 1.0: # outside of seam mask: search nearest seam mask point
+                                        seam_fade = get_nearest_opaque_color(seam_data, island_group_mask, dx, dy, padding + 1, src_w, src_h)[0] / 255.0
+                                    else:
+                                        seam_fade = seam_data[p2+0] / 255.0
+                                target_tex[p+0] = col[0] * seam_fade
+                                target_tex[p+1] = col[1] * seam_fade
+                                target_tex[p+2] = col[2] * seam_fade
+                                target_tex[p+3] = island_render[p2+3]
+                                if island_render[p2+3] < 1: with_alpha = True
     render_data.clear()
-    for loaded, mask in mask_data:
-        if mask and loaded == 'loaded':
-            bpy.data.images.remove(mask)
-    mask_data.clear()
 
     # Save the rendered nestmaps
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
@@ -581,12 +657,20 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
     for i, target in enumerate(targets):
         target_w = len(target)
         target_h = target_heights[i]
-
-        image_data = offscreen_renders[i].texture_color.read()
-        image_data.dimensions = target_w * target_h * 4
-        pack_image = bpy.data.images.new(f'Nest {i}', target_w, target_h, alpha=has_alpha[i], float_buffer=True)
-        pack_image.pixels = [v for v in image_data]
-        
+        filled = 0
+        # tex = np.ones((target_w * target_h * 4), 'f')
+        for x in range(target_w):
+            for span in target[x]:
+                if span[0] < target_h:
+                    filled += min(target_h - 1, span[1]) - span[0] + 1
+                # for y in range(span[0], span[1] + 1):
+                    # for j in range(4):
+                        # if y < target_h:
+                            # tex[4*(x + y*target_w) + j] = 0.0
+                            # nestmaps[i][4*(x + y*target_w) + j] = 1.0
+        pack_image = bpy.data.images.new(f'Nest {i}', target_w, target_h, alpha=with_alpha, float_buffer=True)
+        # pack_image.pixels = tex
+        pack_image.pixels = nestmaps[i]
         if len(targets) > 1:
             path_exr = bpy.path.abspath(f'{base_filepath} {i}.exr')
             path_png = bpy.path.abspath(f'{base_filepath} {i}.png')
@@ -595,7 +679,7 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
             path_exr = bpy.path.abspath(f'{base_filepath}.exr')
             path_png = bpy.path.abspath(f'{base_filepath}.png')
             path_webp = bpy.path.abspath(f'{base_filepath}.webp')
-        scene.render.image_settings.color_mode = 'RGBA' if has_alpha[i] else 'RGB'
+        scene.render.image_settings.color_mode = 'RGBA' if with_alpha else 'RGB'
         scene.render.image_settings.file_format = 'OPEN_EXR'
         scene.render.image_settings.exr_codec = 'DWAA'
         scene.render.image_settings.color_depth = '16'
@@ -606,13 +690,7 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
         pack_image.save()
         bpy.data.images.remove(pack_image)
         Image.open(path_png).save(path_webp, format = "WebP", lossless = True)
-
-        filled = 0
-        for x in range(target_w):
-            for span in target[x]:
-                if span[0] < target_h:
-                    filled += min(target_h - 1, span[1]) - span[0] + 1
-        print(f'. Texture #{i} has a size of {target_w}x{target_h} for a fill rate of {1.0 - (filled/(target_w*target_h)):>6.2%} (alpha: {has_alpha[i]})')
+        print(f'. Texture #{i} has a size of {target_w}x{target_h} for a fill rate of {1.0 - (filled/(target_w*target_h)):>6.2%} (alpha: {with_alpha})')
     bpy.data.scenes.remove(scene)
     print(f'. Nest map generated and saved to {base_filepath}')
 

@@ -565,8 +565,7 @@ def export_vpx(op, context):
                     if vpx_name not in light_processed:
                         code += f'	\' Sync on {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
                         light_processed.append(vpx_name)
-            hdr_scale = vlm_utils.get_hdr_scale(obj)
-            code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, {100.0/hdr_scale:6.2f}, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
+            code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100.0, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
         return code
 
 
@@ -829,8 +828,7 @@ def export_vpx(op, context):
                 if vpx_name not in light_processed:
                     code += f'	\' Sync on {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
                     light_processed.append(vpx_name)
-        hdr_scale = vlm_utils.get_hdr_scale(obj)
-        code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, {100.0/hdr_scale:6.2f}, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
+        code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100.0, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
     code += 'End Sub\n'
 
     code += "\n"
@@ -882,15 +880,14 @@ def export_vpx(op, context):
     for obj in lightmaps:
         vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
         obj_ref = elem_ref(export_name(obj.name))
-        hdr_scale = vlm_utils.get_hdr_scale(obj)
         if not vpx_name:
-            code += f"	{obj_ref}.Visible = False ' {100.0/hdr_scale:6.2f} HDR scaling\n"
+            code += f"	{obj_ref}.Visible = False\n"
         elif vpx_name in table_lights:
-            code += f'	UpdateLightMapFromLight {elem_ref(vpx_name)}, {obj_ref}, {100.0/hdr_scale:6.2f}, {"True" if sync_color else "False"}\n'
+            code += f'	UpdateLightMapFromLight {elem_ref(vpx_name)}, {obj_ref}, 100.0, {"True" if sync_color else "False"}\n'
         elif vpx_name in table_flashers:
-            code += f'	UpdateLightMapFromFlasher {elem_ref(vpx_name)}, {obj_ref}, {100.0/hdr_scale:6.2f}, {"True" if sync_color else "False"}\n'
+            code += f'	UpdateLightMapFromFlasher {elem_ref(vpx_name)}, {obj_ref}, 100.0, {"True" if sync_color else "False"}\n'
         else:
-            code += f"	{obj_ref}.Visible = False ' {100.0/hdr_scale:6.2f} HDR scaling\n"
+            code += f"	{obj_ref}.Visible = False\n"
     code += "End Sub\n"
     code += "\n"
     code += "Function LightFade(light, is_on, percent)\n"
