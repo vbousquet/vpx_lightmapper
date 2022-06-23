@@ -374,7 +374,7 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
     render_fs = '''
         in vec2 uv;
         out vec4 FragColor;
-        uniform sampler2D island_mask;
+        uniform sampler2D seam_mask;
         uniform sampler2D render_mask;
         uniform sampler2D render;
         uniform vec2 src_size;
@@ -387,9 +387,11 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
                 vec2 min_uv = vec2(0.5/src_size);
                 vec2 max_uv = vec2(1.0 - 0.5/src_size);
                 float dist_sum = 0.0;
-                float inside = 0.0;
-                vec4 seam = vec4(0.0);
-                vec4 color = vec4(0.0);
+                float inside = 0.0; // 0 or 1 when fully outside/inside including padding, gradient value inside the padding/border area
+                vec4 seam = vec4(0.0); // RGB is lightmap seam fading, alpha is object mask including padding
+                vec4 padding_accum = vec4(0.0); // masked weighted (by mask alpha and distance) average of the RGBA color
+                float padding_color_sum = 0.0;
+                float padding_alpha_sum = 0.0;
                 for (int i = -padding; i <= padding; i++)
                 {
                     for (int j = -padding; j <= padding; j++)
@@ -400,15 +402,33 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
                         float dist = dot(v, v);
                         float dist_factor = 1.0 / (1.0 + dist * dist);
                         dist_sum += dist_factor;
-                        seam += texture(island_mask, uv_ofs) * dist_factor;
-                        color += texture(render, uv_ofs) * dist_factor;
-                        inside += texture(render_mask, uv_ofs).a * dist_factor;
+                        seam += texture(seam_mask, uv_ofs) * dist_factor;
+                        vec4 tex = texture(render, uv_ofs);
+                        float mask_alpha = texture(render_mask, uv_ofs).a;
+                        float factor = mask_alpha * dist_factor;
+                        inside += factor;
+                        padding_accum.rgb += tex.rgb * factor;
+                        padding_color_sum += factor;
+                        if (mask_alpha >= 1.0)
+                        { // Do not accumulate alpha channel inside border since it contains border fade as well as part transparency
+                            padding_accum.a += tex.a * factor;
+                            padding_alpha_sum += factor;
+                        }
                     }
                 }
                 inside = inside / dist_sum;
-                seam = mix(seam / dist_sum, texture(island_mask, uv), inside);
-                color = mix(color / dist_sum, texture(render, uv), inside);
-                FragColor = seam * color;
+                if (padding_color_sum == 0.0 || padding_alpha_sum == 0.0)
+                { // Fully outside, with not a single pixel of the border or inside of the island => discard texel
+                    FragColor = vec4(0.0);
+                }
+                else
+                { // Either inside (if inside == 1), or in the border area (if 0 < inside < 1) => lerp between inside color and padding color
+                    seam.rgb = seam.rgb / dist_sum;
+                    seam.a = step(0.001, seam.a); // binary island mask
+                    padding_accum.rgb = padding_accum.rgb / padding_color_sum;
+                    padding_accum.a = padding_accum.a / padding_alpha_sum;
+                    FragColor = seam * mix(padding_accum, texture(render, uv), inside);
+               }
             }
         }'''
     render_shader = gpu.types.GPUShader(render_vs, render_fs)
@@ -550,8 +570,8 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
                 render_shader.uniform_float("pos_dec", (x, y))
                 render_shader.uniform_int("rot", rot)
                 render_shader.uniform_int("padding", padding)
-                render_shader.uniform_sampler("island_mask", offscreen_seams.texture_color)
                 render_shader.uniform_sampler("render_mask", gpu.texture.from_image(island_group_mask))
+                render_shader.uniform_sampler("seam_mask", offscreen_seams.texture_color)
                 render_shader.uniform_sampler("render", gpu.texture.from_image(island_render))
                 render_batch.draw(render_shader)
                 # fb = gpu.state.active_framebuffer_get()
