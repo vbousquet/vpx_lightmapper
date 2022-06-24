@@ -386,12 +386,11 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
             {
                 vec2 min_uv = vec2(0.5/src_size);
                 vec2 max_uv = vec2(1.0 - 0.5/src_size);
-                float dist_sum = 0.0;
-                float inside = 0.0; // 0 or 1 when fully outside/inside including padding, gradient value inside the padding/border area
+                float seam_sum = 0.0;
                 vec4 seam = vec4(0.0); // RGB is lightmap seam fading, alpha is object mask including padding
                 vec4 padding_accum = vec4(0.0); // masked weighted (by mask alpha and distance) average of the RGBA color
-                float padding_color_sum = 0.0;
-                float padding_alpha_sum = 0.0;
+                float padding_sum = 0.0;
+                float distance_to_outside = 2.0 * padding * padding;
                 for (int i = -padding; i <= padding; i++)
                 {
                     for (int j = -padding; j <= padding; j++)
@@ -401,33 +400,30 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
                         vec2 v = vec2(i, j);
                         float dist = dot(v, v);
                         float dist_factor = 1.0 / (1.0 + dist * dist);
-                        dist_sum += dist_factor;
+                        // evaluate if this texel is part of the padded island as well as seam fading
                         seam += texture(seam_mask, uv_ofs) * dist_factor;
-                        vec4 tex = texture(render, uv_ofs);
-                        float mask_alpha = texture(render_mask, uv_ofs).a;
-                        float factor = mask_alpha * dist_factor;
-                        inside += factor;
-                        padding_accum.rgb += tex.rgb * factor;
-                        padding_color_sum += factor;
-                        if (mask_alpha >= 1.0)
-                        { // Do not accumulate alpha channel inside border since it contains border fade as well as part transparency
-                            padding_accum.a += tex.a * factor;
-                            padding_alpha_sum += factor;
+                        seam_sum += dist_factor;
+                        if (texture(render_mask, uv_ofs).a < 1.0)
+                        { // Outside of part or inside border area: update distance to outside
+                            distance_to_outside = min(distance_to_outside, dist);
+                        }
+                        else
+                        { // Only accumulate outside of border (mask < 1.0) since it would contain border fade as well mixed with part transparency
+                            padding_accum += texture(render, uv_ofs) * dist_factor;
+                            padding_sum += dist_factor;
                         }
                     }
                 }
-                inside = inside / dist_sum;
-                if (padding_color_sum == 0.0 || padding_alpha_sum == 0.0)
-                { // Fully outside, with not a single pixel of the border or inside of the island => discard texel
+                if (padding_sum == 0.0)
+                { // Fully outside, with not a single pixel of the island => discard texel
                     FragColor = vec4(0.0);
                 }
                 else
                 { // Either inside (if inside == 1), or in the border area (if 0 < inside < 1) => lerp between inside color and padding color
-                    seam.rgb = seam.rgb / dist_sum;
+                    float inside = smoothstep(0.0, 2.0, sqrt(distance_to_outside)); // Fixed 2 pixel border/interior fading
+                    seam = seam / seam_sum;
                     seam.a = step(0.001, seam.a); // binary island mask
-                    padding_accum.rgb = padding_accum.rgb / padding_color_sum;
-                    padding_accum.a = padding_accum.a / padding_alpha_sum;
-                    FragColor = seam * mix(padding_accum, texture(render, uv), inside);
+                    FragColor = seam * mix(padding_accum / padding_sum, texture(render, uv), inside);
                }
             }
         }'''
@@ -555,13 +551,8 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
                 # pack_image.pixels = [v / 255 for v in image_data]
 
             # Copy the render, applying offset, rotation, flipping, masking, border/padding fading, and lightmap seam fading
-            #gpu.state.blend_set('NONE')
             gpu.state.blend_set('ALPHA')
             with offscreen_renders[n].bind():
-                # print((src_w, src_h), " => ", (target_w, target_h))
-                # print((x, y), " rot= ", rot, " render group = ", island_render_group)
-                # print((min_x, min_y), " padding= ", padding)
-                # print("pos= ", (x + min_x - padding, y + min_y - padding))
                 render_shader.bind()
                 render_shader.uniform_float("src_size", (src_w, src_h))
                 render_shader.uniform_float("dst_size", (target_w, target_h))
