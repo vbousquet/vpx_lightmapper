@@ -404,7 +404,8 @@ def create_bake_meshes(op, context):
     merged_bake_meshes = []
     opaque_bake_mesh = None
     for bake_col, bake_name, bake_mesh, sync_obj, is_spinner, use_obj_pos in bake_meshes:
-        if bake_col.vlmSettings.is_opaque and sync_obj is None:
+        # FIXME Disabled merging since nestmap splitting is not more supported
+        if False and bake_col.vlmSettings.is_opaque and sync_obj is None:
             if opaque_bake_mesh:
                 merged_bake_meshes.remove(opaque_bake_mesh)
                 ex_bake_col, ex_bake_name, ex_bake_mesh, ex_sync_obj, ex_spinner, ex_use_obj_pos = opaque_bake_mesh
