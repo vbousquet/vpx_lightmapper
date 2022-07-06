@@ -277,9 +277,6 @@ def render_all_groups(op, context):
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     n_render_groups = vlm_utils.get_n_render_groups(context)
     light_scenarios = vlm_utils.get_lightings(context)
-    n_lighting_situations = len(light_scenarios)
-    n_render_performed = n_skipped = n_existing = 0
-    n_total_render = n_render_groups * n_lighting_situations
     bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
     if bake_info_group:
         bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 1.0
@@ -322,6 +319,19 @@ def render_all_groups(op, context):
     for i in range(n_render_groups):
         im = Image.open(bpy.path.abspath(f"{mask_path}Group {i}.png"))
         group_masks.append((im.size[0], im.size[1], im.tobytes("raw", "L")))
+
+    # Remove lighting scenarios which are already fully rendered
+    if not opt_force_render:
+        def is_scenario_done(scenario, bakepath, group_masks):
+            for group_index, group_mask in enumerate(group_masks):
+                render_path = f'{bakepath}{scenario[0]} - Group {group_index}.exr'
+                if not os.path.exists(bpy.path.abspath(render_path)):
+                    return False
+            return True
+        light_scenarios = [scenario for scenario in light_scenarios if not is_scenario_done(scenario, bakepath, group_masks)]
+    n_lighting_situations = len(light_scenarios)
+    n_render_performed = n_skipped = n_existing = 0
+    n_total_render = n_render_groups * n_lighting_situations
     
     # In Blender 3.2, we can render multiple lights at once and save there data separately using light groups for way faster rendering. This needs to use the compositor to performs denoising and save to split file outputs.
     batched_scenarios = []
@@ -356,7 +366,7 @@ def render_all_groups(op, context):
                     #print(f". {name} lighting scenario use emitter/occluder meshes. It can't be batched rendered.")
                     continue
                 if light_col.vlmSettings.world != None:
-                    if render_world is None: # One non lightmap bake maximum per batch
+                    if render_world is None: # One world bake maximum per batch
                         render_world = light_col.vlmSettings.world
                         render_world.lightgroup = name
                     else:
@@ -457,6 +467,7 @@ def render_all_groups(op, context):
                         remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
                         msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
                     print(msg)
+                    print(f'. Scenarios: {",".join(s[0][0] for s in batch)}')
                     #return {'FINISHED'}                    
                     
                     bpy.ops.render.render(write_still=False, scene=scene.name)
