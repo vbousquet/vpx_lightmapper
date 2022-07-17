@@ -28,7 +28,7 @@ from . import vlm_utils
 from . import vlm_collections
 
 
-def camera_inclination_update(self, context):
+def camera_inclination_update(op, context):
     """Update bake camera position based on its inclination, in order to fit the following constraints:
     - look at the center of the playfield
     - view all baked objects

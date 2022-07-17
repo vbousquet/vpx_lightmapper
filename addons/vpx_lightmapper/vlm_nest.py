@@ -455,7 +455,7 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
     mask_data = []
     render_data = []
     for i in range(n_render_groups):
-        path = f"{mask_path}Mask Group {i}.png"
+        path = f"{mask_path}Group Mask {i}.png"
         mask_data.append(vlm_utils.get_image_or_black(path, black_is_none=True))
     loaded_bake_lighting = None
     for obj_name in sorted(list({obj.name for (obj, _, _, _) in selection}), key=lambda x:bpy.data.objects[x].vlmSettings.bake_lighting):

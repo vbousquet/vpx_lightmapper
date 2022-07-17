@@ -18,6 +18,7 @@ import math
 import mathutils
 import bmesh
 import os
+import glob
 import time
 import gpu
 import datetime
@@ -29,6 +30,38 @@ from gpu_extras.batch import batch_for_shader
 from . import vlm_utils
 from . import vlm_collections
 from PIL import Image # External dependency
+
+
+def get_material(light_name, is_lightmap, render_id):
+    ''' Find or create the material for the given lighting scenario, for the given object id (aither render group number or bake object name)
+    '''
+    for mat in bpy.data.materials:
+        light = mat.get('VLM.Light')
+        render = mat.get('VLM.Render')
+        if light == light_name and render == render_id:
+            return mat
+    mat_name = f'VLM.{light_name}.RG{render_id}' if isinstance(render_id, int) else f'VLM.{light_name}.{render_id}'
+    packmat = bpy.data.materials["VPX.Core.Mat.PackMap"]
+    mat = packmat.copy()
+    mat.name = mat_name
+    mat['VLM.Light'] = light_name
+    mat['VLM.Render'] = render_id
+    if is_lightmap:
+        mat.blend_method = 'BLEND'
+        mat.shadow_method = 'NONE'
+        mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
+    else:
+        mat.blend_method = 'OPAQUE'
+        mat.shadow_method = 'HASHED'
+        mat.node_tree.nodes["PackMap"].inputs[2].default_value = 0.0
+    return mat
+
+
+def adapt_materials(mesh, light_name, is_lightmap):
+    for i, mat in enumerate(mesh.materials):
+        render_id = mat.get('VLM.Render')
+        if render_id is not None:
+            mesh.materials[i] = get_material(light_name, is_lightmap, render_id)
 
 
 def create_bake_meshes(op, context):
@@ -111,14 +144,14 @@ def create_bake_meshes(op, context):
     light_scenarios = vlm_utils.get_lightings(context)
     #light_scenarios = [l for l in light_scenarios if l[0] == 'Inserts-L8'] # Debug: For quickly testing a single light scenario
     for light_scenario in light_scenarios:
-        name = light_scenario[0]
-        light_merge_groups[name] = []
+        light_name, is_lightmap, _, lights, _ = light_scenario
+        light_merge_groups[light_name] = []
         mats = []
         packmat = bpy.data.materials["VPX.Core.Mat.PackMap"]
         for index in range(n_render_groups):
             mat = packmat.copy()
-            mat.name = f"VPX.PM.{name}.RG{index}"
-            if light_scenario[1]:
+            mat.name = f"VPX.PM.{light_name}.RG{index}"
+            if is_lightmap:
                 mat.blend_method = 'BLEND'
                 mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
             else:
@@ -167,202 +200,191 @@ def create_bake_meshes(op, context):
                 dup = bpy.data.objects[dup_name]
             dup.data.free_normals_split()
             dup.data.use_auto_smooth = False
-            dup.data.materials.clear()
             dup.data.validate()
-            for j in range(n_render_groups):
-                dup.data.materials.append(light_scenarios[0][4][j])
+            is_bake = dup.vlmSettings.use_bake
+
+            # Switch material to baked ones
+            dup.data.materials.clear()
             for poly in dup.data.polygons:
-                poly.material_index = dup.vlmSettings.render_group
-            override = context.copy()
-            override["object"] = override["active_object"] = dup
-            override["selected_objects"] = override["selected_editable_objects"] = [dup]
-            for modifier in dup.modifiers:
-                if 'NoExp' in modifier.name: break # or (modifier.type == 'BEVEL' and modifier.width < 0.1)
-                bpy.ops.object.modifier_apply(override, modifier=modifier.name)
-            dup = bpy.data.objects[dup_name]
-            dup.modifiers.clear()
+                poly.material_index = 0
+            dup.data.materials.append(get_material('Default', False, obj_name if is_bake else dup.vlmSettings.render_group))
+            # for j in range(n_render_groups):
+                # dup.data.materials.append(light_scenarios[0][4][j])
+            # for poly in dup.data.polygons:
+                # poly.material_index = dup.vlmSettings.render_group
+            #FIXME implement for baked meshes
+            
+            # Apply modifiers
+            with context.temp_override(active_object=dup, selected_objects=[dup]):
+                for modifier in dup.modifiers:
+                    if 'NoExp' in modifier.name: break # or (modifier.type == 'BEVEL' and modifier.width < 0.1)
+                    bpy.ops.object.modifier_apply(modifier=modifier.name)
+                dup.modifiers.clear()
+            
+            # Remove face shading
+            with context.temp_override(active_object=dup, selected_objects=[dup]):
+                bpy.ops.object.shade_flat()
+            
             # Create base UV projected layer
-            uvs = [uv for uv in dup.data.uv_layers]
-            while uvs:
-                dup.data.uv_layers.remove(uvs.pop())
-            dup.data.uv_layers.new(name='UVMap')
-            vlm_utils.project_uv(camera, dup, proj_x, proj_y)
+            if is_bake:
+                if not dup.data.uv_layers.get('UVMap'):
+                    print(f'. ERROR {obj_name} is using traidtional bake and is missing its UVMap')
+            else:
+                uvs = [uv for uv in dup.data.uv_layers]
+                while uvs:
+                    dup.data.uv_layers.remove(uvs.pop())
+                dup.data.uv_layers.new(name='UVMap')
+                vlm_utils.project_uv(camera, dup, proj_x, proj_y)
+            
             # Apply base transform
             dup.data.transform(dup.matrix_basis)
             dup.matrix_basis.identity()
+            
             # Perform base mesh optimization
             # with context.temp_override(active_object=dup, selected_objects=dup):
-            context.view_layer.objects.active = dup
-            bpy.ops.object.mode_set(mode = 'EDIT')
-            bpy.ops.mesh.reveal()
-            bpy.ops.mesh.select_all(action='SELECT')
-            bpy.ops.mesh.remove_doubles(threshold = opt_merge_double_limit)
-            bpy.ops.mesh.dissolve_limited(angle_limit = opt_limited_dissolve_limit)
-            bpy.ops.mesh.delete_loose()
-            bpy.ops.mesh.select_all(action='SELECT')
-            bpy.ops.object.mode_set(mode = 'OBJECT')
+            #context.view_layer.objects.active = dup
+            if not is_bake:
+                with context.temp_override(active_object=dup, selected_objects=[dup]):
+                    bpy.ops.object.mode_set(mode = 'EDIT')
+                    bpy.ops.mesh.reveal()
+                    bpy.ops.mesh.select_all(action='SELECT')
+                    bpy.ops.mesh.remove_doubles(threshold = opt_merge_double_limit)
+                    bpy.ops.mesh.dissolve_limited(angle_limit = opt_limited_dissolve_limit)
+                    bpy.ops.mesh.delete_loose()
+                    bpy.ops.mesh.select_all(action='SELECT')
+                    bpy.ops.object.mode_set(mode = 'OBJECT')
+            
             # Optimize mesh: usual cleanup and evaluate biggest face size in pixels for decimate LOD
-            bm = bmesh.new()
-            bm.from_mesh(dup.data)
-            bm.faces.ensure_lookup_table()
-            uv_loop = bm.loops.layers.uv[0]
-            triangle_loops = bm.calc_loop_triangles()
-            areas = {face: 0.0 for face in bm.faces} 
-            for loop in triangle_loops:
-                areas[loop[0].face] += vlm_utils.tri_area( *(Vector( (*l[uv_loop].uv, 0) ) for l in loop) )
-            bm.free()
-            max_size = int(max(areas.values()) * proj_x * proj_y)
-            if max_size < opt_lod_threshold:
-                ratio = math.sqrt(max_size / opt_lod_threshold)
+            if not is_bake:
+                bm = bmesh.new()
+                bm.from_mesh(dup.data)
+                bm.faces.ensure_lookup_table()
+                uv_loop = bm.loops.layers.uv[0]
+                triangle_loops = bm.calc_loop_triangles()
+                areas = {face: 0.0 for face in bm.faces} 
+                for loop in triangle_loops:
+                    areas[loop[0].face] += vlm_utils.tri_area( *(Vector( (*l[uv_loop].uv, 0) ) for l in loop) )
+                bm.free()
+                max_size = int(max(areas.values()) * proj_x * proj_y)
+                if max_size < opt_lod_threshold:
+                    ratio = math.sqrt(max_size / opt_lod_threshold)
+                    with context.temp_override(active_object=dup, selected_objects=[dup]):
+                        bpy.ops.object.mode_set(mode = 'EDIT')
+                        bpy.ops.mesh.decimate(ratio=ratio)
+                        bpy.ops.object.mode_set(mode = 'OBJECT')
+                    print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was decimated using a ratio of {ratio:.2%} from {len(areas)} to {len(dup.data.polygons)} faces')
+                else:
+                    print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added (no LOD since max face size is {max_size:>8}px² with a threshold of {opt_lod_threshold}px²)')
+            
+            # Reveal any hidden part
+            with context.temp_override(active_object=dup, selected_objects=[dup]):
                 bpy.ops.object.mode_set(mode = 'EDIT')
-                bpy.ops.mesh.decimate(ratio=ratio)
+                bpy.ops.mesh.reveal()
+                bpy.ops.mesh.select_all(action='SELECT')
                 bpy.ops.object.mode_set(mode = 'OBJECT')
-                print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was decimated using a ratio of {ratio:.2%} from {len(areas)} to {len(dup.data.polygons)} faces')
-            else:
-                print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added (no LOD since max face size is {max_size:>8}px² with a threshold of {opt_lod_threshold}px²)')
+
+            # Remove backfacing faces
+            if not is_bake and sync_obj is None and opt_backface_limit_angle < 90.0:
+                dot_limit = math.cos(radians(opt_backface_limit_angle + 90))
+                bpy.ops.object.mode_set(mode = 'EDIT')
+                bm = bmesh.from_edit_mesh(dup.data)
+                bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
+                bm.faces.ensure_lookup_table()
+                n_faces = len(bm.faces)
+                faces = []
+                for face in bm.faces:
+                    normal = face.normal
+                    if normal.length_squared < 0.5:
+                        pass
+                    else:
+                        face_center = face.calc_center_bounds()
+                        dot_value = normal.dot((camera.location - face_center).normalized())
+                        if dot_value >= dot_limit:
+                            pass
+                        elif opt_vpx_reflection:
+                            # To support VPX reflection, check visibility from the playfield reflected ray
+                            face_center.z = -face_center.z
+                            reflected = (face_center - camera.location).normalized() # ray from eye to reflection of the face
+                            reflected.z = -reflected.z
+                            dot_value = -normal.dot(reflected) # negate since this is an incoming vector toward the face
+                            if dot_value < dot_limit: faces.append(face)
+                        else:
+                            faces.append(face)
+                bmesh.ops.delete(bm, geom=faces, context='FACES')
+                bmesh.update_edit_mesh(dup.data)
+                bpy.ops.object.mode_set(mode = 'OBJECT') 
+                #print(f". {n_faces - len(bake_target.data.polygons)} backfacing faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
+
+            # Triangulate (in the end, VPX only deals with triangles, and this simplify the lightmap pruning process)
+            bpy.ops.object.mode_set(mode='EDIT')
+            bm = bmesh.from_edit_mesh(dup.data)
+            bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
+            bmesh.update_edit_mesh(dup.data)
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+            # Subdivide long edges to avoid visible projection distortion, and allow better lightmap face pruning (recursive subdivisions)
+            if not is_bake and not dup.vlmSettings.is_spinner:
+                opt_cut_threshold = 0.1
+                for i in range(8): # FIXME Limit the amount since there are situations were subdividing fails
+                    bme = bmesh.new()
+                    bme.from_mesh(dup.data)
+                    bme.edges.ensure_lookup_table()
+                    bme.faces.ensure_lookup_table()
+                    bme.verts.ensure_lookup_table()
+                    long_edges = []
+                    longest_edge = 0
+                    uv_layer = bme.loops.layers.uv.verify()
+                    for edge in bme.edges:
+                        if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
+                            continue
+                        ua, va = edge.verts[0].link_loops[0][uv_layer].uv
+                        ub, vb = edge.verts[1].link_loops[0][uv_layer].uv
+                        l = math.sqrt((ub-ua)*(ub-ua)*opt_ar*opt_ar+(vb-va)*(vb-va))
+                        longest_edge = max(longest_edge, l)
+                        if l >= opt_cut_threshold:
+                            long_edges.append(edge)
+                    if not long_edges:
+                        bme.to_mesh(dup.data)
+                        bme.free()
+                        dup.data.update()
+                        break
+                    bmesh.ops.subdivide_edges(bme, edges=long_edges, cuts=1, use_grid_fill=True)
+                    bmesh.ops.triangulate(bme, faces=bme.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
+                    bme.to_mesh(dup.data)
+                    bme.free()
+                    dup.data.update()
+                    vlm_utils.project_uv(camera, dup, proj_x, proj_y)
+                    print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
+            
             objects_to_join.append(dup)
+        
         if len(objects_to_join) == 0: continue
         
         # Create merged mesh
-        bake_mesh = bpy.data.meshes.new('VLM.Bake Target')
-        bake_mesh.materials.clear()
-        for j in range(n_render_groups):
-            bake_mesh.materials.append(light_scenarios[0][4][j])
-        bm = bmesh.new()
-        poly_start = 0
-        for obj in objects_to_join:
-            bm.from_mesh(obj.data)
-            bm.faces.ensure_lookup_table()
-            poly_end = len(bm.faces)
-            for poly in range(poly_start, poly_end):
-                bm.faces[poly].material_index = max(0, obj.vlmSettings.render_group)
-            poly_start = poly_end
-            result_col.objects.unlink(obj)
-        bm.to_mesh(bake_mesh)
-        bm.free()
+        with context.temp_override(active_object=objects_to_join[0], selected_editable_objects=objects_to_join):
+            bpy.ops.object.join()
+        bake_target = objects_to_join[0]
+        bake_target.name = 'VLM.Bake Target'
+        bake_mesh = bake_target.data
         bake_mesh.validate()
-        bake_target = bpy.data.objects.new('VLM.Bake Target', bake_mesh)
-        bake_target_name = bake_target.name
-        result_col.objects.link(bake_target)
-
+        bpy.ops.object.select_all(action='DESELECT')
+        bake_target.select_set(True)
+        context.view_layer.objects.active = bake_target
         is_spinner = use_obj_pos = False
         if len(objects_to_join) == 1:
             is_spinner = objects_to_join[0].vlmSettings.is_spinner
             use_obj_pos = objects_to_join[0].vlmSettings.use_obj_pos
+        print(f". Objects merged ({len(bake_target.data.vertices)} vertices, {len(bake_target.data.polygons)} faces)")
         
-        bake_target = bpy.data.objects[bake_target_name]
-        override["object"] = override["active_object"] = bake_target
-        override["selected_objects"] = override["selected_editable_objects"] = [bake_target]
-        bpy.ops.object.shade_flat(override)
-
         # if bake_name == 'Parts':
             # return {'FINISHED'}
 
-        bpy.ops.object.select_all(action='DESELECT')
-        bake_target.select_set(True)
-        context.view_layer.objects.active = bake_target
-        bpy.ops.object.mode_set(mode = 'EDIT')
-        bpy.ops.mesh.reveal()
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.object.mode_set(mode = 'OBJECT')
-        print(f". Objects merged ({len(bake_target.data.vertices)} vertices, {len(bake_target.data.polygons)} untriangulated faces)")
-        
-        # Remove backfacing faces
-        if sync_obj is None and opt_backface_limit_angle < 90.0:
-            bake_target = bpy.data.objects[bake_target_name]
-            dot_limit = math.cos(radians(opt_backface_limit_angle + 90))
-            bpy.ops.object.mode_set(mode = 'EDIT')
-            bm = bmesh.from_edit_mesh(bake_target.data)
-            bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
-            bm.faces.ensure_lookup_table()
-            n_faces = len(bm.faces)
-            faces = []
-            for face in bm.faces:
-                normal = face.normal
-                if normal.length_squared < 0.5:
-                    pass
-                else:
-                    face_center = face.calc_center_bounds()
-                    dot_value = normal.dot((camera.location - face_center).normalized())
-                    if dot_value >= dot_limit:
-                        pass
-                    elif opt_vpx_reflection:
-                        # To support VPX reflection, check visibility from the playfield reflected ray
-                        face_center.z = -face_center.z
-                        reflected = (face_center - camera.location).normalized() # ray from eye to reflection of the face
-                        reflected.z = -reflected.z
-                        dot_value = -normal.dot(reflected) # negate since this is an incoming vector toward the face
-                        if dot_value < dot_limit: faces.append(face)
-                    else:
-                        faces.append(face)
-            bmesh.ops.delete(bm, geom=faces, context='FACES')
-            bmesh.update_edit_mesh(bake_target.data)
-            bpy.ops.object.mode_set(mode = 'OBJECT') 
-            bake_target = bpy.data.objects[bake_target_name]
-            print(f". {n_faces - len(bake_target.data.polygons)} backfacing faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
-
-        # Clean up and simplify merged mesh
-        bake_target = bpy.data.objects[bake_target_name]
-        n_faces = len(bake_target.data.polygons)
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.mesh.remove_doubles(threshold = opt_merge_double_limit)
-        #bpy.ops.mesh.dissolve_limited(angle_limit = opt_limited_dissolve_limit) # don't do it twice: it's not worth and it makes it impossible to mimic in the render stage through modifiers
-        bpy.ops.mesh.delete_loose()
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.object.mode_set(mode='OBJECT')
-        bake_target = bpy.data.objects[bake_target_name]
-        print(f". {n_faces - len(bake_target.data.polygons)} faces removed during cleanup (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
-
-        # Triangulate (in the end, VPX only deals with triangles, and this simplify the lightmap pruning process)
-        bake_target = bpy.data.objects[bake_target_name]
-        bpy.ops.object.mode_set(mode='EDIT')
-        bm = bmesh.from_edit_mesh(bake_target.data)
-        bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
-        bmesh.update_edit_mesh(bake_target.data)
-        bpy.ops.object.mode_set(mode='OBJECT')
-
-        # Subdivide long edges to avoid visible projection distortion, and allow better lightmap face pruning (recursive subdivisions)
-        if not is_spinner:
-            opt_cut_threshold = 0.1
-            bake_target = bpy.data.objects[bake_target_name]
-            for i in range(8): # FIXME Limit the amount since there are situations were subdividing fails
-                bake_target = bpy.data.objects[bake_target_name]
-                bme = bmesh.new()
-                bme.from_mesh(bake_target.data)
-                bme.edges.ensure_lookup_table()
-                bme.faces.ensure_lookup_table()
-                bme.verts.ensure_lookup_table()
-                long_edges = []
-                longest_edge = 0
-                uv_layer = bme.loops.layers.uv.verify()
-                for edge in bme.edges:
-                    if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
-                        continue
-                    ua, va = edge.verts[0].link_loops[0][uv_layer].uv
-                    ub, vb = edge.verts[1].link_loops[0][uv_layer].uv
-                    l = math.sqrt((ub-ua)*(ub-ua)*opt_ar*opt_ar+(vb-va)*(vb-va))
-                    longest_edge = max(longest_edge, l)
-                    if l >= opt_cut_threshold:
-                        long_edges.append(edge)
-                if not long_edges:
-                    bme.to_mesh(bake_target.data)
-                    bme.free()
-                    bake_target.data.update()
-                    break
-                bmesh.ops.subdivide_edges(bme, edges=long_edges, cuts=1, use_grid_fill=True)
-                bmesh.ops.triangulate(bme, faces=bme.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
-                bme.to_mesh(bake_target.data)
-                bme.free()
-                bake_target.data.update()
-                vlm_utils.project_uv(camera, bake_target, proj_x, proj_y)
-                print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
-        
         # Sort front to back faces if opaque, back to front for translucent
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.mesh.sort_elements(type='CURSOR_DISTANCE', elements={'VERT', 'FACE'}, reverse=is_translucent)
-        bpy.ops.object.mode_set(mode='OBJECT')
+        with context.temp_override(active_object=bake_target, selected_objects=[bake_target]):
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.mesh.sort_elements(type='CURSOR_DISTANCE', elements={'VERT', 'FACE'}, reverse=is_translucent)
+            bpy.ops.object.mode_set(mode='OBJECT')
         
         # Add a white vertex color layer for lightmap seam fading
         if not bake_mesh.vertex_colors:
@@ -374,7 +396,7 @@ def create_bake_meshes(op, context):
 
         # Save solid bake to the result collection
         for light_scenario in light_scenarios:
-            light_name, is_lightmap, _, lights, materials = light_scenario
+            light_name, is_lightmap, _, lights, _ = light_scenario
             if is_lightmap: continue
             obj_name = f'{bake_name}.BM.{light_name}' # if sync_obj else f'Table.BM.{light_name}.{bake_name}'
             bake_mesh = bake_mesh.copy()
@@ -385,8 +407,7 @@ def create_bake_meshes(op, context):
                 bake_instance.matrix_basis = dup.matrix_basis
             else:
                 bake_instance.matrix_basis.identity()
-            for index in range(n_render_groups):
-                bake_instance.data.materials[index] = materials[index]
+            adapt_materials(bake_instance.data, light_name, is_lightmap)
             bake_instance.vlmSettings.bake_lighting = light_name
             bake_instance.vlmSettings.bake_objects = bake_col.name
             bake_instance.vlmSettings.bake_hdr_scale = 1.0
@@ -406,7 +427,7 @@ def create_bake_meshes(op, context):
     merged_bake_meshes = []
     opaque_bake_mesh = None
     for bake_col, bake_name, bake_mesh, sync_obj, is_spinner, use_obj_pos in bake_meshes:
-        # FIXME Disabled merging since nestmap splitting is not more supported
+        # FIXME merging is disabled since nestmap splitting is not more supported
         if False and bake_col.vlmSettings.is_opaque and sync_obj is None:
             if opaque_bake_mesh:
                 merged_bake_meshes.remove(opaque_bake_mesh)
@@ -443,16 +464,15 @@ def create_bake_meshes(op, context):
     render_path = vlm_utils.get_bakepath(context, type='RENDERS')
     lm_threshold = vlm_utils.get_lm_threshold()
     for light_scenario in light_scenarios:
-        light_name, is_lightmap, _, lights, materials = light_scenario
+        light_name, is_lightmap, _, lights, _ = light_scenario
         if not is_lightmap: continue
-        influence = build_influence_map(render_path, light_name, n_render_groups, prunemap_width, prunemap_height)
+        influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
         print(f'\nProcessing lightmaps for {light_name}')
         for (bake_col, bake_name, bake_mesh, sync_obj, is_spinner, use_obj_pos), lightmap_vmap in zip(merged_bake_meshes, vmaps):
             obj_name = f'{bake_name}.LM.{light_name}'
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             n_faces = len(bake_instance.data.polygons)
-            for index in range(n_render_groups):
-                bake_instance.data.materials[index] = materials[index]
+            adapt_materials(bake_instance.data, light_name, is_lightmap)
             result_col.objects.link(bake_instance)
             bpy.ops.object.select_all(action='DESELECT')
             context.view_layer.objects.active = bake_instance
@@ -566,7 +586,7 @@ def build_visibility_map(bake_name, bake_instance_mesh, n_render_groups, width, 
     return vmaps
 
 
-def build_influence_map(render_path, name, n_render_groups, w, h):
+def build_influence_map(render_path, name, w, h):
     """ Build influence maps by loading all renders, scaling them down using a max filter, then reducing to BW.
         A global (maximum of all light groups) influence map as well as one per render group.
         The red channel is the brightness. The blue channel contains the maximum of all render channel for HDR level evaluation.
@@ -610,55 +630,55 @@ def build_influence_map(render_path, name, n_render_groups, w, h):
         with layer.bind():
             fb = gpu.state.active_framebuffer_get()
             fb.clear(color=(0.0, 0.0, 0.0, 0.0))
-    imaps = [None for o in range(n_render_groups + 1)]
-    for i in range(n_render_groups):
-        path_exr = f"{render_path}{name} - Group {i}.exr"
-        if os.path.exists(bpy.path.abspath(path_exr)):
-            image = bpy.data.images.load(path_exr, check_existing=False)
-            im_width, im_height = image.size
-            nx = int(im_width / w)
-            ny = int(im_height / h)
-            batch = batch_for_shader(
-                    bw_shader, 'TRI_FAN',
-                    {
-                        "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
-                        "uv": (
-                            (     0.5          /im_width,      0.5          /im_height), 
-                            (1 - (0.5 + nx - 1)/im_width,      0.5          /im_height), 
-                            (1 - (0.5 + nx - 1)/im_width, 1 - (0.5 + ny - 1)/im_height), 
-                            (     0.5          /im_width, 1 - (0.5 + ny - 1)/im_height)),
-                        "uv2": (
-                            (    0.5/w,     0.5/h), 
-                            (1 - 0.5/w,     0.5/h), 
-                            (1 - 0.5/w, 1 - 0.5/h), 
-                            (    0.5/w, 1 - 0.5/h)),
-                    },
-                )
-            bw_shader.bind()
-            bw_shader.uniform_sampler("back", layers[0].texture_color)
-            bw_shader.uniform_sampler("image", gpu.texture.from_image(image))
-            bw_shader.uniform_float("deltaU", 1.0 / im_width)
-            bw_shader.uniform_float("deltaV", 1.0 / im_height)
-            bw_shader.uniform_int("nx", nx)
-            bw_shader.uniform_int("ny", ny)
-            with layers[1].bind():
-                bw_shader.uniform_float("stacking", 1.0)
-                batch.draw(bw_shader)
-            with offscreen3.bind():
-                bw_shader.uniform_float("stacking", 0.0)
-                batch.draw(bw_shader)
-            imaps[i+1] = offscreen3.texture_color.read()
-            imaps[i+1].dimensions = w * h * 4
-            bpy.data.images.remove(image)
-            layers = (layers[1], layers[0]) # Swap layers
-    imaps[0] = layers[0].texture_color.read()
-    imaps[0].dimensions = w * h * 4
+    imaps = {}
+    for path_exr in glob.glob(bpy.path.abspath(f'{render_path}{name} - *.exr')):
+        id = path_exr[len(bpy.path.abspath(f'{render_path}{name} - ')):]
+        id = id[:-4]
+        image = bpy.data.images.load(path_exr, check_existing=False)
+        im_width, im_height = image.size
+        nx = int(im_width / w)
+        ny = int(im_height / h)
+        batch = batch_for_shader(
+                bw_shader, 'TRI_FAN',
+                {
+                    "position": ((-1, -1), (1, -1), (1, 1), (-1, 1)),
+                    "uv": (
+                        (     0.5          /im_width,      0.5          /im_height), 
+                        (1 - (0.5 + nx - 1)/im_width,      0.5          /im_height), 
+                        (1 - (0.5 + nx - 1)/im_width, 1 - (0.5 + ny - 1)/im_height), 
+                        (     0.5          /im_width, 1 - (0.5 + ny - 1)/im_height)),
+                    "uv2": (
+                        (    0.5/w,     0.5/h), 
+                        (1 - 0.5/w,     0.5/h), 
+                        (1 - 0.5/w, 1 - 0.5/h), 
+                        (    0.5/w, 1 - 0.5/h)),
+                },
+            )
+        bw_shader.bind()
+        bw_shader.uniform_sampler("back", layers[0].texture_color)
+        bw_shader.uniform_sampler("image", gpu.texture.from_image(image))
+        bw_shader.uniform_float("deltaU", 1.0 / im_width)
+        bw_shader.uniform_float("deltaV", 1.0 / im_height)
+        bw_shader.uniform_int("nx", nx)
+        bw_shader.uniform_int("ny", ny)
+        with layers[1].bind():
+            bw_shader.uniform_float("stacking", 1.0)
+            batch.draw(bw_shader)
+        with offscreen3.bind():
+            bw_shader.uniform_float("stacking", 0.0)
+            batch.draw(bw_shader)
+        imaps[id] = offscreen3.texture_color.read()
+        imaps[id].dimensions = w * h * 4
+        bpy.data.images.remove(image)
+        layers = (layers[1], layers[0]) # Swap layers
+    imaps['Global'] = layers[0].texture_color.read()
+    imaps['Global'].dimensions = w * h * 4
     for layer in layers:
         layer.free()
     if False: # For debug purpose, save generated influence map
         print(f'. Saving light influence map to {render_path}{name} - Influence Map.exr')
         image = bpy.data.images.new("debug", w, h, alpha=False, float_buffer=True)
-        image.pixels = [v for v in imaps[0]]
+        image.pixels = [v for v in imaps['Global']]
         image.filepath_raw = f'{render_path}{name} - Influence Map.exr'
         image.file_format = 'OPEN_EXR'
         image.save()
@@ -673,16 +693,28 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, 
     bpy.ops.object.mode_set(mode='EDIT')
     bm = bmesh.from_edit_mesh(bake_instance_mesh)
     bm.faces.ensure_lookup_table()
+    
+    ids = []
+    for mat in bake_instance_mesh.materials:
+        light = mat.get('VLM.Light')
+        render = mat.get('VLM.Render')
+        if isinstance(render, int):
+            ids.append(f'Group {render}')
+        else:
+            ids.append(f'Bake - {render}')
+    
     # Mark faces that are actually influenced
     hdr_range = 0.0
     for face in bm.faces:
         face.tag = False
+    gmap = imaps['Global']
     for xy in range(w * h):
-        if vmaps[xy] and imaps[0][4 * xy + 1] > lm_threshold: # prune by max channel
-            hdr_range = max(hdr_range, imaps[0][4 * xy + 1]) # HDR Range is maximum of channels
+        if vmaps[xy] and gmap[4 * xy + 1] > lm_threshold: # prune by max channel
+            hdr_range = max(hdr_range, gmap[4 * xy + 1]) # HDR Range is maximum of channels
             for face_index in vmaps[xy]:
                 face = bm.faces[face_index]
-                if face.material_index > -1 and imaps[face.material_index + 1] and imaps[face.material_index + 1][4 * xy] > lm_threshold:
+                imap = imaps.get(ids[face.material_index])
+                if imap is not None and imap[4 * xy] > lm_threshold:
                     face.tag = True
     if False:
         # Basic pruning: just remove the face under a lighting threshold

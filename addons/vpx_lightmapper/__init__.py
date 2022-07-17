@@ -262,9 +262,11 @@ class VLM_Object_props(PropertyGroup):
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     layback_offset: FloatProperty(name="Layback offset", description="Y offset caused by current layback", default = 0.0)
     use_bake: BoolProperty(name="Use Bake", description="Use traditional baking instead of render + UV projection. The object needs to be unwrapped and use point of view aware materials", default = False)
+    bake_width: IntProperty(name="Bake width:", description="Width of bake texture", default = 256, min = 2, max=8192)
+    bake_height: IntProperty(name="Bake height:", description="Height of bake texture", default = 256, min = 2, max=8192)
     # Both bake object and bake result
     is_spinner: BoolProperty(name="Spinner", description="Tag object has a spinner where backfacing faces are mirrors of front facing.", default = False)
-    use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot pos instead of Rot.", default = False)
+    use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot instead of Rot when exporting", default = False)
     # Bake result properties (for object inside the bake result collection)
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
     bake_objects: StringProperty(name="Bake", description="Bake collections included in this bake/lightmap", default="")
@@ -669,7 +671,12 @@ class VLM_OT_load_render_images(Operator):
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
         for obj in [o for o in context.selected_objects if o.name in result_col.all_objects]:
-            paths = [f'{bakepath}{obj.vlmSettings.bake_lighting} - Group {i}.exr' for i,_ in enumerate(obj.data.materials)]
+            paths = []
+            for mat in obj.data.materials:
+                render = mat['VLM.Render']
+                light = mat['VLM.Light']
+                path = f'{bakepath}{obj.vlmSettings.bake_lighting} - Group {render}.exr' if isinstance(render, int) else f'{bakepath}{obj.vlmSettings.bake_lighting} - Bake - {render}.exr'
+                paths.append(path)
             images = [vlm_utils.image_by_path(path) for path in paths]
             all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
             if self.is_unload:
@@ -811,6 +818,7 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                 layout.prop(obj.vlmSettings, 'vpx_object', text='VPX', expand=True)
                 layout.prop(obj.vlmSettings, 'vpx_subpart', text='Subpart', expand=True)
                 layout.prop(obj.vlmSettings, 'movable_script', expand=True)
+                layout.prop(obj.vlmSettings, 'use_obj_pos')
                 if light_col and obj.name in light_col.all_objects:
                     layout.prop(obj.vlmSettings, 'is_rgb_led', expand=True)
                     layout.prop(obj.vlmSettings, 'enable_aoi', expand=True)
@@ -840,22 +848,16 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
             else:
                 layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Mixed', icon='REMOVE').indirect_only = True
             if len(bake_objects) == 1 and bake_col:
-                sub = layout.row()
-                sub.enabled = not obj.vlmSettings.indirect_only
-                sub.prop(obj.vlmSettings, 'hide_from_others', text='Hide')
-                sub = layout.row()
-                sub.enabled = not obj.vlmSettings.indirect_only
-                sub.prop(obj.vlmSettings, 'use_bake')
-                sub = layout.row()
-                sub.enabled = not obj.vlmSettings.use_bake and not obj.vlmSettings.indirect_only
-                sub.prop(obj.vlmSettings, 'is_spinner')
-                sub = layout.row()
-                sub.enabled = not obj.vlmSettings.use_bake and not obj.vlmSettings.indirect_only
-                sub.prop(bake_objects[0].vlmSettings, 'bake_mask')
-                sub = layout.row()
-                sub.enabled = not obj.vlmSettings.use_bake and not obj.vlmSettings.indirect_only
-                sub.prop(bake_objects[0].vlmSettings, 'bake_to')
-                layout.prop(obj.vlmSettings, 'use_obj_pos')
+                if not obj.vlmSettings.indirect_only:
+                    layout.prop(obj.vlmSettings, 'hide_from_others', text='Hide')
+                    layout.prop(obj.vlmSettings, 'use_bake')
+                    if obj.vlmSettings.use_bake:
+                        layout.prop(obj.vlmSettings, 'bake_width')
+                        layout.prop(obj.vlmSettings, 'bake_height')
+                    else:
+                        layout.prop(obj.vlmSettings, 'is_spinner')
+                        layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
+                        layout.prop(bake_objects[0].vlmSettings, 'bake_to')
             
             layout.separator()
             layout.label(text="Render group:")
