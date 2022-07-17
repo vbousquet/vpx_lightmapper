@@ -77,6 +77,11 @@ def camera_inclination_update(self, context):
         context.scene.render.pixel_aspect_x = context.scene.vlmSettings.render_aspect_ratio / target_ar
         context.scene.vlmSettings.render_aspect_ratio = target_ar
         context.scene.render.resolution_x = target_x
+    elif layback_mode == 'fit_pf':
+        # Compute deform camera parameter (aspect ratio and resulting render width) using an adjusted camera inclination instead
+        camera_inclination = context.scene.vlmSettings.camera_inclination +  context.scene.vlmSettings.camera_layback / 2
+        camera_layback = 0
+        fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col)
        
     # Update the layback lattice transform
     global_scale = vlm_utils.get_global_scale(context)

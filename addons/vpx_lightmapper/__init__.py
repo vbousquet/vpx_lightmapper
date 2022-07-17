@@ -162,7 +162,8 @@ class VLM_Scene_props(PropertyGroup):
         items=[
             ('disable', 'Disable', 'Disable layback', '', 0),
             ('deform', 'Deform', 'Apply layback to geometry. This breaks reflection/refraction', '', 1),
-            ('camera', 'Camera', 'Apply layback to camera.', '', 2)
+            ('camera', 'Camera', 'Apply layback to camera.', '', 2),
+            ('fit_pf', 'Fit PF', 'Fit camera to playfield.', '', 3)
         ],
         name='Layback mode',
         default='camera', 
@@ -260,6 +261,7 @@ class VLM_Object_props(PropertyGroup):
     hide_from_others: BoolProperty(name="Hide from others", description="Hide this object from other objects. For example hide flipper bat from playfield. WARNING: this feature has limited support. see doc.", default = False)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     layback_offset: FloatProperty(name="Layback offset", description="Y offset caused by current layback", default = 0.0)
+    use_bake: BoolProperty(name="Use Bake", description="Use traditional baking instead of render + UV projection. The object needs to be unwrapped and use point of view aware materials", default = False)
     # Both bake object and bake result
     is_spinner: BoolProperty(name="Spinner", description="Tag object has a spinner where backfacing faces are mirrors of front facing.", default = False)
     use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot pos instead of Rot.", default = False)
@@ -429,15 +431,16 @@ class VLM_OT_export_vpx(Operator):
         return vlm_export.export_vpx(self, context)
 
 
-class VLM_OT_export_bake(Operator):
-    bl_idname = "vlm.export_bake_operator"
+class VLM_OT_export_obj(Operator):
+    bl_idname = "vlm.export_obj_operator"
     bl_label = "Export OBJ"
-    bl_description = "Export bake to a Wavefront OBJ file with its texture"
+    bl_description = "Export object to a Wavefront OBJ file (with its nested texture for bakes)"
     bl_options = {"REGISTER"}
 
     @classmethod
     def poll(cls, context):
-        return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_lighting != ''), None) is not None
+        #return next((obj for obj in context.selected_objects if obj.vlmSettings.bake_lighting != ''), None) is not None
+        return next((obj for obj in context.selected_objects), None) is not None
 
     def execute(self, context):
         return vlm_export_obj.export_obj(self, context)
@@ -758,6 +761,9 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         row.operator(VLM_OT_export_vpx.bl_idname, icon='EXPORT', text='Export', emboss=step>3)
         row.operator(VLM_OT_batch_bake.bl_idname)
         layout.prop(vlmProps, "batch_inc_group", expand=True)
+        layout.separator()
+        layout.prop(vlmProps, "active_scale")
+        layout.prop(vlmProps, "playfield_size")
 
 
 class VLM_PT_Col_Props(bpy.types.Panel):
@@ -834,11 +840,22 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
             else:
                 layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Mixed', icon='REMOVE').indirect_only = True
             if len(bake_objects) == 1 and bake_col:
-                layout.prop(obj.vlmSettings, 'hide_from_others', text='Hide')
+                sub = layout.row()
+                sub.enabled = not obj.vlmSettings.indirect_only
+                sub.prop(obj.vlmSettings, 'hide_from_others', text='Hide')
+                sub = layout.row()
+                sub.enabled = not obj.vlmSettings.indirect_only
+                sub.prop(obj.vlmSettings, 'use_bake')
+                sub = layout.row()
+                sub.enabled = not obj.vlmSettings.use_bake and not obj.vlmSettings.indirect_only
+                sub.prop(obj.vlmSettings, 'is_spinner')
+                sub = layout.row()
+                sub.enabled = not obj.vlmSettings.use_bake and not obj.vlmSettings.indirect_only
+                sub.prop(bake_objects[0].vlmSettings, 'bake_mask')
+                sub = layout.row()
+                sub.enabled = not obj.vlmSettings.use_bake and not obj.vlmSettings.indirect_only
+                sub.prop(bake_objects[0].vlmSettings, 'bake_to')
                 layout.prop(obj.vlmSettings, 'use_obj_pos')
-                layout.prop(obj.vlmSettings, 'is_spinner')
-                layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
-                layout.prop(bake_objects[0].vlmSettings, 'bake_to')
             
             layout.separator()
             layout.label(text="Render group:")
@@ -905,7 +922,6 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
                 layout.operator(VLM_OT_load_render_images.bl_idname, text='Unload Renders', icon='RESTRICT_RENDER_ON').is_unload = True
             else:
                 layout.operator(VLM_OT_load_render_images.bl_idname, text='Load Renders', icon='RESTRICT_RENDER_OFF').is_unload = False
-            layout.operator(VLM_OT_export_bake.bl_idname, icon='EXPORT')
 
 
 class VLM_PT_3D_Tools(bpy.types.Panel):
@@ -923,6 +939,8 @@ class VLM_PT_3D_Tools(bpy.types.Panel):
         layout.operator(VLM_OT_apply_aoi.bl_idname)
         layout.separator()
         layout.operator(VLM_OT_table_uv.bl_idname)
+        layout.separator()
+        layout.operator(VLM_OT_export_obj.bl_idname, icon='EXPORT')
 
 
 class VLM_PT_3D_warning_panel(bpy.types.Panel):
@@ -1038,7 +1056,7 @@ classes = (
     VLM_OT_apply_aoi,
     VLM_OT_table_uv,
     VLM_OT_load_render_images,
-    VLM_OT_export_bake,
+    VLM_OT_export_obj,
     VLM_OT_export_vpx,
     VLM_OT_export_pov,
     )

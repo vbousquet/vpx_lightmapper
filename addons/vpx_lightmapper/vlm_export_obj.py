@@ -32,7 +32,16 @@ def export_obj(op, context):
     proj_x = render_size[0] * context.scene.render.pixel_aspect_x
     proj_y = render_size[1] * context.scene.render.pixel_aspect_y
 
-    # Duplicate and reset UV of target objects
+    scale = 0.01 / vlm_utils.get_global_scale(context) # VPX has a default scale of 100, and Blender limit global_scale to 1000 (would need 1852 for inches), so 0.01 makes things ok for everyone
+
+    # Export non bake objects
+    for obj in [o for o in selected_objects if o.vlmSettings.bake_lighting == '']:
+        bpy.ops.object.select_all(action='DESELECT')
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        bpy.ops.export_scene.obj(filepath=bpy.path.abspath(f'{bakepath}{obj.name}.obj'), use_selection=True, use_edges=False, use_materials=False, use_triangles=True, global_scale=scale, axis_forward='-Y', axis_up='-Z')
+
+    # Duplicate and reset UV of target bake objects (which require a nestmap)
     to_nest = []
     for obj in [o for o in selected_objects if o.vlmSettings.bake_lighting != '']:
         bpy.ops.object.select_all(action='DESELECT')
@@ -49,30 +58,34 @@ def export_obj(op, context):
         dup.data.uv_layers.new(name='UVMap')
         to_nest.append(dup)
 
-    # Perform the actual island nesting and packmap generation
-    export_name = 'ExportObj'
-    if len([o for o in selected_objects if o.vlmSettings.bake_lighting != '']) == 1:
-        export_name = next((o for o in selected_objects if o.vlmSettings.bake_lighting != '')).name
-    max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size))
-    if max(render_size) > max_tex_size:
-        op.report({'ERROR'}, 'Texture size must be greater than render height')
-        return {'CANCELLED'}
+    if to_nest:
+        # Perform the actual island nesting and packmap generation
+        export_name = 'ExportObj'
+        if len([o for o in selected_objects if o.vlmSettings.bake_lighting != '']) == 1:
+            export_name = next((o for o in selected_objects if o.vlmSettings.bake_lighting != '')).name
+        max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size))
+        if max(render_size) > max_tex_size:
+            op.report({'ERROR'}, 'Texture size must be greater than render height')
+            return {'CANCELLED'}
 
-    n_nestmap, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, export_name, 0)
-    to_nest.extend(splitted_objects)
+        n_nestmap, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, export_name, 0)
+        to_nest.extend(splitted_objects)
 
-    # Export Wavefront objects
-    for dup in to_nest:
-        # Remove initial split materials
-        dup.active_material_index = 0
-        for i in range(len(dup.material_slots)):
-            bpy.ops.object.material_slot_remove({'object': dup})
-        # Export object
-        scale = 0.01 / vlm_utils.get_global_scale(context) # VPX has a default scale of 100, and Blender limit global_scale to 1000 (would need 1852 for inches), so 0.01 makes things ok for everyone
-        bpy.ops.export_scene.obj(filepath=bpy.path.abspath(f'{bakepath}{obj.name}.obj'), use_selection=True, use_edges=False, use_materials=False, use_triangles=True, global_scale=scale, axis_forward='-Y', axis_up='-Z')
-        # Delete created object
-        #bpy.data.objects.remove(dup)
+        # Export Wavefront objects
+        for dup in to_nest:
+            # Remove initial split materials
+            dup.active_material_index = 0
+            for i in range(len(dup.material_slots)):
+                bpy.ops.object.material_slot_remove({'object': dup})
+            # Export object
+            bpy.ops.object.select_all(action='DESELECT')
+            dup.select_set(True)
+            context.view_layer.objects.active = dup
+            bpy.ops.export_scene.obj(filepath=bpy.path.abspath(f'{bakepath}{dup.name}.obj'), use_selection=True, use_edges=False, use_materials=False, use_triangles=True, global_scale=scale, axis_forward='-Y', axis_up='-Z')
+            # Delete created object
+            #bpy.data.objects.remove(dup)
 
+    # Restore initial state
     bpy.ops.object.select_all(action='DESELECT')
     for obj in selected_objects:
         obj.select_set(True)

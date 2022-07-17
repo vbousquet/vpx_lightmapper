@@ -52,6 +52,51 @@ def get_render_size(context):
     opt_render_height = int(context.scene.vlmSettings.render_height)
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     render_size = (int(opt_render_height * render_aspect_ratio), opt_render_height)
+    if context.scene.vlmSettings.layback_mode == 'fit_pf' and context.scene.vlmSettings.playfield_col:
+        # render height apply to projected playfield, so upscale accordingly
+        camera = get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+        if camera:
+            winx = render_size[0] * context.scene.render.pixel_aspect_x
+            winy = render_size[1] * context.scene.render.pixel_aspect_y
+            min_u = min_v = 100000
+            max_u = max_v = -100000
+            for obj in context.scene.vlmSettings.playfield_col.all_objects:
+                if obj.type == 'MESH':
+                    mesh = obj.data
+                    obj_mat = obj.matrix_basis
+                    modelview_matrix = camera.matrix_world.normalized().inverted()
+                    if winx > winy:
+                        xasp = 1.0
+                        yasp = winx / float(winy)
+                    else:
+                        xasp = winy / float(winx)
+                        yasp = 1.0
+                    shiftx = 0.5 - (camera.data.shift_x * xasp)
+                    shifty = 0.5 - (camera.data.shift_y * yasp)
+                    camsize = math.tan(camera.data.angle / 2.0)
+                    uv_layer = mesh.uv_layers.active
+                    for face in mesh.polygons:
+                        y_mirror = 1.0
+                        if obj.vlmSettings.is_spinner:
+                            # Perform Y mirror for back facing spinner faces
+                            normal = obj_mat @ face.normal
+                            if normal.length_squared >= 0.5 and normal.dot(camera.location - face.center) <= 0.0: y_mirror = -1.0
+                        for loop_idx in face.loop_indices:
+                            co = mesh.vertices[mesh.loops[loop_idx].vertex_index].co
+                            p1 = modelview_matrix @ obj_mat @ Vector((co[0], y_mirror * co[1], co[2], 1))
+                            if p1.z == 0.0: p1.z = 0.00001
+                            u = shiftx + xasp * (-p1.x * ((1.0 / camsize) / p1.z)) / 2.0
+                            v = shifty + yasp * (-p1.y * ((1.0 / camsize) / p1.z)) / 2.0
+                            min_v = min(min_v, v)
+                            max_v = max(max_v, v)
+                            min_u = min(min_u, u)
+                            max_u = max(max_u, u)
+            v_size = max_v - min_v
+            if v_size > 0.0:
+                s = 1.0 / v_size
+                render_size = (int(s * opt_render_height * render_aspect_ratio), int(s * opt_render_height))
+                print(f'. Upscale to fit PF to render size: {s}')
+                print(f'. Expected playfield render size: {int((max_u-min_u)*render_size[0])}x{int((max_v-min_v)*render_size[1])}')
     return render_size
     
 
