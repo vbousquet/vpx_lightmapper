@@ -136,12 +136,14 @@ def create_bake_meshes(op, context):
                 to_bake.append((obj_name, bake_col, [obj_name], obj_name, not bake_col.vlmSettings.is_opaque))
         else:
             sync_obj = None
+            sync_script = ''
             for obj_name in object_names:
                 obj = bpy.data.objects[obj_name]
-                if obj.vlmSettings.movable_script != '':
+                if obj.vlmSettings.movable_script != sync_script:
                     if sync_obj != None:
                         print(f'. ERROR: Bake collection {bake_col.name} bakes to a group but more than one object defines a move script.')
                     sync_obj = obj_name
+                    sync_script = obj.vlmSettings.movable_script
             to_bake.append((bake_col.name, bake_col, object_names, sync_obj, not bake_col.vlmSettings.is_opaque))
         
     # Create all solid bake meshes
