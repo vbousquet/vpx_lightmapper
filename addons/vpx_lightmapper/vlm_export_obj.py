@@ -29,8 +29,7 @@ def export_obj(op, context):
     selected_objects = list(context.selected_objects)
 
     render_size = vlm_utils.get_render_size(context)
-    proj_x = render_size[0] * context.scene.render.pixel_aspect_x
-    proj_y = render_size[1] * context.scene.render.pixel_aspect_y
+    proj_ar = vlm_utils.get_render_proj_ar(context)
 
     scale = 0.01 / vlm_utils.get_global_scale(context) # VPX has a default scale of 100, and Blender limit global_scale to 1000 (would need 1852 for inches), so 0.01 makes things ok for everyone
 
@@ -54,7 +53,7 @@ def export_obj(op, context):
         while uvs:
             dup.data.uv_layers.remove(uvs.pop())
         dup.data.uv_layers.new(name='UVMap Nested')
-        vlm_utils.project_uv(camera, dup, proj_x, proj_y)
+        vlm_utils.project_uv(camera, dup, proj_ar)
         dup.data.uv_layers.new(name='UVMap')
         to_nest.append(dup)
 

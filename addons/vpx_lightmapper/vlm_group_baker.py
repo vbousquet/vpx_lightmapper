@@ -43,8 +43,8 @@ def compute_render_groups(op, context):
     """Evaluate the set of bake groups (groups of objects that do not overlap when rendered 
     from the camera point of view) and store the result in the 'group' property of objects.
     It will also compute 2 group masks:
-    - 'Group Mask xx.png' a full resolution of the group mask, including border fade (used during nesting for border padding)
-    - 'Group Mask (Padded LD) xx.png' a low resolution of the group mask, including a 1 pixel padding (used to discard renders according to light AOI)
+    - 'Mask - Group xx.png' a full resolution of the group mask, including border fade (used during nesting for border padding)
+    - 'Mask - Group xx (Padded LD).png' a low resolution of the group mask, including a 1 pixel padding (used to discard renders according to light AOI)
     """
     if context.blend_data.filepath == '':
         op.report({'ERROR'}, 'You must save your project before computing groups')
@@ -134,9 +134,6 @@ def compute_render_groups(op, context):
             bpy.ops.render.render(write_still=True, scene=scene.name)
             for o in obj_group: scene.collection.objects.unlink(o)
             im = Image.open(bpy.path.abspath(scene.render.filepath))
-        if obj.vlmSettings.use_bake:
-            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it use traditional baking instead of projective baking")
-            continue
         # Evaluate if this object can be grouped with previous renders (no overlaps)
         for p in range(opt_mask_pad):
             im.alpha_composite(im, (0, 1))
@@ -144,6 +141,11 @@ def compute_render_groups(op, context):
             im.alpha_composite(im, (1, 0))
             im.alpha_composite(im, (-1, 0))
         alpha = im.tobytes("raw", "A")
+        if obj.vlmSettings.use_bake:
+            im = Image.frombytes('L', (scene.render.resolution_x, scene.render.resolution_y), bytes(alpha), 'raw')
+            im.save(bpy.path.abspath(f'{bakepath}Mask - Bake - {obj.name} (Padded LD).png'))
+            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it use traditional baking instead of projective baking")
+            continue
         n_groups = len(object_masks)
         g = n_groups
         for group_index in range(n_groups):
@@ -160,7 +162,8 @@ def compute_render_groups(op, context):
     # Save group masks for later use
     for i, group in enumerate(object_masks):
         im = Image.frombytes('L', (scene.render.resolution_x, scene.render.resolution_y), bytes(group), 'raw')
-        im.save(bpy.path.abspath(f"{bakepath}Group Mask (Padded LD) {i}.png"))
+        im.save(bpy.path.abspath(f'{bakepath}Mask - Group {i} (Padded LD).png'))
+
 
     print(f"\n{len(object_masks)} render groups defined in {vlm_utils.format_time(time.time() - start_time)}.")
     bpy.data.scenes.remove(scene)
@@ -248,7 +251,7 @@ def render_group_masks(op, context):
                     linked_objects.append(obj)
         print(f'\n. Rendering group #{group_index+1}/{n_render_groups} ({len(linked_objects)} objects)')
         
-        scene.render.filepath = f'{bakepath}Group Mask {group_index}.png'
+        scene.render.filepath = f'{bakepath}Mask - Group {group_index}.png'
         scene.render.image_settings.file_format = 'PNG'
         scene.render.image_settings.color_mode = 'RGBA'
         scene.render.image_settings.color_depth = '8'
@@ -256,7 +259,20 @@ def render_group_masks(op, context):
 
         for obj in linked_objects:
             scene.collection.objects.unlink(obj)
-    
+
+    # Hires mask are not used for baked objects
+    # for obj in bake_col.all_objects:
+        # if not obj.vlmSettings.use_bake:
+            # continue
+        # scene.collection.objects.link(obj)
+        # print(f'\n. Rendering mask for {obj}')
+        # scene.render.filepath = f'{bakepath}Mask - Bake - {obj.name}.png'
+        # scene.render.image_settings.file_format = 'PNG'
+        # scene.render.image_settings.color_mode = 'RGBA'
+        # scene.render.image_settings.color_depth = '8'
+        # bpy.ops.render.render(write_still=True, scene=scene.name)
+        # scene.collection.objects.unlink(obj)
+
     bpy.data.materials.remove(mask_mat)
     bpy.data.scenes.remove(scene)
     length = time.time() - start_time

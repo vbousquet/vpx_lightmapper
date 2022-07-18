@@ -315,7 +315,7 @@ def render_all_groups(op, context):
     mask_path = vlm_utils.get_bakepath(context, type='MASKS')
     group_masks = []
     for i in range(n_render_groups):
-        im = Image.open(bpy.path.abspath(f"{mask_path}Group Mask (Padded LD) {i}.png"))
+        im = Image.open(bpy.path.abspath(f'{mask_path}Mask - Group {i} (Padded LD).png'))
         group_masks.append((im.size[0], im.size[1], im.tobytes("raw", "L")))
 
     # Prepare and report stats
@@ -562,19 +562,12 @@ def render_all_groups(op, context):
             indirect_col.objects.unlink(obj)
         render_col.objects.link(obj)
         elapsed = time.time() - start_time
+        im = Image.open(bpy.path.abspath(f'{mask_path}Mask - Bake - {obj.name} (Padded LD).png'))
+        obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "L"))
         for i, scenario in enumerate(light_scenarios, start=1):
             name, is_lightmap, light_col, lights, _ = scenario
             render_path = f'{bakepath}{scenario[0]} - Bake - {obj.name}.exr'
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
-                # Compute the object mask to filter uninfluenced objects (see group baker for details)
-                im = Image.open(bpy.path.abspath(f"{mask_path}{obj.name}.png"))
-                opt_mask_pad = math.ceil(im.size[1] * 2 / render_size[1])
-                for p in range(opt_mask_pad):
-                    im.alpha_composite(im, (0, 1))
-                    im.alpha_composite(im, (0, -1))
-                    im.alpha_composite(im, (1, 0))
-                    im.alpha_composite(im, (-1, 0))
-                obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "A"))
                 state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, obj_mask, render_col)
                 elapsed = time.time() - start_time
                 msg = f". Baking '{obj.name}' for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"

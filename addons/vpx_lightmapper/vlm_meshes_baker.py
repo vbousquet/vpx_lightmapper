@@ -104,10 +104,7 @@ def create_bake_meshes(op, context):
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
     
     # Texture packing
-    opt_padding = context.scene.vlmSettings.padding
-    render_size = vlm_utils.get_render_size(context)
-    proj_x = render_size[0] * context.scene.render.pixel_aspect_x
-    proj_y = render_size[1] * context.scene.render.pixel_aspect_y
+    proj_ar = vlm_utils.get_render_proj_ar(context)
     opt_render_height = int(context.scene.vlmSettings.render_height)
     opt_ar = context.scene.vlmSettings.render_aspect_ratio
 
@@ -234,7 +231,7 @@ def create_bake_meshes(op, context):
                 while uvs:
                     dup.data.uv_layers.remove(uvs.pop())
                 dup.data.uv_layers.new(name='UVMap')
-                vlm_utils.project_uv(camera, dup, proj_x, proj_y)
+                vlm_utils.project_uv(camera, dup, proj_ar)
             
             # Apply base transform
             dup.data.transform(dup.matrix_basis)
@@ -265,7 +262,7 @@ def create_bake_meshes(op, context):
                 for loop in triangle_loops:
                     areas[loop[0].face] += vlm_utils.tri_area( *(Vector( (*l[uv_loop].uv, 0) ) for l in loop) )
                 bm.free()
-                max_size = int(max(areas.values()) * proj_x * proj_y)
+                max_size = int(max(areas.values()) * opt_render_height * opt_render_height * opt_ar)
                 if max_size < opt_lod_threshold:
                     ratio = math.sqrt(max_size / opt_lod_threshold)
                     with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -353,7 +350,7 @@ def create_bake_meshes(op, context):
                     bme.to_mesh(dup.data)
                     bme.free()
                     dup.data.update()
-                    vlm_utils.project_uv(camera, dup, proj_x, proj_y)
+                    vlm_utils.project_uv(camera, dup, proj_ar)
                     print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
             
             objects_to_join.append(dup)

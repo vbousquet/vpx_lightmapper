@@ -491,7 +491,7 @@ def render_nestmap(context, selection, uv_name, nestmap, nestmap_name, nestmap_i
     # Load the render masks
     mask_data = []
     for i in range(n_render_groups):
-        path = f"{mask_path}Group Mask {i}.png"
+        path = f'{mask_path}Mask - Group {i}.png'
         loaded, render = vlm_utils.get_image_or_black(path, black_is_none=True)
         if render:
             pixel_data = np.zeros((src_w * src_h * 4), 'f') # using numpy is way faster

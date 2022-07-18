@@ -98,6 +98,11 @@ def get_render_size(context):
                 print(f'. Upscale to fit PF to render size: {s}')
                 print(f'. Expected playfield render size: {int((max_u-min_u)*render_size[0])}x{int((max_v-min_v)*render_size[1])}')
     return render_size
+
+
+def get_render_proj_ar(context):
+    render_size = get_render_size(context)
+    return int(render_size[0] * context.scene.render.pixel_aspect_x) / float(int(render_size[1] * context.scene.render.pixel_aspect_y))
     
 
 # 3D tri area ABC is half the length of AB cross product AC 
@@ -106,20 +111,20 @@ def tri_area(co1, co2, co3):
 
 
 # Adapted from Blender source code:
-# winx/winy defines the render resolution, including pixel aspect ratio
 # https://developer.blender.org/diffusion/B/browse/master/source/blender/editors/uvedit/uvedit_unwrap_ops.c
 # https://developer.blender.org/diffusion/B/browse/master/source/blender/blenlib/intern/uvproject.c
-def project_uv(camera, obj, winx=1.0, winy=1.0):
+# ar is x/y render resolution, including pixel aspect ratio
+def project_uv(camera, obj, ar):
     if camera.type != 'CAMERA':
         raise Exception(f"Object {camera.name} is not a camera.")
     mesh = obj.data
     obj_mat = obj.matrix_basis
     modelview_matrix = camera.matrix_world.normalized().inverted()
-    if winx > winy:
+    if ar > 1.0:
         xasp = 1.0
-        yasp = winx / float(winy)
+        yasp = ar
     else:
-        xasp = winy / float(winx)
+        xasp = 1.0 / ar
         yasp = 1.0
     shiftx = 0.5 - (camera.data.shift_x * xasp)
     shifty = 0.5 - (camera.data.shift_y * yasp)
@@ -304,6 +309,8 @@ def apply_split_normals(me):
 
 
 def get_bakepath(context, type='ROOT'):
+    if context.blend_data.filepath == '':
+        return None
     if type == 'RENDERS':
         return f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/Renders/"
     elif type == 'MASKS':
@@ -311,6 +318,15 @@ def get_bakepath(context, type='ROOT'):
     elif type == 'EXPORT':
         return f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/Export/"
     return f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - Bakes/"
+
+
+def get_packmap_bakepath(context, mat):
+    light = mat.get('VLM.Light')
+    render = mat.get('VLM.Render')
+    bakepath = get_bakepath(context, type='RENDERS')
+    if bakepath is None or render is None or light is None:
+        return None
+    return f'{bakepath}{light} - Group {render}.exr' if isinstance(render, int) else f'{bakepath}{light} - Bake - {render}.exr'
 
 
 def set_selected_and_active(context, obj):

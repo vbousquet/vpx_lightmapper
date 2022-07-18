@@ -53,7 +53,7 @@ def get_island(bm, face_to_verts, vert_to_faces, uv_layer):
         current_island = []
         face_idx = list(faces_left)[0]
         parse_island(bm, face_idx, faces_left, current_island, face_to_verts, vert_to_faces)
-        island = {'faces': current_island, 'render_group': current_island[0].material_index}
+        island = {'faces': current_island, 'mat_index': current_island[0].material_index}
         update_island_bounds(island, uv_layer)
         uv_island_lists.append(island)
     return uv_island_lists
@@ -85,7 +85,7 @@ def get_merged_overlapping_islands(islands, uv_layer):
     merged_islands = []
     for island in islands:
         merged = False
-        other_islands = [i for i in merged_islands if island['render_group'] == i['render_group'] and island_bounds_overlaps(island, i)]
+        other_islands = [i for i in merged_islands if island['mat_index'] == i['mat_index'] and island_bounds_overlaps(island, i)]
         for f in island['faces']:
             a1 = f.loops[0][uv_layer].uv
             b1 = f.loops[1][uv_layer].uv
@@ -138,14 +138,13 @@ def create_vert_face_db(faces, uv_layer):
 ## Code for 2D nesting algorithm
 
 NestBlock = namedtuple("NestBlock", "obj bm islands pix_count")
-NestMap = namedtuple("NestMap", "src_w src_h padding islands targets target_heights")
+NestMap = namedtuple("NestMap", "padding islands targets target_heights")
 
-def nest(context, objects, uv_proj_name, uv_name, render_size, tex_w, tex_h, nestmap_name, nestmap_offset):
+def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_name, nestmap_offset):
     '''Perform nesting of a group of objects to a minimal (not optimal) set of nestmaps
     Eventually splitting objects that can't fit into a single nestmap.
     '''
     pack_threshold = int(tex_w * tex_h * 0.85)
-    src_w, src_h = render_size
     # adds one to the padding to take in account uv positionning inside pixel
     padding = context.scene.vlmSettings.padding + 1
     start_time = time.time()
@@ -153,9 +152,10 @@ def nest(context, objects, uv_proj_name, uv_name, render_size, tex_w, tex_h, nes
     # Evaluate all islands with their masks
     tick_time = time.time()
     islands_to_pack = []
+    render_sizes = {}
     for obj in objects:
         obj.vlmSettings.bake_nestmap = -1
-        islands_to_pack.append(prepare_nesting(obj, render_size, padding, uv_name))
+        islands_to_pack.append(prepare_nesting(context, obj, padding, uv_bake_name, render_sizes))
     prepare_length = time.time() - tick_time
 
     # Nest groups of islands into nestmaps
@@ -199,17 +199,17 @@ def nest(context, objects, uv_proj_name, uv_name, render_size, tex_w, tex_h, nes
             uv_undo = []
             for island in selected_islands:
                 obj, bm = island['source']
-                uv_layer = bm.loops.layers.uv[uv_name]
+                uv_layer = bm.loops.layers.uv[uv_nest_name]
                 for face in island['faces']:
                     for loop in face.loops:
                         uv_undo.append(Vector(loop[uv_layer].uv))
 
-            nestmap = perform_nesting(selected_islands, uv_name, src_w, src_h, tex_w, tex_h, padding, only_one_page=(len(selection) > 1))
+            nestmap = perform_nesting(selected_islands, uv_nest_name, tex_w, tex_h, padding, only_one_page=(len(selection) > 1))
             if len(nestmap.targets) == 1:
                 print(f'. Nesting succeeded.')
                 # Success: store result for later nestmap render
                 tick_time = time.time()
-                render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
+                render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
                 render_length = time.time() - tick_time
                 nestmap_index = nestmap_index + 1
                 for block in selection:
@@ -260,7 +260,7 @@ def nest(context, objects, uv_proj_name, uv_name, render_size, tex_w, tex_h, nes
                     index = 0
                     for island in selected_islands:
                         obj, bm = island['source']
-                        uv_layer = bm.loops.layers.uv[uv_name]
+                        uv_layer = bm.loops.layers.uv[uv_nest_name]
                         for face in island['faces']:
                             for loop in face.loops:
                                 loop[uv_layer].uv = uv_undo[index]
@@ -271,7 +271,7 @@ def nest(context, objects, uv_proj_name, uv_name, render_size, tex_w, tex_h, nes
                     block = selection[0]
                     islands_to_pack.remove(block)
                     obj, bm, block_islands, block_pix_count = block
-                    src_w, src_h, padding, islands, targets, target_heights = nestmap
+                    padding, islands, targets, target_heights = nestmap
                     print(f'. Object {obj.name} did not fit on a single page. Splitting it.')
                     # Consider the parts that fitted the first page as successfull
                     obj_copy = obj.copy()
@@ -283,8 +283,8 @@ def nest(context, objects, uv_proj_name, uv_name, render_size, tex_w, tex_h, nes
                     bm_copy.from_mesh(obj_copy.data)
                     bm.faces.ensure_lookup_table()
                     bm_copy.faces.ensure_lookup_table()
-                    uv_layer = bm.loops.layers.uv[uv_name]
-                    uv_layer_copy = bm_copy.loops.layers.uv[uv_name]
+                    uv_layer = bm.loops.layers.uv[uv_nest_name]
+                    uv_layer_copy = bm_copy.loops.layers.uv[uv_nest_name]
                     for face in bm.faces:
                         face_copy = bm_copy.faces[face.index]
                         for loop_copy, loop in zip(face_copy.loops, face.loops):
@@ -312,9 +312,9 @@ def nest(context, objects, uv_proj_name, uv_name, render_size, tex_w, tex_h, nes
                     bmesh.ops.delete(bm_copy, geom=faces_to_remove, context='FACES')
                     bm_copy.to_mesh(obj_copy.data)
                     bm_copy.free()
-                    nestmap = NestMap(src_w, src_h, padding, processed_islands, targets[0:1], target_heights[0:1])
+                    nestmap = NestMap(padding, processed_islands, targets[0:1], target_heights[0:1])
                     tick_time = time.time()
-                    render_nestmap(context, [NestBlock(obj_copy, None, processed_islands, processed_pix_count)], uv_proj_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
+                    render_nestmap(context, [NestBlock(obj_copy, None, processed_islands, processed_pix_count)], uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
                     render_length = time.time() - tick_time
                     nestmap_index = nestmap_index + 1
                     print(f'. {len(processed_islands)} islands were nested on the first page and kept.')
@@ -332,12 +332,31 @@ def nest(context, objects, uv_proj_name, uv_name, render_size, tex_w, tex_h, nes
     return (nestmap_index, splitted_objects)
 
 
-def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nestmap_index):
-    src_w, src_h, padding, islands, targets, target_heights = nestmap
+def cache_get(cache, image_path):
+    cached = next((c for c in cache if c[0] == image_path), None)
+    if cached is None:
+        image = vlm_utils.get_image_or_black(image_path, black_is_none=True)
+        cache.append((image_path, image))
+        #FIXME unload oldest bake if too much loaded at the same time
+        loaded, render = image
+        return render
+    else:
+        loaded, render = cached[1]
+        return render
+ 
+
+def cache_clear(cache):
+    for path, (loaded, render) in cache:
+        if render and loaded == 'loaded':
+            bpy.data.images.remove(render)
+    cache.clear()
+
+
+def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_index):
+    padding, islands, targets, target_heights = nestmap
     n_render_groups = vlm_utils.get_n_render_groups(context)
     nestmaps = [np.zeros((len(target) * height * 4), 'f') for target, height in zip(targets, target_heights)]
     mask_path = vlm_utils.get_bakepath(context, type='MASKS')
-    render_path = vlm_utils.get_bakepath(context, type='RENDERS')
 
     # Offscreen surface where the nestmaps are rendered
     offscreen_renders = []
@@ -431,7 +450,7 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
     render_batch = batch_for_shader(render_shader, 'TRIS', { "pos": ((0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)) }, )
         
     # Offscreen surface where we render the seam fading mask for lightmaps
-    offscreen_seams = gpu.types.GPUOffScreen(src_w, src_h, format='RGBA8')
+    offscreen_seams = None
     seams_vs = '''
         in vec2 pos; 
         in vec4 col; 
@@ -451,51 +470,45 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
         }'''
     seams_shader = gpu.types.GPUShader(seams_vs, seams_fs)
 
+    full_white_mask = bpy.data.images.new('Full White', 1, 1, alpha=False)
+    full_white_mask.pixels = (1.0, 1.0, 1.0, 1.0)
+
     # Load the render masks
-    mask_data = []
-    render_data = []
-    for i in range(n_render_groups):
-        path = f"{mask_path}Group Mask {i}.png"
-        mask_data.append(vlm_utils.get_image_or_black(path, black_is_none=True))
-    loaded_bake_lighting = None
+    image_cache = []
     for obj_name in sorted(list({obj.name for (obj, _, _, _) in selection}), key=lambda x:bpy.data.objects[x].vlmSettings.bake_lighting):
         obj = bpy.data.objects[obj_name]
         print(f'. Copying renders (HDR range={obj.vlmSettings.bake_hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
-
-        # Load the render (if not already loaded)
-        if obj.vlmSettings.bake_lighting != loaded_bake_lighting:
-            for loaded, render in render_data:
-                if render and loaded == 'loaded':
-                    bpy.data.images.remove(render)
-            render_data.clear()
-            for i in range(n_render_groups):
-                path = f"{render_path}{obj.vlmSettings.bake_lighting} - Group {i}.exr"
-                render_data.append(vlm_utils.get_image_or_black(path, black_is_none=True))
-            loaded_bake_lighting = obj.vlmSettings.bake_lighting
 
         # Render to the packed nest map
         for island in islands:
             island_obj, bm = island['source']
             if island_obj != obj: continue
             n, x, y, rot = island['place']
+            src_w = island['src_w']
+            src_h = island['src_h']
             mask = island['masks'][rot]
             mask_w = len(mask)
             min_x, min_y = island['min_i']
-            island_render_group = island['render_group']
             if n > 0: # Skip islands that were nested to secondary pages: they have been splitted to other objects
-                continue
-            if island_render_group < 0 or island_render_group >= len(render_data):
-                print('. Missing render group, skipping island (likely a bug)')
                 continue
             if obj.vlmSettings.bake_nestmap != nestmap_index:
                 if obj.vlmSettings.bake_nestmap != -1:
                     print(f'ERROR: object {obj.name} was not splitted but has parts on multiple nestmaps')
                 obj.vlmSettings.bake_nestmap = nestmap_index
-            island_render = render_data[island_render_group][1]
+            
+            # Loaded the bake and mask if not already loaded and cached
+            render_path = vlm_utils.get_packmap_bakepath(context, island_obj.data.materials[island['mat_index']])
+            island_render = cache_get(image_cache, render_path)
             if island_render is None:
                 print('. No render (likely uninfluenced lightmap), skipping island')
                 continue
-            island_group_mask = mask_data[island_render_group][1]
+            #FIXME for traditional bake, use the solid bake alpha channel ?
+            render_id = island_obj.data.materials[island['mat_index']].get('VLM.Render')
+            if isinstance(render_id, int):
+                island_render_mask = cache_get(image_cache, f'{mask_path}Mask - Group {render_id}.png')
+            else:
+                island_render_mask = full_white_mask
+            
             target_w = len(targets[n])
             target_h = target_heights[n]
 
@@ -506,7 +519,7 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
             lines=[]
             lines_col=[]
             color_layer = bm.loops.layers.color.verify()
-            uv_layer = bm.loops.layers.uv[uv_proj_name]
+            uv_layer = bm.loops.layers.uv[uv_bake_name]
             for face in island['faces']:
                 prev_uv = first_uv = prev_col = first_col = None
                 for loop in face.loops:
@@ -529,6 +542,9 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
                 lines.append(first_uv)
                 lines_col.append(first_col)
             gpu.state.blend_set('NONE')
+            if offscreen_seams is None or offscreen_seams.width != src_w or offscreen_seams.height != src_h:
+                if offscreen_seams is not None: offscreen_seams.free()
+                offscreen_seams = gpu.types.GPUOffScreen(src_w, src_h, format='RGBA8')
             with offscreen_seams.bind():
                 fb = gpu.state.active_framebuffer_get()
                 fb.clear(color=(0.0, 0.0, 0.0, 0.0))
@@ -561,7 +577,7 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
                 render_shader.uniform_float("pos_dec", (x, y))
                 render_shader.uniform_int("rot", rot)
                 render_shader.uniform_int("padding", padding)
-                render_shader.uniform_sampler("render_mask", gpu.texture.from_image(island_group_mask))
+                render_shader.uniform_sampler("render_mask", gpu.texture.from_image(island_render_mask))
                 render_shader.uniform_sampler("seam_mask", offscreen_seams.texture_color)
                 render_shader.uniform_sampler("render", gpu.texture.from_image(island_render))
                 render_batch.draw(render_shader)
@@ -575,14 +591,7 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
                 # pack_image.pixels = [v / 255 for v in image_data]
 
     # Cleanup loaded images
-    for loaded, render in render_data:
-        if render and loaded == 'loaded':
-            bpy.data.images.remove(render)
-    render_data.clear()
-    for loaded, mask in mask_data:
-        if mask and loaded == 'loaded':
-            bpy.data.images.remove(mask)
-    mask_data.clear()
+    cache_clear(image_cache)
 
     # Save the rendered nestmaps
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
@@ -628,28 +637,42 @@ def render_nestmap(context, selection, uv_proj_name, nestmap, nestmap_name, nest
     print(f'. Nest map generated and saved to {base_filepath}')
 
 
-def prepare_nesting(obj, render_size, padding, uv_name):
-    src_w, src_h = render_size
+def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes):
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     bm.faces.ensure_lookup_table()
-    uv_layer = bm.loops.layers.uv[uv_name]
+    uv_layer = bm.loops.layers.uv[uv_nest_name]
+    
+    # Identify islands (faces sharing the same render id linked with respect to uv)
     ftv, vtf = create_vert_face_db([f for f in bm.faces], uv_layer)
     islands = get_island(bm, ftv, vtf, uv_layer)
     islands = get_merged_overlapping_islands(islands, uv_layer)
     
+    # Eventually split objects if islands exceed texture size, and fail (or downsize ?) if a single face exceed texture size
+    # FIXME implement
+    
     # Compute island masks by rendering masks then creating a simplified span view
-    offscreen = gpu.types.GPUOffScreen(src_w, src_h)
+    offscreen = None
     vertex_shader = 'in vec2 pos; uniform vec2 ofs; void main() { gl_Position = vec4(2.0 * (pos + ofs) - vec2(1.0), 0.0, 1.0); }'
     fragment_shader = 'out vec4 FragColor; void main() { FragColor = vec4(1.0); }'
     shader_draw = gpu.types.GPUShader(vertex_shader, fragment_shader)
     gpu.state.blend_set('NONE')
     total_pix_count = 0
     for index, island in enumerate(islands, start=1):
+        render_path = vlm_utils.get_packmap_bakepath(context, obj.data.materials[island['faces'][0].material_index])
+        render_size = render_sizes.get(render_path)
+        if render_size is None:
+            im = bpy.data.images.load(render_path, check_existing=False)
+            render_size = (im.size[0], im.size[1])
+            render_sizes[render_path] = render_size
+            bpy.data.images.remove(im)
+        src_w, src_h = render_size
         island_min = island['min']
         island_max = island['max']
         island_size = island['size']
-        island_render_group = island['render_group']
+        island_render_id = island['mat_index']
+        island['src_w'] = src_w
+        island['src_h'] = src_h
         island['obj'] = obj
         island['masks'] = None
         min_x = math.floor(island_min.x * src_w)
@@ -684,6 +707,10 @@ def prepare_nesting(obj, render_size, padding, uv_name):
         pt_batch = batch_for_shader(shader_draw, 'POINTS', {"pos": pts})
         line_batch = batch_for_shader(shader_draw, 'LINES', {"pos": lines})
 
+        if offscreen is None or offscreen.width != src_w or offscreen.height != src_h:
+            if offscreen is not None: offscreen.free()
+            offscreen = gpu.types.GPUOffScreen(src_w, src_h)
+            
         with offscreen.bind():
             fb = gpu.state.active_framebuffer_get()
             fb.clear(color=(0.0, 0.0, 0.0, 0.0))
@@ -761,7 +788,7 @@ def round_for_mimpaps(x):
     #return 1<<(x-1).bit_length()
     
     
-def perform_nesting(islands, uv_name, src_w, src_h, tex_w, tex_h, padding, only_one_page=False):
+def perform_nesting(islands, uv_nest_name, tex_w, tex_h, padding, only_one_page=False):
     # Placement algorithm (simple discret bottom left direct placement)
     targets = []
     #islands = sorted(islands, key=lambda p:p['bb_area'], reverse=True)
@@ -820,7 +847,7 @@ def perform_nesting(islands, uv_name, src_w, src_h, tex_w, tex_h, padding, only_
                         if only_one_page: # Fast Fail if packing to a single page
                             island['place'] = (n, x, y, rot) # mark it to identify the first offender
                             print(f'. Island #{index:>3}/{len(islands)} could not be placed (single page mode) pixcount:{island["pixcount"]:>7}px  from {island["source"][0].name}')
-                            return NestMap(src_w, src_h, padding, islands, [], [])
+                            return NestMap(padding, islands, [], [])
         island['place'] = (n, x, y, rot)
         # print(f'. Island #{index:>3}/{len(islands)} placed on nestmap #{n} at {x:>4}, {y:>4} o:{rot} pixcount:{island["pixcount"]:>7}px  from {island["source"][0].name}')
         
@@ -860,10 +887,12 @@ def perform_nesting(islands, uv_name, src_w, src_h, tex_w, tex_h, padding, only_
     # Update UV to the new placement
     for island in islands:
         obj, bm = island['source']
-        uv_layer = bm.loops.layers.uv[uv_name]
+        uv_layer = bm.loops.layers.uv[uv_nest_name]
         n, x, y, rot = island['place']
         min_x, min_y = island['min_i']
         max_x, max_y = island['max_i']
+        src_w = island['src_w']
+        src_h = island['src_h']
         target_w = len(targets[n])
         target_h = target_heights[n]
         for face in island['faces']:
@@ -885,7 +914,7 @@ def perform_nesting(islands, uv_name, src_w, src_h, tex_w, tex_h, padding, only_
                     v = u0
                 loop[uv_layer].uv = ((x + padding + u)/float(target_w) + (n * 2), (y + padding + v)/float(target_h))
     
-    return NestMap(src_w, src_h, padding, islands, targets, target_heights)
+    return NestMap(padding, islands, targets, target_heights)
 
 
 

@@ -671,12 +671,7 @@ class VLM_OT_load_render_images(Operator):
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
         for obj in [o for o in context.selected_objects if o.name in result_col.all_objects]:
-            paths = []
-            for mat in obj.data.materials:
-                render = mat['VLM.Render']
-                light = mat['VLM.Light']
-                path = f'{bakepath}{obj.vlmSettings.bake_lighting} - Group {render}.exr' if isinstance(render, int) else f'{bakepath}{obj.vlmSettings.bake_lighting} - Bake - {render}.exr'
-                paths.append(path)
+            paths = [vlm_utils.get_packmap_bakepath(context, mat) for mat in obj.data.materials]
             images = [vlm_utils.image_by_path(path) for path in paths]
             all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
             if self.is_unload:

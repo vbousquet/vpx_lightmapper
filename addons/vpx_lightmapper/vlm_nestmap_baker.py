@@ -37,23 +37,21 @@ def render_nestmaps(op, context):
     bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
     vlm_utils.mkpath(bakepath)
     selected_objects = list(context.selected_objects)
-    render_size = vlm_utils.get_render_size(context)
-    proj_x = render_size[0] * context.scene.render.pixel_aspect_x
-    proj_y = render_size[1] * context.scene.render.pixel_aspect_y
     lc = vlm_collections.find_layer_collection(context.view_layer.layer_collection, result_col)
     if lc: lc.exclude = False
 
-    # reset UV of target objects (2 layers: 1 for default view projected, 1 for nested UV)
+    # Prepare UV of target objects with 2 layers: 1 corresponding to the bake, 1 for the nested UV
     to_nest = [o for o in result_col.all_objects]
     to_nest_ldr = []
     to_nest_hdr = []
     for obj in to_nest:
-        uvs = [uv for uv in obj.data.uv_layers]
-        while uvs:
-            obj.data.uv_layers.remove(uvs.pop())
+        uvmap = next((uv for uv in obj.data.uv_layers if uv.name == 'UVMap'), None)
+        if uvmap is None:
+            op.report({'ERROR'}, f'Object {obj.name} is missing the required unwrapped UV map named \'UVMap\'.')
+            return {'CANCELLED'}
+        obj.data.uv_layers.active = uvmap
         obj.data.uv_layers.new(name='UVMap Nested')
-        vlm_utils.project_uv(camera, obj, proj_x, proj_y)
-        obj.data.uv_layers.new(name='UVMap')
+        obj.data.uv_layers.active = uvmap
         if obj.vlmSettings.bake_type == 'active' or obj.vlmSettings.bake_hdr_range <= 1.0:
             to_nest_ldr.append(obj)
         else: # VPX only supports opaque HDR
@@ -61,18 +59,15 @@ def render_nestmaps(op, context):
 
     # Perform the actual island nesting and nestmap generation
     max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size))
-    if max(render_size) > max_tex_size:
-        op.report({'ERROR'}, 'Texture size must be greater than render height')
-        return {'CANCELLED'}
 
     if True:
         print('\nNesting all LDR parts')
-        n_ldr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, 'Nestmap', 0)
+        n_ldr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', 0)
         print('\nNesting all HDR parts')
-        n_hdr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_hdr, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, 'Nestmap', n_ldr_nestmaps)
+        n_hdr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_hdr, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_ldr_nestmaps)
         n_nestmaps = n_ldr_nestmaps + n_hdr_nestmaps
     else:
-        n_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap Nested', render_size, max_tex_size, max_tex_size, 'Nestmap', 0)
+        n_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', 0)
 
     # Restore initial state
     bpy.ops.object.select_all(action='DESELECT')
