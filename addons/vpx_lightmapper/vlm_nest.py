@@ -592,6 +592,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
 
     # Cleanup loaded images
     cache_clear(image_cache)
+    bpy.data.images.remove(full_white_mask)
 
     # Save the rendered nestmaps
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
