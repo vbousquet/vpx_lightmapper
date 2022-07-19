@@ -153,9 +153,18 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
     tick_time = time.time()
     islands_to_pack = []
     render_sizes = {}
-    for obj in objects:
+    
+    to_prepare = [o for o in objects]
+    while to_prepare:
+        obj = to_prepare.pop()
         obj.vlmSettings.bake_nestmap = -1
-        islands_to_pack.append(prepare_nesting(context, obj, padding, uv_bake_name, render_sizes))
+        r, v = prepare_nesting(context, obj, padding, uv_bake_name, render_sizes, tex_w, tex_h)
+        if r == 'FAILED':
+            return None
+        elif r == 'SPLITTED':
+            to_prepare.extend(v)
+        elif r == 'SUCCESS':
+            islands_to_pack.append(v)
     prepare_length = time.time() - tick_time
 
     # Nest groups of islands into nestmaps
@@ -638,7 +647,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
     print(f'. Nest map generated and saved to {base_filepath}')
 
 
-def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes):
+def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, tex_h):
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     bm.faces.ensure_lookup_table()
@@ -686,6 +695,52 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes):
         island_h = min(src_h, max(1, max_y - min_y + 2*padding))
         ofs_u = min_x / float(src_w)
         ofs_v = min_y / float(src_h)
+        
+        # Check if the island exceed a single texture page and if so, split it
+        if island_w > tex_w or island_h > tex_h:
+            sel_max_uv = None
+            sel_min_uv = None
+            max_uv = Vector((-10000000.0, -10000000.0))
+            min_uv = Vector((10000000.0, 10000000.0))
+            selected_faces = []
+            for face in island['faces']:
+                for l in face.loops:
+                    uv = l[uv_layer].uv
+                    max_uv.x = max(uv.x, max_uv.x)
+                    max_uv.y = max(uv.y, max_uv.y)
+                    min_uv.x = min(uv.x, min_uv.x)
+                    min_uv.y = min(uv.y, min_uv.y)
+                min_x = math.floor(min_uv.x * src_w)
+                min_y = math.floor(min_uv.y * src_h)
+                max_x = math.ceil(max_uv.x * src_w)
+                max_y = math.ceil(max_uv.y * src_h)
+                island_w = min(src_w, max(1, max_x - min_x + 2*padding))
+                island_h = min(src_h, max(1, max_y - min_y + 2*padding))
+                face.tag = False
+                if sel_max_uv is None or (island_w <= tex_w and island_h <= tex_h):
+                    selected_faces.append(face)
+                    sel_min_uv = min_uv.copy()
+                    sel_max_uv = max_uv.copy()
+                    face.tag = True
+                max_uv = sel_max_uv.copy()
+                min_uv = sel_min_uv.copy()
+            if selected_faces:
+                print(f'. Object {obj} has parts that do not fit in the target texture. It has been splitted according to the texture settings.')
+                bm2 = bmesh.new()
+                bmesh.ops.duplicate(bm, selected_faces, bm2)
+                bmesh.ops.delete(bm, selected_faces, 'FACES')
+                bm.to_mesh(obj.data)
+                bm.free()
+                dup = obj.copy()
+                dup.data = bpy.data.meshes.new(obj.data.name)
+                bm2.to_mesh(dup.data)
+                bm2.free()
+                [col.objects.link(dup) for col in obj.users_collection]
+                return ('SPLITTED', (obj, dup))
+            else:
+                # We did not find a face that fits in the texture. No splitting is possible, just fail
+                print(f'. Object {obj} has a face that do not fit in the target texture. Nestmapping can not be achieved.')
+                return ('FAILED', None)
         
         # Render the island and create a discrete tuple model (vertical opaque spans) and a list of its column order
         pts=[]
@@ -771,7 +826,7 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes):
         
     offscreen.free()
     print(f'. Nesting prepared ({len(islands):>3} islands, {total_pix_count:>7}px, {src_w}x{src_h} renders) for {obj.name}')
-    return NestBlock(obj, bm, islands, total_pix_count)
+    return ('SUCCESS', NestBlock(obj, bm, islands, total_pix_count))
 
 
 def round_for_mimpaps(x):
