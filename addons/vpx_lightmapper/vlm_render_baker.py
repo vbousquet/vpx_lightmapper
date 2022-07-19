@@ -278,6 +278,10 @@ def render_all_groups(op, context):
     n_render_groups = vlm_utils.get_n_render_groups(context)
     light_scenarios = vlm_utils.get_lightings(context)
     bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
+    
+    fixed_view = bpy.data.node_groups.get('Fixed View Incoming')
+    if fixed_view:
+        fixed_view.nodes['Incoming'].inputs[0].default_value = camera_object.location
 
     # Create temp render scene, using the user render settings setup
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
@@ -578,10 +582,11 @@ def render_all_groups(op, context):
                 if state:
                     print(msg)
                     img_nodes = []
+                    bake_img = bpy.data.images.new('Bake', obj.vlmSettings.bake_width, obj.vlmSettings.bake_height, alpha=True, float_buffer=True)
                     for mat in obj.data.materials:
                         ti = mat.node_tree.nodes.new("ShaderNodeTexImage")
+                        ti.image = bake_img
                         mat.node_tree.nodes.active = ti
-                        ti.image = bpy.data.images.new('Bake', obj.vlmSettings.bake_width, obj.vlmSettings.bake_height, alpha=True, float_buffer=True)
                         img_nodes.append(ti)
                     scene.render.filepath = render_path
                     scene.render.image_settings.file_format = 'OPEN_EXR'
@@ -590,10 +595,10 @@ def render_all_groups(op, context):
                     scene.render.image_settings.color_depth = '16'
                     with context.temp_override(scene=scene, selected_objects=[obj]):
                         bpy.ops.object.bake(type='COMBINED', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
-                    for ti in img_nodes:
-                        ti.image.save_render(bpy.path.abspath(render_path), scene=scene)
-                        bpy.data.images.remove(ti.image)
+                        bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
+                    for mat, ti in zip(obj.data.materials, img_nodes):
                         mat.node_tree.nodes.remove(ti)
+                    bpy.data.images.remove(bake_img)
                     restore_func(state)
                     print('\n')
                     n_render_performed += 1
@@ -601,6 +606,7 @@ def render_all_groups(op, context):
                     print(f'. {msg} - Skipped (no influence)')
                     n_skipped += 1
             else:
+                print(f'. {msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
         if not obj.vlmSettings.hide_from_others:
             indirect_col.objects.link(obj)
