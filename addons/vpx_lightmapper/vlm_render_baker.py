@@ -541,7 +541,7 @@ def render_all_groups(op, context):
                     print('\n')
                     n_render_performed += 1
                 else:
-                    print(f'. {msg} - Skipped (no influence)')
+                    print(f'{msg} - Skipped (no influence)')
                     n_skipped += 1
 
         for obj in objects:
@@ -603,10 +603,10 @@ def render_all_groups(op, context):
                     print('\n')
                     n_render_performed += 1
                 else:
-                    print(f'. {msg} - Skipped (no influence)')
+                    print(f'{msg} - Skipped (no influence)')
                     n_skipped += 1
             else:
-                print(f'. {msg} - Skipped since it is already rendered and cached')
+                print(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
         if not obj.vlmSettings.hide_from_others:
             indirect_col.objects.link(obj)
