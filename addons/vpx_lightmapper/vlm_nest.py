@@ -346,7 +346,11 @@ def cache_get(cache, image_path):
     if cached is None:
         image = vlm_utils.get_image_or_black(image_path, black_is_none=True)
         cache.append((image_path, image))
-        #FIXME unload oldest bake if too much loaded at the same time
+        # Unload oldest bake if too much loaded at the same time
+        if len(cache) > 32:
+            path, (loaded, render) = cache.pop(0)
+            if render and loaded == 'loaded':
+                bpy.data.images.remove(render)
         loaded, render = image
         return render
     else:
@@ -658,9 +662,6 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
     islands = get_island(bm, ftv, vtf, uv_layer)
     islands = get_merged_overlapping_islands(islands, uv_layer)
     
-    # Eventually split objects if islands exceed texture size, and fail (or downsize ?) if a single face exceed texture size
-    # FIXME implement
-    
     # Compute island masks by rendering masks then creating a simplified span view
     offscreen = None
     vertex_shader = 'in vec2 pos; uniform vec2 ofs; void main() { gl_Position = vec4(2.0 * (pos + ofs) - vec2(1.0), 0.0, 1.0); }'
@@ -703,6 +704,7 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
             max_uv = Vector((-10000000.0, -10000000.0))
             min_uv = Vector((10000000.0, 10000000.0))
             selected_faces = []
+            unselected_faces = [f.index for f in bm.faces]
             for face in island['faces']:
                 for l in face.loops:
                     uv = l[uv_layer].uv
@@ -716,23 +718,25 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
                 max_y = math.ceil(max_uv.y * src_h)
                 island_w = min(src_w, max(1, max_x - min_x + 2*padding))
                 island_h = min(src_h, max(1, max_y - min_y + 2*padding))
-                face.tag = False
                 if sel_max_uv is None or (island_w <= tex_w and island_h <= tex_h):
-                    selected_faces.append(face)
+                    selected_faces.append(face.index)
+                    unselected_faces.remove(face.index)
                     sel_min_uv = min_uv.copy()
                     sel_max_uv = max_uv.copy()
-                    face.tag = True
                 max_uv = sel_max_uv.copy()
                 min_uv = sel_min_uv.copy()
             if selected_faces:
-                print(f'. Object {obj} has parts that do not fit in the target texture. It has been splitted according to the texture settings.')
-                bm2 = bmesh.new()
-                bmesh.ops.duplicate(bm, selected_faces, bm2)
-                bmesh.ops.delete(bm, selected_faces, 'FACES')
+                print(f'. Object {obj.name} has parts that do not fit in the target texture. It has been splitted according to the texture settings.')
+                bm2 = bm.copy()
+                bm2.faces.ensure_lookup_table()
+                
+                bmesh.ops.delete(bm, geom=[bm.faces[i] for i in selected_faces], context='FACES')
                 bm.to_mesh(obj.data)
                 bm.free()
+
                 dup = obj.copy()
-                dup.data = bpy.data.meshes.new(obj.data.name)
+                dup.data = obj.data.copy()
+                bmesh.ops.delete(bm2, geom=[bm2.faces[i] for i in unselected_faces], context='FACES')
                 bm2.to_mesh(dup.data)
                 bm2.free()
                 [col.objects.link(dup) for col in obj.users_collection]
