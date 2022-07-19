@@ -205,11 +205,6 @@ def create_bake_meshes(op, context):
             for poly in dup.data.polygons:
                 poly.material_index = 0
             dup.data.materials.append(get_material('Default', False, obj_name if is_bake else dup.vlmSettings.render_group))
-            # for j in range(n_render_groups):
-                # dup.data.materials.append(light_scenarios[0][4][j])
-            # for poly in dup.data.polygons:
-                # poly.material_index = dup.vlmSettings.render_group
-            #FIXME implement for baked meshes
             
             # Apply modifiers
             with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -234,8 +229,8 @@ def create_bake_meshes(op, context):
                 vlm_utils.project_uv(camera, dup, proj_ar)
             
             # Apply base transform
-            dup.data.transform(dup.matrix_basis)
-            dup.matrix_basis.identity()
+            dup.data.transform(dup.matrix_world)
+            dup.matrix_world.identity()
             
             # Perform base mesh optimization
             # with context.temp_override(active_object=dup, selected_objects=dup):
@@ -400,10 +395,10 @@ def create_bake_meshes(op, context):
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
             if sync_obj:
                 dup = bpy.data.objects[sync_obj]
-                bake_mesh.transform(Matrix(dup.matrix_basis).inverted())
-                bake_instance.matrix_basis = dup.matrix_basis
+                bake_mesh.transform(Matrix(dup.matrix_world).inverted())
+                bake_instance.matrix_world = dup.matrix_world
             else:
-                bake_instance.matrix_basis.identity()
+                bake_instance.matrix_world.identity()
             adapt_materials(bake_instance.data, light_name, is_lightmap)
             bake_instance.vlmSettings.bake_lighting = light_name
             bake_instance.vlmSettings.bake_objects = bake_col.name
