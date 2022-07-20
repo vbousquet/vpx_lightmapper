@@ -166,7 +166,7 @@ class VLM_Scene_props(PropertyGroup):
             ('fit_pf', 'Fit PF', 'Fit camera to playfield.', '', 3)
         ],
         name='Layback mode',
-        default='camera', 
+        default='fit_pf', 
         update=vlm_camera.camera_inclination_update
     )
     # Baker options
