@@ -180,7 +180,7 @@ def check_min_render_size(scene):
 def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_col):
     """Apply a light scenario for rendering, returning the previous state and a lambda to restore it
     """
-    name, is_lightmap, light_col, lights, _ = scenario
+    name, is_lightmap, light_col, lights = scenario
     prev_world = scene.world
     if is_lightmap:
         scene.render.use_border = True
@@ -368,7 +368,7 @@ def render_all_groups(op, context):
             influence = None
             remaining_scenarios = []
             for i, scenario in enumerate(scenarios_to_process, start=1):
-                name, is_lightmap, light_col, lights, _ = scenario
+                name, is_lightmap, light_col, lights = scenario
                 # Light pass does not work with emitter meshes (consider the scenario as processed for the batch since it will be processed later)
                 if next((l for l in lights if l.type != 'LIGHT'), None): 
                     continue
@@ -452,11 +452,11 @@ def render_all_groups(op, context):
             scene.world = render_world
 
             for scenario, denoise, out, initial_state in batch:
-                name, is_lightmap, light_col, lights, _ = scenario
+                name, is_lightmap, light_col, lights = scenario
                 links.new(rl.outputs[f'Combined_{name.replace(".","_")}'], denoise.inputs[0])
 
             for scenario, denoise, out, _ in batch:
-                name, is_lightmap, light_col, lights, _ = scenario
+                name, is_lightmap, light_col, lights = scenario
                 out.base_path = f'{bakepath}'
                 out.file_slots[0].path = f'{name} - Group {group_index}.exr'
                 out.file_slots[0].use_node_format = True
@@ -499,7 +499,7 @@ def render_all_groups(op, context):
                     os.rename(bpy.path.abspath(f'{bakepath}{file}'), outRenderFileName)
 
             for scenario, denoise, out, initial_state in batch:
-                _, _, _, lights, _ = scenario
+                _, _, _, lights = scenario
                 for light in lights:
                     render_col.objects.unlink(light)
                 if initial_state[0] == 1:
@@ -519,7 +519,7 @@ def render_all_groups(op, context):
         #
         # Light pass batch rendering does not support emitter mesh, so we use the legacy per light scenario rendering to process them
         for i, scenario in enumerate(light_scenarios, start=1):
-            name, is_lightmap, light_col, lights, _ = scenario
+            name, is_lightmap, light_col, lights = scenario
             render_path = f'{bakepath}{scenario[0]} - Group {group_index}.exr'
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
                 state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col)
@@ -569,7 +569,7 @@ def render_all_groups(op, context):
         im = Image.open(bpy.path.abspath(f'{mask_path}Mask - Bake - {obj.name} (Padded LD).png'))
         obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "L"))
         for i, scenario in enumerate(light_scenarios, start=1):
-            name, is_lightmap, light_col, lights, _ = scenario
+            name, is_lightmap, light_col, lights = scenario
             render_path = f'{bakepath}{scenario[0]} - Bake - {obj.name}.exr'
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
                 state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, obj_mask, render_col)

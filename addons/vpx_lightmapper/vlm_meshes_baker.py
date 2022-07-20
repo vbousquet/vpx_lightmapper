@@ -137,25 +137,9 @@ def create_bake_meshes(op, context):
             data_to.node_groups = data_from.node_groups
     
     # Prepare the list of lighting situation with a packmap material per render group, and a merge group per light situation
-    light_merge_groups = {}
     light_scenarios = vlm_utils.get_lightings(context)
     #light_scenarios = [l for l in light_scenarios if l[0] == 'Inserts-L8'] # Debug: For quickly testing a single light scenario
-    for light_scenario in light_scenarios:
-        light_name, is_lightmap, _, lights, _ = light_scenario
-        light_merge_groups[light_name] = []
-        mats = []
-        packmat = bpy.data.materials["VPX.Core.Mat.PackMap"]
-        for index in range(n_render_groups):
-            mat = packmat.copy()
-            mat.name = f"VPX.PM.{light_name}.RG{index}"
-            if is_lightmap:
-                mat.blend_method = 'BLEND'
-                mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
-            else:
-                mat.blend_method = 'OPAQUE'
-                mat.node_tree.nodes["PackMap"].inputs[2].default_value = 0.0
-            mats.append(mat)
-        light_scenario[4] = mats
+    light_merge_groups = {light_scenario[0]: [] for light_scenario in light_scenarios}
 
     # Prepare the list of solid bake mesh to produce
     to_bake = []
@@ -384,7 +368,7 @@ def create_bake_meshes(op, context):
 
         # Save solid bake to the result collection
         for light_scenario in light_scenarios:
-            light_name, is_lightmap, _, lights, _ = light_scenario
+            light_name, is_lightmap, _, lights = light_scenario
             if is_lightmap: continue
             obj_name = f'{bake_name}.BM.{light_name}' # if sync_obj else f'Table.BM.{light_name}.{bake_name}'
             bake_mesh = bake_mesh.copy()
@@ -450,7 +434,7 @@ def create_bake_meshes(op, context):
     render_path = vlm_utils.get_bakepath(context, type='RENDERS')
     lm_threshold = vlm_utils.get_lm_threshold()
     for light_scenario in light_scenarios:
-        light_name, is_lightmap, _, lights, _ = light_scenario
+        light_name, is_lightmap, _, lights = light_scenario
         if not is_lightmap: continue
         influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
         print(f'\nProcessing lightmaps for {light_name}')

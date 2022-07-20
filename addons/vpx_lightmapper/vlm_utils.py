@@ -398,14 +398,14 @@ def get_lightings(context):
     for light_col in (l for l in light_cols.children if not l.hide_render):
         lights = light_col.all_objects
         if light_col.vlmSettings.light_mode == 'solid': # Base solid bake
-            light_scenarios.append( [light_col.name, False, light_col, lights, None] )
+            light_scenarios.append( [light_col.name, False, light_col, lights] )
         elif light_col.vlmSettings.light_mode == 'group': # Lightmap of a group of lights
-            light_scenarios.append( [light_col.name, True, light_col, lights, None] )
+            light_scenarios.append( [light_col.name, True, light_col, lights] )
         elif light_col.vlmSettings.light_mode == 'split': # Lightmaps for multiple VPX lights
             for vpx_lights in {tuple(sorted(set(l.vlmSettings.vpx_object.split(';')))) for l in lights}:
                 light_group = [l for l in lights if tuple(sorted(set(l.vlmSettings.vpx_object.split(';')))) == vpx_lights]
                 name = f"{light_col.name}-{vpx_lights[0]}"
-                light_scenarios.append( [name, True, light_col, light_group, None] )
+                light_scenarios.append( [name, True, light_col, light_group] )
     # Sort by scenario name, starting by scenarios with custom world
     return sorted(light_scenarios, key=lambda scenario: f'0{scenario[0]}' if scenario[2].vlmSettings.world else f'1{scenario[0]}')
 
