@@ -315,7 +315,7 @@ def create_bake_meshes(op, context):
             bpy.ops.object.mode_set(mode='OBJECT')
 
             # Subdivide long edges to avoid visible projection distortion, and allow better lightmap face pruning (recursive subdivisions)
-            if not is_bake and not dup.vlmSettings.is_spinner:
+            if not is_bake:
                 opt_cut_threshold = 0.1
                 for i in range(8): # FIXME Limit the amount since there are situations were subdividing fails
                     bme = bmesh.new()
@@ -362,10 +362,6 @@ def create_bake_meshes(op, context):
         bpy.ops.object.select_all(action='DESELECT')
         bake_target.select_set(True)
         context.view_layer.objects.active = bake_target
-        is_spinner = use_obj_pos = False
-        if len(objects_to_join) == 1:
-            is_spinner = objects_to_join[0].vlmSettings.is_spinner
-            use_obj_pos = objects_to_join[0].vlmSettings.use_obj_pos
         print(f". Objects merged ({len(bake_target.data.vertices)} vertices, {len(bake_target.data.polygons)} faces)")
         
         # if bake_name == 'Parts':
@@ -383,7 +379,7 @@ def create_bake_meshes(op, context):
             bake_mesh.vertex_colors.new()
         
         print(f'. Base solid mesh has {len(bake_mesh.polygons)} tris and {len(bake_mesh.vertices)} vertices')
-        bake_meshes.append((bake_col, bake_name, bake_mesh, sync_obj, is_spinner, use_obj_pos))
+        bake_meshes.append((bake_col, bake_name, bake_mesh, sync_obj))
         result_col.objects.unlink(bake_target)
 
         # Save solid bake to the result collection
@@ -405,8 +401,6 @@ def create_bake_meshes(op, context):
             bake_instance.vlmSettings.bake_hdr_scale = 1.0
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
-            bake_instance.vlmSettings.is_spinner = is_spinner
-            bake_instance.vlmSettings.use_obj_pos = use_obj_pos
             if is_translucent:
                 bake_instance.vlmSettings.bake_type = 'active'
             elif sync_obj is None:
@@ -418,30 +412,30 @@ def create_bake_meshes(op, context):
     # Merge opaque bake meshes with the same depth bias
     merged_bake_meshes = []
     opaque_bake_mesh = None
-    for bake_col, bake_name, bake_mesh, sync_obj, is_spinner, use_obj_pos in bake_meshes:
+    for bake_col, bake_name, bake_mesh, sync_obj in bake_meshes:
         # FIXME merging is disabled since nestmap splitting is not more supported
         if False and bake_col.vlmSettings.is_opaque and sync_obj is None:
             if opaque_bake_mesh:
                 merged_bake_meshes.remove(opaque_bake_mesh)
-                ex_bake_col, ex_bake_name, ex_bake_mesh, ex_sync_obj, ex_spinner, ex_use_obj_pos = opaque_bake_mesh
+                ex_bake_col, ex_bake_name, ex_bake_mesh, ex_sync_obj = opaque_bake_mesh
                 print(f'\nMerging lightmaps for {ex_bake_col} and {bake_col.name}')
                 bm = bmesh.new()
                 bm.from_mesh(ex_bake_mesh)
                 bm.from_mesh(bake_mesh)
                 bm.to_mesh(bake_mesh)
                 bm.free()
-                opaque_bake_mesh = (f'{ex_bake_col};{bake_col.name}', ex_bake_name, bake_mesh, None, is_spinner and ex_spinner, use_obj_pos and ex_use_obj_pos)
+                opaque_bake_mesh = (f'{ex_bake_col};{bake_col.name}', ex_bake_name, bake_mesh, None)
                 merged_bake_meshes.append(opaque_bake_mesh)
             else:
-                opaque_bake_mesh = (bake_col.name, bake_name, bake_mesh, sync_obj, is_spinner, use_obj_pos)
+                opaque_bake_mesh = (bake_col.name, bake_name, bake_mesh, sync_obj)
                 merged_bake_meshes.append(opaque_bake_mesh)
         else:
-            merged_bake_meshes.append( (bake_col.name, bake_name, bake_mesh, sync_obj, is_spinner, use_obj_pos) )
+            merged_bake_meshes.append( (bake_col.name, bake_name, bake_mesh, sync_obj) )
     
     # Build all the visibility maps
     vmaps = []
     print(f'\nBuilding all lightmap meshes (prune map size={prunemap_width}x{prunemap_height})')
-    for bake_col, bake_name, bake_mesh, sync_obj, is_spinner, use_obj_pos in merged_bake_meshes:
+    for bake_col, bake_name, bake_mesh, sync_obj in merged_bake_meshes:
         print(f'. Building lightmap meshes for {bake_name}')
         obj = bpy.data.objects.new(f"LightMesh", bake_mesh)
         result_col.objects.link(obj)
@@ -460,7 +454,7 @@ def create_bake_meshes(op, context):
         if not is_lightmap: continue
         influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
         print(f'\nProcessing lightmaps for {light_name}')
-        for (bake_col, bake_name, bake_mesh, sync_obj, is_spinner, use_obj_pos), lightmap_vmap in zip(merged_bake_meshes, vmaps):
+        for (bake_col, bake_name, bake_mesh, sync_obj), lightmap_vmap in zip(merged_bake_meshes, vmaps):
             obj_name = f'{bake_name}.LM.{light_name}'
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             n_faces = len(bake_instance.data.polygons)
@@ -487,8 +481,6 @@ def create_bake_meshes(op, context):
                 bake_instance.vlmSettings.bake_hdr_range = hdr_range
                 bake_instance.vlmSettings.bake_sync_light = ';'.join([l.name for l in lights]) if lights else ''
                 bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
-                bake_instance.vlmSettings.is_spinner = is_spinner
-                bake_instance.vlmSettings.use_obj_pos = use_obj_pos
 
     # Purge unlinked datas and clean up
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)

@@ -265,7 +265,6 @@ class VLM_Object_props(PropertyGroup):
     bake_width: IntProperty(name="Bake width:", description="Width of bake texture", default = 256, min = 2, max=8192)
     bake_height: IntProperty(name="Bake height:", description="Height of bake texture", default = 256, min = 2, max=8192)
     # Both bake object and bake result
-    is_spinner: BoolProperty(name="Spinner", description="Tag object has a spinner where backfacing faces are mirrors of front facing.", default = False)
     use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot instead of Rot when exporting", default = False)
     # Bake result properties (for object inside the bake result collection)
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
@@ -850,7 +849,6 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                         layout.prop(obj.vlmSettings, 'bake_width')
                         layout.prop(obj.vlmSettings, 'bake_height')
                     else:
-                        layout.prop(obj.vlmSettings, 'is_spinner')
                         layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
                         layout.prop(bake_objects[0].vlmSettings, 'bake_to')
             
@@ -899,8 +897,6 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
                 layout.prop(props, 'bake_sync_trans')
                 layout.prop(props, 'bake_type')
                 layout.prop(props, 'bake_hdr_range')
-                layout.prop(props, 'is_spinner')
-                layout.prop(props, 'use_obj_pos')
                 layout.separator()
                 layout.prop(props, 'bake_nestmap')
                 layout.operator(VLM_OT_select_nestmap_group.bl_idname)

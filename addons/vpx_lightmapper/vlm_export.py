@@ -356,7 +356,12 @@ def export_vpx(op, context):
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', obj.location[0]/global_scale, -obj.location[1]/global_scale, obj.location[2]/global_scale)
         writer.write_tagged_padded_vector(b'VSIZ', obj.scale[0], obj.scale[1], obj.scale[2])
-        if obj.vlmSettings.use_obj_pos:
+        use_obj_pos = False
+        if obj.vlmSettings.bake_sync_trans:
+            sync_obj = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
+            if sync_obj:
+                use_obj_pos = obj.vlmSettings.use_obj_pos
+        if use_obj_pos:
             # RotX / RotY / RotZ
             writer.write_tagged_float(b'RTV0', 0)
             writer.write_tagged_float(b'RTV1', 0)

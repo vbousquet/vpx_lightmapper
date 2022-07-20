@@ -77,10 +77,6 @@ def get_render_size(context):
                     uv_layer = mesh.uv_layers.active
                     for face in mesh.polygons:
                         y_mirror = 1.0
-                        if obj.vlmSettings.is_spinner:
-                            # Perform Y mirror for back facing spinner faces
-                            normal = obj_mat @ face.normal
-                            if normal.length_squared >= 0.5 and normal.dot(camera.location - face.center) <= 0.0: y_mirror = -1.0
                         for loop_idx in face.loop_indices:
                             co = mesh.vertices[mesh.loops[loop_idx].vertex_index].co
                             p1 = modelview_matrix @ obj_mat @ Vector((co[0], y_mirror * co[1], co[2], 1))
@@ -132,10 +128,6 @@ def project_uv(camera, obj, ar):
     uv_layer = mesh.uv_layers.active
     for face in mesh.polygons:
         y_mirror = 1.0
-        if obj.vlmSettings.is_spinner:
-            # Perform Y mirror for back facing spinner faces
-            normal = obj_mat @ face.normal
-            if normal.length_squared >= 0.5 and normal.dot(camera.location - face.center) <= 0.0: y_mirror = -1.0
         for loop_idx in face.loop_indices:
             co = mesh.vertices[mesh.loops[loop_idx].vertex_index].co
             p1 = modelview_matrix @ obj_mat @ Vector((co[0], y_mirror * co[1], co[2], 1))
