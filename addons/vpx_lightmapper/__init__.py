@@ -684,6 +684,26 @@ class VLM_OT_load_render_images(Operator):
         return {"FINISHED"}
 
 
+class VLM_OT_select_table_file(Operator, ImportHelper):
+    bl_idname = "vlm.select_table_file"
+    bl_label = "Select VPX table file"
+    __doc__ = ""
+
+    filter_glob = StringProperty(
+        default="*.vpx", 
+        options={'HIDDEN'}
+    )
+
+    def execute(self, context):
+        context.scene.vlmSettings.table_file = bpy.path.relpath(self.filepath)
+        filename, extension = os.path.splitext(self.filepath)
+        print('Selected file:', self.filepath)
+        print('Relative file:', bpy.path.relpath(self.filepath))
+        print('File name:', filename)
+        print('File extension:', extension)
+        return {'FINISHED'} 
+
+
 class VLM_PT_Importer(bpy.types.Panel):
     bl_label = "VPX Importer"
     bl_category = "VLM"
@@ -698,7 +718,11 @@ class VLM_PT_Importer(bpy.types.Panel):
         row.scale_y = 1.5
         row.operator(VLM_OT_new_from_vpx.bl_idname)
         row.operator(VLM_OT_update.bl_idname)
-        layout.prop(vlmProps, "table_file")
+        row = layout.row()
+        row.prop(vlmProps, "table_file", expand=True)
+        row = row.row()
+        row.alignment = 'RIGHT'
+        row.operator(VLM_OT_select_table_file.bl_idname, text='...')
         layout.prop(vlmProps, "units_mode")
         layout.prop(vlmProps, "light_size")
         layout.prop(vlmProps, "light_intensity")
@@ -1052,6 +1076,7 @@ classes = (
     VLM_OT_export_obj,
     VLM_OT_export_vpx,
     VLM_OT_export_pov,
+    VLM_OT_select_table_file,
     )
 preference_classes = (VLM_PT_3D_warning_panel, VLM_PT_Props_warning_panel, VLM_OT_install_dependencies, VLM_preferences)
 registered_classes = []
