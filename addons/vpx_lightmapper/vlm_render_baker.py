@@ -346,7 +346,7 @@ def render_all_groups(op, context):
         #
         # In Blender 3.2, we can render multiple lights at once and save there data separately using light groups for way faster rendering.
         # This needs to use the compositor to performs denoising and save to split file outputs.
-        print(f'. Processing batch render for group {group_index}')
+        print(f'\n. Processing batch render for group #{group_index+1}/{n_render_groups}')
         scenarios_to_process = [scenario for scenario in light_scenarios]
         while scenarios_to_process:
             prev_world = scene.world
@@ -473,7 +473,6 @@ def render_all_groups(op, context):
                 msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
             print(msg)
             print(f'. Scenarios: {",".join(s[0][0] for s in batch)}')
-            #return {'FINISHED'}                    
 
             # Setup AOI
             if influence != (0, 1, 0, 1):
@@ -486,6 +485,8 @@ def render_all_groups(op, context):
             else:
                 scene.render.use_border = False
             
+            #return {'FINISHED'}                    
+
             bpy.ops.render.render(write_still=False, scene=scene.name)
             n_render_performed += len(batch)
 
