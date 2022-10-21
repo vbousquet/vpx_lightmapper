@@ -360,7 +360,7 @@ def export_vpx(op, context):
         if obj.vlmSettings.bake_sync_trans:
             sync_obj = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
             if sync_obj:
-                use_obj_pos = obj.vlmSettings.use_obj_pos
+                use_obj_pos = sync_obj.vlmSettings.use_obj_pos
         if use_obj_pos:
             # RotX / RotY / RotZ
             writer.write_tagged_float(b'RTV0', 0)
