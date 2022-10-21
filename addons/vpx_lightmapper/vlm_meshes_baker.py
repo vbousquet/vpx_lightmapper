@@ -94,8 +94,6 @@ def create_bake_meshes(op, context):
     start_time = time.time()
     global_scale = vlm_utils.get_global_scale(context)
     n_render_groups = vlm_utils.get_n_render_groups(context)
-    cursor_loc = context.scene.cursor.location
-    context.scene.cursor.location = camera.location # Used for sorting faces by distance from view point
     result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result')
     lc = vlm_collections.find_layer_collection(context.view_layer.layer_collection, result_col)
     if lc: lc.exclude = False
@@ -136,6 +134,10 @@ def create_bake_meshes(op, context):
             data_to.materials = [name for name in data_from.materials if name == "VPX.Core.Mat.PackMap"]
             data_to.node_groups = data_from.node_groups
     
+    # Used for sorting faces by distance from view point
+    cursor_loc = context.scene.cursor.location
+    context.scene.cursor.location = camera.location 
+
     # Prepare the list of lighting situation with a packmap material per render group, and a merge group per light situation
     light_scenarios = vlm_utils.get_lightings(context)
     #light_scenarios = [l for l in light_scenarios if l[0] == 'Inserts-L8'] # Debug: For quickly testing a single light scenario
@@ -397,8 +399,7 @@ def create_bake_meshes(op, context):
     merged_bake_meshes = []
     opaque_bake_mesh = None
     for bake_col, bake_name, bake_mesh, sync_obj in bake_meshes:
-        # FIXME merging is disabled since nestmap splitting is not more supported
-        if False and bake_col.vlmSettings.is_opaque and sync_obj is None:
+        if bake_col.vlmSettings.is_opaque and sync_obj is None:
             if opaque_bake_mesh:
                 merged_bake_meshes.remove(opaque_bake_mesh)
                 ex_bake_col, ex_bake_name, ex_bake_mesh, ex_sync_obj = opaque_bake_mesh
@@ -470,6 +471,7 @@ def create_bake_meshes(op, context):
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
     print(f'\nbake meshes created in {str(datetime.timedelta(seconds=time.time() - start_time))}')
 
+    context.scene.cursor.location = cursor_loc
     context.scene.vlmSettings.last_bake_step = 'meshes'
     return {'FINISHED'}
 
