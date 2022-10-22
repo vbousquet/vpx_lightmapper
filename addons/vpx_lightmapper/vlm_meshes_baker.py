@@ -395,7 +395,7 @@ def create_bake_meshes(op, context):
                 bake_instance.vlmSettings.bake_type = 'default'
             result_col.objects.link(bake_instance)
     
-    # Merge opaque bake meshes with the same depth bias
+    # Merge lightmaps of opaque unmovable meshes
     merged_bake_meshes = []
     opaque_bake_mesh = None
     for bake_col, bake_name, bake_mesh, sync_obj in bake_meshes:
@@ -404,24 +404,27 @@ def create_bake_meshes(op, context):
                 merged_bake_meshes.remove(opaque_bake_mesh)
                 ex_bake_col, ex_bake_name, ex_bake_mesh, ex_sync_obj = opaque_bake_mesh
                 print(f'\nMerging lightmaps for {ex_bake_col} and {bake_col.name}')
-                bm = bmesh.new()
-                bm.from_mesh(ex_bake_mesh)
-                bm.from_mesh(bake_mesh)
-                bm.to_mesh(bake_mesh)
-                bm.free()
+                obj1 = bpy.data.objects.new(f"OBJ1", bake_mesh)
+                obj2 = bpy.data.objects.new(f"OBJ2", ex_bake_mesh)
+                result_col.objects.link(obj1)
+                result_col.objects.link(obj2)
+                with context.temp_override(active_object=obj1, selected_editable_objects=[obj1, obj2]):
+                    bpy.ops.object.join()
+                bake_mesh = obj1.data
+                result_col.objects.unlink(obj1)
                 opaque_bake_mesh = (f'{ex_bake_col};{bake_col.name}', ex_bake_name, bake_mesh, None)
                 merged_bake_meshes.append(opaque_bake_mesh)
             else:
-                opaque_bake_mesh = (bake_col.name, bake_name, bake_mesh, sync_obj)
+                opaque_bake_mesh = (bake_col.name, bake_name, bake_mesh, None)
                 merged_bake_meshes.append(opaque_bake_mesh)
         else:
             merged_bake_meshes.append( (bake_col.name, bake_name, bake_mesh, sync_obj) )
     
     # Build all the visibility maps
     vmaps = []
-    print(f'\nBuilding all lightmap meshes (prune map size={prunemap_width}x{prunemap_height})')
+    print(f'\nPreparing all lightmap visibility masks (prune map size={prunemap_width}x{prunemap_height})')
     for bake_col, bake_name, bake_mesh, sync_obj in merged_bake_meshes:
-        print(f'. Building lightmap meshes for {bake_name}')
+        print(f'. Preparing visibility mask for {bake_name}')
         obj = bpy.data.objects.new(f"LightMesh", bake_mesh)
         result_col.objects.link(obj)
         bpy.ops.object.select_all(action='DESELECT')
@@ -483,9 +486,9 @@ def orient2d(ax, ay, bx, by, x, y):
 
 
 def build_visibility_map(bake_name, bake_instance_mesh, n_render_groups, width, height):
-    """Build a set of rasterized maps where each pixels contains the list of visible faces.
+    """Build a rasterized map where each pixels contains the list of visible faces.
     The code here is derived from https://fgiesen.wordpress.com/2013/02/08/triangle-rasterization-in-practice/
-    The odification consists in extending the rasterzed area by 1 pixel by changing the orient2d test.
+    The only modification consists in extending the rasterized area by 1 pixel by changing the orient2d test.
     """
     bm = bmesh.new()
     bm.from_mesh(bake_instance_mesh)
