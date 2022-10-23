@@ -411,6 +411,7 @@ def create_bake_meshes(op, context):
                 with context.temp_override(active_object=obj1, selected_editable_objects=[obj1, obj2]):
                     bpy.ops.object.join()
                 bake_mesh = obj1.data
+                bake_mesh.validate()
                 result_col.objects.unlink(obj1)
                 opaque_bake_mesh = (f'{ex_bake_col};{bake_col.name}', ex_bake_name, bake_mesh, None)
                 merged_bake_meshes.append(opaque_bake_mesh)

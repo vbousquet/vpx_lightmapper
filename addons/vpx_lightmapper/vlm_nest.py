@@ -100,6 +100,8 @@ def get_merged_overlapping_islands(islands, uv_layer):
                         other_island['faces'].extend(island['faces'])
                         update_island_bounds(other_island, uv_layer)
                         break
+                if merged:
+                    break
             if merged:
                 break
         if not merged:
@@ -136,6 +138,8 @@ def create_vert_face_db(faces, uv_layer):
 
 
 ## Code for 2D nesting algorithm
+
+import collections
 
 NestBlock = namedtuple("NestBlock", "obj bm islands pix_count")
 NestMap = namedtuple("NestMap", "padding islands targets target_heights")
@@ -284,38 +288,29 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                     print(f'. Object {obj.name} did not fit on a single page. Splitting it.')
                     
                     # Gather faces that did not fit on the first page
-                    selected_faces = [] # The indices of faces that did not fit on the first page
-                    unselected_faces = [f.index for f in bm.faces]
+                    remaining_faces = [] # The indices of faces that did not fit on the first page
+                    nested_faces = [] # The indices of faces that did fit on the first page
                     processed_islands = []
                     remaining_islands = []
                     processed_pix_count = 0
+                    bm.faces.ensure_lookup_table()
                     for island in block_islands:
                         if island['place'][0] == 0:
                             processed_islands.append(island)
-                            block_pix_count = block_pix_count - island['pixcount']
+                            for face in island['faces']:
+                                nested_faces.append(face.index)
                             processed_pix_count = processed_pix_count + island['pixcount']
                         else:
                             remaining_islands.append(island)
                             for face in island['faces']:
-                                selected_faces.append(face.index)
-                                unselected_faces.remove(face.index)
-                    
+                                remaining_faces.append(face.index)
+
                     # duplicate the packed object mesh
+                    dup = obj.copy()
+                    dup.data = obj.data.copy()
                     bm2 = bm.copy()
                     bm2.faces.ensure_lookup_table()
                     
-                    # remove faces that did not fit (the ones that ended after the first page)
-                    bmesh.ops.delete(bm, geom=[bm.faces[i] for i in selected_faces], context='FACES')
-                    bm.to_mesh(obj.data)
-
-                    # render the resulting nestmap
-                    nestmap = NestMap(padding, processed_islands, targets[0:1], target_heights[0:1])
-                    tick_time = time.time()
-                    render_nestmap(context, [NestBlock(obj, None, processed_islands, processed_pix_count)], uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
-                    render_length = time.time() - tick_time
-                    nestmap_index = nestmap_index + 1
-                    print(f'. {len(processed_islands)} islands were nested on the first page and kept.')
-
                     # Reset uv of faces still to be nested
                     index = 0
                     uv_layer = bm2.loops.layers.uv[uv_nest_name]
@@ -324,21 +319,36 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                             loop[uv_layer].uv = uv_undo[index]
                             index = index + 1
 
+                    # Adjust data of remaining islands
+                    for island in remaining_islands:
+                        island['source'] = (dup, bm2)
+                        island['faces'] = [bm2.faces[face.index] for face in island['faces']]
+
                     # Create new object to be nested
-                    dup = obj.copy()
-                    dup.data = obj.data.copy()
-                    bmesh.ops.delete(bm2, geom=[bm2.faces[i] for i in unselected_faces], context='FACES')
+                    bmesh.ops.delete(bm2, geom=[bm2.faces[i] for i in nested_faces], context='FACES')
                     bm2.to_mesh(dup.data)
                     [col.objects.link(dup) for col in obj.users_collection]
                     dup.vlmSettings.bake_nestmap = -1
 
-                    # Continue nesting with all the remaining islands
+                    # Prepare nesting of the remaining islands
                     r, v = prepare_nesting(context, dup, padding, uv_bake_name, render_sizes, tex_w, tex_h)
                     if r == 'SUCCESS':
                         print(f'. {len(remaining_islands)} islands were splitted, and still need to be nested.')
                         islands_to_pack.append(v)
                     else:
                         print(f'. nesting the remaining island failed.')
+
+                    # Create object with the nested faces
+                    bmesh.ops.delete(bm, geom=[bm.faces[i] for i in remaining_faces], context='FACES')
+                    bm.to_mesh(obj.data)
+
+                    # Render the resulting nestmap
+                    nestmap = NestMap(padding, processed_islands, targets[0:1], target_heights[0:1])
+                    tick_time = time.time()
+                    render_nestmap(context, [NestBlock(obj, None, processed_islands, processed_pix_count)], uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
+                    render_length = time.time() - tick_time
+                    nestmap_index = nestmap_index + 1
+                    print(f'. {len(processed_islands)} islands were nested on the first page and kept.')
                     break
 
     # Free unprocessed data if any
@@ -665,12 +675,12 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
     bm.from_mesh(obj.data)
     bm.faces.ensure_lookup_table()
     uv_layer = bm.loops.layers.uv[uv_nest_name]
-    
+
     # Identify islands (faces sharing the same render id linked with respect to uv)
     ftv, vtf = create_vert_face_db([f for f in bm.faces], uv_layer)
     islands = get_island(bm, ftv, vtf, uv_layer)
     islands = get_merged_overlapping_islands(islands, uv_layer)
-    
+
     # Compute island masks by rendering masks then creating a simplified span view
     offscreen = None
     vertex_shader = 'in vec2 pos; uniform vec2 ofs; void main() { gl_Position = vec4(2.0 * (pos + ofs) - vec2(1.0), 0.0, 1.0); }'
