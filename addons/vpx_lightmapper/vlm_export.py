@@ -295,7 +295,6 @@ def export_vpx(op, context):
         n_read_item = n_read_item + 1
 
 
-
     # Add new bake models and default playfield collider if needed
     meshes_to_export = sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}')
     pfobj = None
@@ -584,6 +583,13 @@ def export_vpx(op, context):
         return code
 
 
+    def push_map_array(name, mode, lightmaps):
+        code = f'Dim {name}: {name}=Array('
+        code += ', '.join([f'{elem_ref(export_name(obj.name))}' for obj in sorted(lightmaps, key=lambda x: x.name)])
+        code += f') \' VLM.Array;{mode};{name}\n'
+        return code
+
+
     def push_pending(pending):
         if not pending: return ''
         if pending[0] == 0: # Lampz
@@ -592,6 +598,12 @@ def export_vpx(op, context):
             return push_map_move([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap' and obj.vlmSettings.bake_sync_trans == pending[2]], int(pending[1]))
         elif pending[0] == 2: # Movable lightmap
             return push_map_move([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_sync_trans == pending[2]], int(pending[1]))
+        elif pending[0] == 3: # Movable's Lightmap array
+            return push_map_array(pending[1]+'_LM', 'LM', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_objects == pending[1]])
+        elif pending[0] == 4: # Movable's bakemap array
+            return push_map_array(pending[1]+'_BM', 'BM', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap' and obj.vlmSettings.bake_objects == pending[1]])
+        elif pending[0] == 5: # Movable's Lightmap and bakemap array
+            return push_map_array(pending[1]+'_BL', 'All', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_objects == pending[1]])
 
 
     # Copy data from reference file
@@ -652,18 +664,23 @@ def export_vpx(op, context):
                     new_code = ""
                     pending = None
                     for line in code.splitlines():
-                        if '\' VLM.Lampz;' in line:
+                        if '\' VLM.Lampz;' in line: # Lampz initialization
                             new_pending = (0, *(line.split('\' VLM.Lampz;',1)[1].split(';')))
                             if new_pending != pending:
                                 new_code += push_pending(pending)
                                 pending = new_pending
-                        elif '\' VLM.Props;BM;' in line:
+                        elif '\' VLM.Props;BM;' in line: # Object property synchronization => BakeMap
                             new_pending = (1, *(line.split('\' VLM.Props;BM;',1)[1].split(';')))
                             if new_pending != pending:
                                 new_code += push_pending(pending)
                                 pending = new_pending
-                        elif '\' VLM.Props;LM;' in line:
+                        elif '\' VLM.Props;LM;' in line: # Object property synchronization => LightMap
                             new_pending = (2, *(line.split('\' VLM.Props;LM;',1)[1].split(';')))
+                            if new_pending != pending:
+                                new_code += push_pending(pending)
+                                pending = new_pending
+                        elif '\' VLM.Array;LM;' in line: # LightMap array
+                            new_pending = (3, *(line.split('\' VLM.Array;LM;',1)[1].split(';')))
                             if new_pending != pending:
                                 new_code += push_pending(pending)
                                 pending = new_pending
@@ -800,6 +817,25 @@ def export_vpx(op, context):
     code += "' This file provide default implementation and template to add bakemap\n"
     code += "' & lightmap synchronization for position and lighting.\n"
     code += "'\n"
+    code += "' Lines ending with a comment starting with \"' VLM.\" are meant to\n"
+    code += "' be copy/pasted ONLY ONCE, since the toolkit will take care of\n"
+    code += "' updating them directly in your table script, each time an\n"
+    code += "' export is made.\n"
+
+    code += "\n"
+    code += "\n"
+    code += "' ===============================================================\n"
+    code += "' The following code can be copy/pasted to have premade array for\n"
+    code += "' movable objects:\n"
+    code += "' - _LM suffixed arrays contains the lightmaps\n"
+    code += "' - _BM suffixed arrays contains the bakemap\n"
+    code += "' - _BL suffixed arrays contains both the bakemap & the lightmaps"
+    code += "\n"
+    all_sync_trans = sorted(list({obj.vlmSettings.bake_sync_trans for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''}))
+    for sync_trans in all_sync_trans:
+        code += push_map_array(export_name(sync_trans)+'_LM', 'LM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
+        code += push_map_array(export_name(sync_trans)+'_BM', 'BM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
+        code += push_map_array(export_name(sync_trans)+'_BL', 'All', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
 
     code += "\n"
     code += "\n"
@@ -845,7 +881,6 @@ def export_vpx(op, context):
     code += "' and the source on which you want it to be synchronized.\n"
     code += "\n"
     code += 'Sub MovableHelper\n'
-    all_sync_trans = sorted(list({obj.vlmSettings.bake_sync_trans for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''}))
     for sync_trans in all_sync_trans:
         sync = bpy.data.objects.get(sync_trans)
         if sync and sync.vlmSettings.movable_script != '':
