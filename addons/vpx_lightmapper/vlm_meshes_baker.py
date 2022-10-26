@@ -182,22 +182,22 @@ def create_bake_meshes(op, context):
                 bpy.ops.object.convert(target='MESH')
                 dup = bpy.data.objects[dup_name]
             dup.data.free_normals_split()
-            dup.data.use_auto_smooth = False
             dup.data.validate()
             is_bake = dup.vlmSettings.use_bake
 
-            # Switch material to baked ones
-            dup.data.materials.clear()
-            for poly in dup.data.polygons:
-                poly.material_index = 0
-            dup.data.materials.append(get_material('Default', False, obj_name if is_bake else dup.vlmSettings.render_group))
-            
             # Apply modifiers
             with context.temp_override(active_object=dup, selected_objects=[dup]):
                 for modifier in dup.modifiers:
                     if 'NoExp' in modifier.name: break # or (modifier.type == 'BEVEL' and modifier.width < 0.1)
                     bpy.ops.object.modifier_apply(modifier=modifier.name)
                 dup.modifiers.clear()
+            dup.data.use_auto_smooth = False # Don't use custom normals (this would break when merging, but keep them for modifiers if we have modifiers that need them)
+            
+            # Switch material to baked ones (needs to be done after applying modifiers which may create material slots)
+            for poly in dup.data.polygons:
+                poly.material_index = 0
+            dup.data.materials.clear()
+            dup.data.materials.append(get_material('Default', False, obj_name if is_bake else dup.vlmSettings.render_group))
             
             # Remove face shading
             with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -339,8 +339,10 @@ def create_bake_meshes(op, context):
         if len(objects_to_join) == 0: continue
         
         # Create merged mesh
-        with context.temp_override(active_object=objects_to_join[0], selected_editable_objects=objects_to_join):
-            bpy.ops.object.join()
+        if len(objects_to_join) > 1:
+            print(f". {len(objects_to_join)} Objects merged") # {[obj.name for obj in objects_to_join]}")
+            with context.temp_override(active_object=objects_to_join[0], selected_editable_objects=objects_to_join):
+                bpy.ops.object.join()
         bake_target = objects_to_join[0]
         bake_target.name = 'VLM.Bake Target'
         bake_mesh = bake_target.data
@@ -348,7 +350,6 @@ def create_bake_meshes(op, context):
         bpy.ops.object.select_all(action='DESELECT')
         bake_target.select_set(True)
         context.view_layer.objects.active = bake_target
-        print(f". Objects merged ({len(bake_target.data.vertices)} vertices, {len(bake_target.data.polygons)} faces)")
         
         # if bake_name == 'Parts':
             # return {'FINISHED'}
@@ -375,6 +376,7 @@ def create_bake_meshes(op, context):
             obj_name = f'{bake_name}.BM.{light_name}' # if sync_obj else f'Table.BM.{light_name}.{bake_name}'
             bake_mesh = bake_mesh.copy()
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
+            result_col.objects.link(bake_instance)
             if sync_obj:
                 dup = bpy.data.objects[sync_obj]
                 bake_mesh.transform(Matrix(dup.matrix_world).inverted())
@@ -393,7 +395,6 @@ def create_bake_meshes(op, context):
                 bake_instance.vlmSettings.bake_type = 'static'
             else:
                 bake_instance.vlmSettings.bake_type = 'default'
-            result_col.objects.link(bake_instance)
     
     # Merge lightmaps of opaque unmovable meshes
     merged_bake_meshes = []
