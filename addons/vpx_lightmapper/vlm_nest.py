@@ -718,6 +718,7 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
         
         # Check if the island exceed a single texture page and if so, split it
         if island_w > tex_w or island_h > tex_h:
+            # Start with an empty selection that will be replaced by the first face
             sel_max_uv = None
             sel_min_uv = None
             max_uv = Vector((-10000000.0, -10000000.0))
@@ -725,6 +726,7 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
             selected_faces = []
             unselected_faces = [f.index for f in bm.faces]
             for face in island['faces']:
+                # extend the uv range of the selection with this face uv
                 for l in face.loops:
                     uv = l[uv_layer].uv
                     max_uv.x = max(uv.x, max_uv.x)
@@ -737,6 +739,7 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
                 max_y = math.ceil(max_uv.y * src_h)
                 island_w = min(src_w, max(1, max_x - min_x + 2*padding))
                 island_h = min(src_h, max(1, max_y - min_y + 2*padding))
+                # if it fits (or is the first), extends the selection with this face
                 if sel_max_uv is None or (island_w <= tex_w and island_h <= tex_h):
                     selected_faces.append(face.index)
                     unselected_faces.remove(face.index)
@@ -847,7 +850,9 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
         island['masks'] = island_masks
         island['pixcount'] = island_pix_count
         
-    offscreen.free()
+    if offscreen is not None:
+        offscreen.free()
+
     print(f'. Nesting prepared ({len(islands):>3} islands, {total_pix_count:>7}px, {src_w}x{src_h} renders) for {obj.name}')
     return ('SUCCESS', NestBlock(obj, bm, islands, total_pix_count))
 
