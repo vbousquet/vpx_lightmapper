@@ -230,10 +230,9 @@ def update_object(context, vpx_name, vpx_subpart, data, col_name):
     return True, obj
 
 
-def update_location(obj, x, y, z, layback_factor = 0):
+def update_location(obj, x, y, z):
     if ';' not in obj.vlmSettings.vpx_object and obj.vlmSettings.import_transform:
-        obj.vlmSettings.layback_offset = -z * layback_factor
-        obj.location = (x, y + obj.vlmSettings.layback_offset, z)
+        obj.location = (x, y, z)
 
 
 def add_core_mesh(obj_list, vpx_name, vpx_subpart, core_mesh, target_col, materials, material, image, x, y, z, x_size, y_size, z_size, rot_z, global_scale):
@@ -581,16 +580,6 @@ def read_vpx(op, context, filepath):
             else:
                 node_tex.image = None
 
-        # Create/Reset base lattice object for view transform
-        lattice = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Layback', single=True)
-        if not lattice:
-            lattice = bpy.data.objects.new('VPX.Layback', bpy.data.lattices.new('Layback'))
-            lattice.vlmSettings.vpx_object = 'VPX.Camera'
-            lattice.vlmSettings.vpx_subpart = 'Layback'
-            vlm_collections.get_collection(context.scene.collection, HIDDEN_COL).objects.link(lattice)
-        layback_factor = -math.tan(math.radians(camera_layback) / 2) # to shift undeformed objects like lights
-        created_objects.append(lattice.name)
-        
         # Read the game items
         surface_offsets = {}
         shifted_objects = []
@@ -987,7 +976,7 @@ def read_vpx(op, context, filepath):
                     _, obj = update_object(context, name, '', light, LIGHTS_COL)
                     # Move below playfield to light through the translucency of the playfield material
                     obj.data.color = (color[0], color[1], color[2]) # Force color update
-                    update_location(obj, x * global_scale, -y * global_scale, -(opt_insert_size + 1) * global_scale, layback_factor)
+                    update_location(obj, x * global_scale, -y * global_scale, -(opt_insert_size + 1) * global_scale)
                     shifted_objects.append((obj, surface))
                     created_objects.append(obj.name)
                 elif bulb:
@@ -998,7 +987,7 @@ def read_vpx(op, context, filepath):
                     light.shadow_soft_size = opt_light_size * global_scale
                     _, obj = update_object(context, name, '', light, LIGHTS_COL)
                     obj.data.color = (color[0], color[1], color[2]) # Force color update
-                    update_location(obj, x * global_scale, -y * global_scale, z * global_scale, layback_factor)
+                    update_location(obj, x * global_scale, -y * global_scale, z * global_scale)
                     created_objects.append(obj.name)
                 else:
                     obj = bpy.data.objects.new('VPX.Temp', curve)

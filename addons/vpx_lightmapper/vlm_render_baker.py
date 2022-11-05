@@ -247,10 +247,6 @@ def render_all_groups(op, context):
         op.report({'ERROR'}, 'You must save your project before rendering')
         return {'CANCELLED'}
 
-    if context.scene.vlmSettings.layback_mode == 'deform':
-        op.report({'ERROR'}, 'Deform camera mode is not supported by the lightmapper')
-        return {'CANCELLED'}
-
     bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
     if not bake_col:
         op.report({'ERROR'}, "No 'VLM.Bake' collection to process")

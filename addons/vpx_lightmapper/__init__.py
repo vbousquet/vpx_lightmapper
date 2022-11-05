@@ -161,7 +161,6 @@ class VLM_Scene_props(PropertyGroup):
     layback_mode: EnumProperty(
         items=[
             ('disable', 'Disable', 'Disable layback', '', 0),
-            ('deform', 'Deform', 'Apply layback to geometry. This breaks reflection/refraction', '', 1),
             ('camera', 'Camera', 'Apply layback to camera.', '', 2),
             ('fit_pf', 'Fit PF', 'Fit camera to playfield.', '', 3)
         ],

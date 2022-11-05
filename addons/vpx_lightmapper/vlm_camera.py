@@ -41,27 +41,21 @@ def camera_inclination_update(op, context):
     and overscale image on the y axis (for bake texture density) corresponding to what it would have been
     if we have deformed the geometry (like in VPX)
     """
-    lattice = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Layback', single=True)
     camera_object = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
     bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
     playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
-    if not lattice or not camera_object or not bake_col:
-        print("Warning: Missing needed elements to fit the camera (camera, bake collection or lattice)")
+    if not camera_object or not bake_col:
+        print("Warning: Missing needed elements to fit the camera (camera or bake collection)")
         return
     
     print(f'Fitting camera to bake objects')
     
     # Adjust the camera
     context.scene.render.pixel_aspect_x = 1
-    lattice.data = bpy.data.lattices.new('Layback')
     layback_mode = context.scene.vlmSettings.layback_mode
     if layback_mode == 'disable':
         camera_inclination = context.scene.vlmSettings.camera_inclination
         camera_layback = 0
-        fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col)
-    elif layback_mode == 'deform':
-        camera_inclination = context.scene.vlmSettings.camera_inclination
-        camera_layback = context.scene.vlmSettings.camera_layback
         fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col)
     elif layback_mode == 'camera':
         # Compute deform camera parameter (aspect ratio and resulting render width)
@@ -83,29 +77,6 @@ def camera_inclination_update(op, context):
         camera_layback = 0
         fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col)
        
-    # Update the layback lattice transform
-    global_scale = vlm_utils.get_global_scale(context)
-    lattice.location = (playfield_left + 0.5 * playfield_width, playfield_top - 0.5 * playfield_height, 0.0)
-    layback_factor = -math.tan(math.radians(camera_layback) / 2)
-    for obj in bake_col.all_objects:
-        if obj.type == 'MESH' or obj.type == 'CURVE':
-            if layback_mode == 'deform':
-                lattice_mod = obj.modifiers.get('Layback')
-                if not lattice_mod:
-                    lattice_mod = obj.modifiers.new('Layback', 'LATTICE')
-                    lattice_mod.object = lattice
-            else:
-                lattice_mod = obj.modifiers.get('Layback')
-                if lattice_mod: obj.modifiers.remove(lattice_mod)
-        elif obj.type == 'LIGHT':
-            new_lb = (lattice.location.z - obj.location.z) * layback_factor
-            obj.location.y = obj.location.y - obj.vlmSettings.layback_offset + new_lb
-            obj.vlmSettings.layback_offset = new_lb
-    lattice.data.transform(mathutils.Matrix.Shear('XY', 4, (0, -layback_factor)))
-    lattice.data.interpolation_type_u = 'KEY_LINEAR'
-    lattice.data.interpolation_type_v = 'KEY_LINEAR'
-    lattice.data.interpolation_type_w = 'KEY_LINEAR'
-    
     # update fixed view shader
     fv_incoming = bpy.data.node_groups.get('VLM.Fixed View Incoming')
     if fv_incoming: fv_incoming.nodes['Camera Pos'].inputs[0].default_value = camera_object.location
