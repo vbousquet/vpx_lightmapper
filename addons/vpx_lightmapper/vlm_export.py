@@ -47,9 +47,8 @@ def elem_ref(name):
 def common_member(a, b):
     a_set = set(a)
     b_set = set(b)
-    a_set.remove('')
-    b_set.remove('')
-    print(a_set, ' / ', b_set)
+    if '' in a_set: a_set.remove('')
+    if '' in b_set: b_set.remove('')
     if len(a_set.intersection(b_set)) > 0:
         return True
     return False
