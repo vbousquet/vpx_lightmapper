@@ -674,7 +674,8 @@ def export_vpx(op, context):
                                 lampz_factors.clear()
                             if (len(line.split('\' VLM.Lampz;',1)[0].split('"')) > 1):
                                 result = re.match(r"UpdateLightMap\s+([_a-zA-Z][_a-zA-Z0-9]*)\s*,\s*([_a-zA-Z0-9.]*),\s*", line.split('\' VLM.Lampz;',1)[0].split('"')[1])
-                                lampz_factors[result.group(1)] = result.group(2)
+                                if result:
+                                    lampz_factors[result.group(1)] = result.group(2)
                         elif '\' VLM.Props;BM;' in line: # Object property synchronization => BakeMap
                             new_pending = (1, *(line.split('\' VLM.Props;BM;',1)[1].split(';')))
                             if new_pending != pending:
