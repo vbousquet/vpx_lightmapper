@@ -548,7 +548,7 @@ def export_vpx(op, context):
         nestmap_index += 1
         n_images += 1
 
-    def push_lampz(lightmaps):
+    def push_lampz(lightmaps, lampz_factors):
         code = ''
         light_processed = []
         for obj in sorted(lightmaps, key=lambda x: x.vlmSettings.bake_sync_light):
@@ -569,7 +569,9 @@ def export_vpx(op, context):
                     if vpx_name not in light_processed:
                         code += f'	\' Sync on {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
                         light_processed.append(vpx_name)
-            code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100.0, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
+            elem = elem_ref(export_name(obj.name))
+            factor = lampz_factors.get(elem, '100.0')
+            code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem}, {factor}, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
         return code
 
 
@@ -593,7 +595,7 @@ def export_vpx(op, context):
     def push_pending(pending):
         if not pending: return ''
         if pending[0] == 0: # Lampz
-            return push_lampz([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_lighting == pending[1]])
+            return push_lampz([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_lighting == pending[2]], pending[1])
         elif pending[0] == 1: # Movable bakemap
             return push_map_move([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap' and obj.vlmSettings.bake_sync_trans == pending[2]], int(pending[1]))
         elif pending[0] == 2: # Movable lightmap
@@ -663,12 +665,17 @@ def export_vpx(op, context):
                     br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
                     new_code = ""
                     pending = None
+                    lampz_factors = {}
                     for line in code.splitlines():
                         if '\' VLM.Lampz;' in line: # Lampz initialization
-                            new_pending = (0, *(line.split('\' VLM.Lampz;',1)[1].split(';')))
+                            new_pending = (0, lampz_factors, *(line.split('\' VLM.Lampz;',1)[1].split(';')))
                             if new_pending != pending:
                                 new_code += push_pending(pending)
                                 pending = new_pending
+                                lampz_factors.clear()
+                            if (len(line.split('\' VLM.Lampz;',1)[0].split('"')) > 1):
+                                result = re.match(r"UpdateLightMap\s+([_a-zA-Z][_a-zA-Z0-9]*)\s*,\s*([_a-zA-Z0-9.]*),\s*", line.split('\' VLM.Lampz;',1)[0].split('"')[1])
+                                lampz_factors[result.group(1)] = result.group(2)
                         elif '\' VLM.Props;BM;' in line: # Object property synchronization => BakeMap
                             new_pending = (1, *(line.split('\' VLM.Props;BM;',1)[1].split(';')))
                             if new_pending != pending:
