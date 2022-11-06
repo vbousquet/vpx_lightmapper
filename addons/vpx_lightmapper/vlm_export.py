@@ -419,6 +419,8 @@ def export_vpx(op, context):
         vertices = []
         vert_dict = {}
         n_vertices = 0
+        obj.data.validate()
+        obj.data.calc_normals_split() # compute loop normal (would 0,0,0 otherwise)
         for poly in obj.data.polygons:
             if len(poly.loop_indices) != 3:
                 continue
