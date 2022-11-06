@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Visual Pinball X Light Mapper",
     "author": "Vincent Bousquet",
-    "version": (0, 0, 3),
+    "version": (0, 0, 5),
     "blender": (3, 2, 0),
     "description": "Import/Export Visual Pinball X tables with automated light baking",
     "warning": "Requires installation of external dependencies",
@@ -263,6 +263,7 @@ class VLM_Object_props(PropertyGroup):
     use_bake: BoolProperty(name="Use Bake", description="Use traditional baking instead of render + UV projection. The object needs to be unwrapped and use point of view aware materials", default = False)
     bake_width: IntProperty(name="Bake width:", description="Width of bake texture", default = 256, min = 2, max=8192)
     bake_height: IntProperty(name="Bake height:", description="Height of bake texture", default = 256, min = 2, max=8192)
+    no_mesh_optimization: BoolProperty(name="No Optimization", description="Disable mesh optimization (for example to preserve normals)", default = False)
     # Both bake object and bake result
     use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot instead of Rot when exporting", default = False)
     # Bake result properties (for object inside the bake result collection)
@@ -617,6 +618,25 @@ class VLM_OT_table_uv(Operator):
         return {"FINISHED"}
 
 
+class VLM_OT_toggle_no_exp_modifier(Operator):
+    bl_idname = "vlm.toggle_no_exp_modifier"
+    bl_label = "Toogle NoExp"
+    bl_description = "Toggle modifiers marked with NoExp"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        all_on = True
+        for obj in context.selected_objects:
+            for modifier in obj.modifiers:
+                if 'NoExp' in modifier.name:
+                    all_on = all_on and modifier.show_viewport
+        for obj in context.selected_objects:
+            for modifier in obj.modifiers:
+                if 'NoExp' in modifier.name:
+                    modifier.show_viewport = not all_on
+        return {"FINISHED"}
+
+
 class VLM_OT_apply_aoi(Operator):
     bl_idname = "vlm.apply_aoi"
     bl_label = "Apply AOI"
@@ -872,6 +892,7 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                         layout.prop(obj.vlmSettings, 'bake_width')
                         layout.prop(obj.vlmSettings, 'bake_height')
                     else:
+                        layout.prop(obj.vlmSettings, 'no_mesh_optimization')
                         layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
                         layout.prop(bake_objects[0].vlmSettings, 'bake_to')
             
@@ -951,6 +972,8 @@ class VLM_PT_3D_Tools(bpy.types.Panel):
         layout.prop(context.scene.vlmSettings, 'render_group_select', expand=True, text='Select Group', icon='RESTRICT_RENDER_OFF')
         layout.operator(VLM_OT_select_indirect.bl_idname)
         layout.operator(VLM_OT_select_occluded.bl_idname)
+        layout.separator()
+        layout.operator(VLM_OT_toggle_no_exp_modifier.bl_idname)
         layout.separator()
         layout.operator(VLM_OT_apply_aoi.bl_idname)
         layout.separator()
@@ -1069,6 +1092,7 @@ classes = (
     VLM_OT_select_nestmap_group,
     VLM_OT_select_indirect,
     VLM_OT_select_occluded,
+    VLM_OT_toggle_no_exp_modifier,
     VLM_OT_apply_aoi,
     VLM_OT_table_uv,
     VLM_OT_load_render_images,

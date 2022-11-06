@@ -177,9 +177,9 @@ def create_bake_meshes(op, context):
             if dup.type != 'MESH':
                 bpy.ops.object.convert(target='MESH')
                 dup = bpy.data.objects[dup_name]
-            dup.data.free_normals_split()
             dup.data.validate()
             is_bake = dup.vlmSettings.use_bake
+            optimize_mesh = not is_bake and not dup.vlmSettings.no_mesh_optimization
 
             # Apply modifiers
             with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -187,17 +187,16 @@ def create_bake_meshes(op, context):
                     if 'NoExp' in modifier.name: break # or (modifier.type == 'BEVEL' and modifier.width < 0.1)
                     bpy.ops.object.modifier_apply(modifier=modifier.name)
                 dup.modifiers.clear()
-            dup.data.use_auto_smooth = False # Don't use custom normals (this would break when merging, but keep them for modifiers if we have modifiers that need them)
+
+            # Save normals
+            dup.data.validate()
+            dup.data.calc_normals_split() # compute loop normal (would 0,0,0 otherwise since if free them above)
             
             # Switch material to baked ones (needs to be done after applying modifiers which may create material slots)
             for poly in dup.data.polygons:
                 poly.material_index = 0
             dup.data.materials.clear()
             dup.data.materials.append(get_material('Default', False, obj_name if is_bake else dup.vlmSettings.render_group))
-            
-            # Remove face shading
-            with context.temp_override(active_object=dup, selected_objects=[dup]):
-                bpy.ops.object.shade_flat()
             
             # Create base UV projected layer
             if is_bake:
@@ -215,9 +214,7 @@ def create_bake_meshes(op, context):
             dup.matrix_world.identity()
             
             # Perform base mesh optimization
-            # with context.temp_override(active_object=dup, selected_objects=dup):
-            #context.view_layer.objects.active = dup
-            if not is_bake:
+            if optimize_mesh:
                 with context.temp_override(active_object=dup, selected_objects=[dup]):
                     bpy.ops.object.mode_set(mode = 'EDIT')
                     bpy.ops.mesh.reveal()
@@ -229,7 +226,7 @@ def create_bake_meshes(op, context):
                     bpy.ops.object.mode_set(mode = 'OBJECT')
             
             # Optimize mesh: usual cleanup and evaluate biggest face size in pixels for decimate LOD
-            if not is_bake:
+            if optimize_mesh:
                 bm = bmesh.new()
                 bm.from_mesh(dup.data)
                 bm.faces.ensure_lookup_table()
@@ -258,7 +255,7 @@ def create_bake_meshes(op, context):
                 bpy.ops.object.mode_set(mode = 'OBJECT')
 
             # Remove backfacing faces
-            if not is_bake and sync_obj is None and opt_backface_limit_angle < 90.0:
+            if optimize_mesh and sync_obj is None and opt_backface_limit_angle < 90.0:
                 dot_limit = math.cos(radians(opt_backface_limit_angle + 90))
                 bpy.ops.object.mode_set(mode = 'EDIT')
                 bm = bmesh.from_edit_mesh(dup.data)
@@ -297,7 +294,7 @@ def create_bake_meshes(op, context):
             bpy.ops.object.mode_set(mode='OBJECT')
 
             # Subdivide long edges to avoid visible projection distortion, and allow better lightmap face pruning (recursive subdivisions)
-            if not is_bake:
+            if optimize_mesh:
                 opt_cut_threshold = 0.1
                 for i in range(8): # FIXME Limit the amount since there are situations were subdividing fails
                     bme = bmesh.new()
@@ -435,14 +432,19 @@ def create_bake_meshes(op, context):
     # Process each of the bake meshes according to the light scenario, pruning unneeded faces
     render_path = vlm_utils.get_bakepath(context, type='RENDERS')
     lm_threshold = vlm_utils.get_lm_threshold()
-    for light_scenario in light_scenarios:
+    for i, light_scenario in enumerate(light_scenarios):
         light_name, is_lightmap, _, lights = light_scenario
         if not is_lightmap: continue
         influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
-        print(f'\nProcessing lightmaps for {light_name}')
+        print(f'\nProcessing lightmaps for {light_name} [{i+1}/{len(light_scenarios)}]')
         for (bake_col, bake_name, bake_mesh, sync_obj), lightmap_vmap in zip(merged_bake_meshes, vmaps):
             obj_name = f'{bake_name}.LM.{light_name}'
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
+            # Remove face shading (lightmap are not made to be shaded and the pruning process breaks the shading)
+            bake_instance.data.free_normals_split()
+            bake_instance.data.use_auto_smooth = False # Don't use custom normals since we removed them
+            with context.temp_override(active_object=bake_instance, selected_objects=[bake_instance]):
+                bpy.ops.object.shade_flat()
             n_faces = len(bake_instance.data.polygons)
             adapt_materials(bake_instance.data, light_name, is_lightmap)
             result_col.objects.link(bake_instance)
