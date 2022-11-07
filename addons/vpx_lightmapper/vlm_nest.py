@@ -152,6 +152,7 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
     # adds one to the padding to take in account uv positionning inside pixel
     padding = context.scene.vlmSettings.padding + 1
     start_time = time.time()
+    splitted_objects = []
 
     # Evaluate all islands with their masks
     tick_time = time.time()
@@ -167,12 +168,12 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
             return None
         elif r == 'SPLITTED':
             to_prepare.extend(v)
+            splitted_objects.extend(v[1:])
         elif r == 'SUCCESS':
             islands_to_pack.append(v)
     prepare_length = time.time() - tick_time
 
     # Nest groups of islands into nestmaps
-    splitted_objects = []
     nestmap_index = 0
     n_failed = 0
     render_length = 0
@@ -305,19 +306,34 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                             for face in island['faces']:
                                 remaining_faces.append(face.index)
 
+                    # Reset uv before duplicating
+                    index = 0
+                    uv_redo = []
+                    for island in selected_islands:
+                        obj, bm = island['source']
+                        uv_layer = bm.loops.layers.uv[uv_nest_name]
+                        for face in island['faces']:
+                            for loop in face.loops:
+                                uv_redo.append(Vector(loop[uv_layer].uv))
+                                loop[uv_layer].uv = uv_undo[index]
+                                index = index + 1
+
                     # duplicate the packed object mesh
                     dup = obj.copy()
                     dup.data = obj.data.copy()
                     bm2 = bm.copy()
                     bm2.faces.ensure_lookup_table()
+                    splitted_objects.append(dup)
                     
-                    # Reset uv of faces still to be nested
+                    # Restore uv of the nested faces
                     index = 0
-                    uv_layer = bm2.loops.layers.uv[uv_nest_name]
-                    for face in bm2.faces:
-                        for loop in face.loops:
-                            loop[uv_layer].uv = uv_undo[index]
-                            index = index + 1
+                    for island in selected_islands:
+                        obj, bm = island['source']
+                        uv_layer = bm.loops.layers.uv[uv_nest_name]
+                        for face in island['faces']:
+                            for loop in face.loops:
+                                loop[uv_layer].uv = uv_redo[index]
+                                index = index + 1
 
                     # Adjust data of remaining islands
                     for island in remaining_islands:
