@@ -188,6 +188,14 @@ def create_bake_meshes(op, context):
                     bpy.ops.object.modifier_apply(modifier=modifier.name)
                 dup.modifiers.clear()
 
+            # Remove custom normals since they will be lost during mesh optimization
+            if optimize_mesh:
+                dup.data.free_normals_split()
+                dup.data.use_auto_smooth = False # Don't use custom normals since we removed them
+                with context.temp_override(active_object=dup, selected_objects=[dup]):
+                    bpy.ops.mesh.customdata_custom_splitnormals_clear()
+                    bpy.ops.object.shade_flat()
+
             # Save normals
             dup.data.validate()
             dup.data.calc_normals_split() # compute loop normal (would 0,0,0 otherwise since if free them above)
