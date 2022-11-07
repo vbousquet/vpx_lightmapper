@@ -329,6 +329,8 @@ def export_vpx(op, context):
             br.skip_tag()
     new_playfield_image = None
     for obj in meshes_to_export:
+        obj.data.validate()
+        obj.data.calc_normals_split() # compute loop normal (would be 0,0,0 otherwise)
         uv_layer_nested = obj.data.uv_layers.get("UVMap Nested")
         if not uv_layer_nested:
             print(f'. Missing nested uv map for {obj.name}')
@@ -419,8 +421,6 @@ def export_vpx(op, context):
         vertices = []
         vert_dict = {}
         n_vertices = 0
-        obj.data.validate()
-        #obj.data.calc_normals_split() # compute loop normal (would 0,0,0 otherwise)
         for poly in obj.data.polygons:
             if len(poly.loop_indices) != 3:
                 continue
@@ -439,23 +439,27 @@ def export_vpx(op, context):
                 else:
                     indices.append(existing_index)
         n_indices = len(indices)
+        compressed = True
         print(f'. Adding {n_vertices:>6} vertices, {int(n_indices/3):>6} faces for {obj.name}')
-        
         writer.write_tagged_u32(b'M3VN', n_vertices)
-        #writer.write_tagged_data(b'M3DX', struct.pack(f'<{len(vertices)}f', *vertices))
-        compressed_vertices = zlib.compress(struct.pack(f'<{len(vertices)}f', *vertices))
-        writer.write_tagged_u32(b'M3CY', len(compressed_vertices))
-        writer.write_tagged_data(b'M3CX', compressed_vertices)
-        
-        writer.write_tagged_u32(b'M3FN', n_indices)
-        if n_vertices > 65535:
-            #writer.write_tagged_data(b'M3DI', struct.pack(f'<{n_indices}I', *indices))
-            compressed_indices = zlib.compress(struct.pack(f'<{n_indices}I', *indices))
+        if not compressed:
+            writer.write_tagged_data(b'M3DX', struct.pack(f'<{len(vertices)}f', *vertices))
+            writer.write_tagged_u32(b'M3FN', n_indices)
+            if n_vertices > 65535:
+                writer.write_tagged_data(b'M3DI', struct.pack(f'<{n_indices}I', *indices))
+            else:
+                writer.write_tagged_data(b'M3DI', struct.pack(f'<{n_indices}H', *indices))
         else:
-            #writer.write_tagged_data(b'M3DI', struct.pack(f'<{n_indices}H', *indices))
-            compressed_indices = zlib.compress(struct.pack(f'<{n_indices}H', *indices))
-        writer.write_tagged_u32(b'M3CJ', len(compressed_indices))
-        writer.write_tagged_data(b'M3CI', compressed_indices)
+            compressed_vertices = zlib.compress(struct.pack(f'<{len(vertices)}f', *vertices))
+            writer.write_tagged_u32(b'M3CY', len(compressed_vertices))
+            writer.write_tagged_data(b'M3CX', compressed_vertices)
+            writer.write_tagged_u32(b'M3FN', n_indices)
+            if n_vertices > 65535:
+                compressed_indices = zlib.compress(struct.pack(f'<{n_indices}I', *indices))
+            else:
+                compressed_indices = zlib.compress(struct.pack(f'<{n_indices}H', *indices))
+            writer.write_tagged_u32(b'M3CJ', len(compressed_indices))
+            writer.write_tagged_data(b'M3CI', compressed_indices)
         writer.write_tagged_float(b'PIDB', depth_bias)
         writer.write_tagged_bool(b'ADDB', is_light) # Additive blending VPX mod
         writer.write_tagged_float(b'FALP', 100) # Additive blending VPX mod
