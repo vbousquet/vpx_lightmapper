@@ -61,6 +61,8 @@ def get_light_influence_radius(light):
         if light.data.type == 'POINT' or light.data.type == 'SPOT':
             radius = light.data.shadow_soft_size
             emission = emission_strength * light.data.energy
+            if emission < 0.001: # avoid numeric bug if emission is 0
+                emission = 0.001
             p = max(0, 1 + math.log10(emission))
             if p < 4:
                 i = math.floor(p)
