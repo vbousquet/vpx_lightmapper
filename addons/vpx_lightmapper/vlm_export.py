@@ -586,7 +586,8 @@ def export_vpx(op, context):
             sync = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
             if sync and sync.vlmSettings.movable_script != '':
                 lines = sync.vlmSettings.movable_script.split(';')
-                code += f'	{elem_ref(export_name(obj.name))}{lines[index-1]} \' VLM.Props;{"LM" if obj.vlmSettings.bake_type=="lightmap" else "BM"};{index};{obj.vlmSettings.bake_sync_trans}\n'
+                if index-1 < len(lines):
+                    code += f'	{elem_ref(export_name(obj.name))}{lines[index-1]} \' VLM.Props;{"LM" if obj.vlmSettings.bake_type=="lightmap" else "BM"};{index};{obj.vlmSettings.bake_sync_trans}\n'
         return code
 
 
