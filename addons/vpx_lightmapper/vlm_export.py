@@ -592,7 +592,7 @@ def export_vpx(op, context):
 
 
     def push_map_array(name, mode, lightmaps):
-        code = f'Dim {name}: {name}=Array('
+        code = f'Dim {name}_{mode}: {name}_{mode}=Array('
         code += ', '.join([f'{elem_ref(export_name(obj.name))}' for obj in sorted(lightmaps, key=lambda x: x.name)])
         code += f') \' VLM.Array;{mode};{name}\n'
         return code
@@ -607,11 +607,11 @@ def export_vpx(op, context):
         elif pending[0] == 2: # Movable lightmap
             return push_map_move([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_sync_trans == pending[2]], int(pending[1]))
         elif pending[0] == 3: # Movable's Lightmap array
-            return push_map_array(pending[1]+'_LM', 'LM', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_objects == pending[1]])
+            return push_map_array(pending[1], 'LM', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_objects == pending[1]])
         elif pending[0] == 4: # Movable's bakemap array
-            return push_map_array(pending[1]+'_BM', 'BM', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap' and obj.vlmSettings.bake_objects == pending[1]])
+            return push_map_array(pending[1], 'BM', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap' and obj.vlmSettings.bake_objects == pending[1]])
         elif pending[0] == 5: # Movable's Lightmap and bakemap array
-            return push_map_array(pending[1]+'_BL', 'All', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_objects == pending[1]])
+            return push_map_array(pending[1], 'BL', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_objects == pending[1]])
 
 
     # Copy data from reference file
@@ -847,9 +847,9 @@ def export_vpx(op, context):
     code += "\n"
     all_sync_trans = sorted(list({obj.vlmSettings.bake_sync_trans for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''}))
     for sync_trans in all_sync_trans:
-        code += push_map_array(export_name(sync_trans)+'_LM', 'LM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
-        code += push_map_array(export_name(sync_trans)+'_BM', 'BM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
-        code += push_map_array(export_name(sync_trans)+'_BL', 'All', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
+        code += push_map_array(export_name(sync_trans), 'LM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
+        code += push_map_array(export_name(sync_trans), 'BM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
+        code += push_map_array(export_name(sync_trans), 'BL', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
 
     code += "\n"
     code += "\n"
