@@ -199,10 +199,10 @@ def render_group_masks(op, context):
     scene.camera = camera_object
     scene.render.engine = 'CYCLES'
     for prop in context.scene.render.bl_rna.properties:
-        if not prop.is_readonly and prop.identifier not in {'rna_type'}:
+        if not prop.is_readonly and prop.identifier not in {'rna_type', ''}:
             setattr(scene.render, prop.identifier, getattr(context.scene.render, prop.identifier))
     for prop in context.scene.cycles.bl_rna.properties:
-        if not prop.is_readonly and prop.identifier not in {'rna_type'}:
+        if not prop.is_readonly and prop.identifier not in {'rna_type', 'denoiser', ''}:
             setattr(scene.cycles, prop.identifier, getattr(context.scene.cycles, prop.identifier))
     scene.render.use_border = False
     scene.render.use_crop_to_border = False

@@ -285,11 +285,11 @@ def render_all_groups(op, context):
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
     scene.collection.objects.link(camera_object)
     scene.camera = camera_object
-    for prop in bpy.context.scene.render.bl_rna.properties:
-        if not prop.is_readonly and prop.identifier not in {'rna_type'}:
+    for prop in context.scene.render.bl_rna.properties:
+        if not prop.is_readonly and prop.identifier not in {'rna_type', ''}:
             setattr(scene.render, prop.identifier, getattr(context.scene.render, prop.identifier))
-    for prop in bpy.context.scene.cycles.bl_rna.properties:
-        if not prop.is_readonly and prop.identifier not in {'rna_type'}:
+    for prop in context.scene.cycles.bl_rna.properties:
+        if not prop.is_readonly and prop.identifier not in {'rna_type', 'denoiser', ''}:
             setattr(scene.cycles, prop.identifier, getattr(context.scene.cycles, prop.identifier))
     scene.render.engine = 'CYCLES'
     scene.render.use_border = False
