@@ -548,7 +548,66 @@ def export_vpx(op, context):
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
-        #print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (Format: {"EXR" if is_hdr else "PNG"})')
+        
+        # Add a 'Warm up' primitive that forces VPX to load the nestmap at startup. This primitive should be hidden after startup (see helper script)
+        writer = biff_io.BIFF_writer()
+        writer.write_u32(19)
+        playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
+        writer.write_tagged_padded_vector(b'VPOS', 10 + nestmap_index * 10, playfield_height/global_scale - 15, -15) # Under apron, just below the playfield
+        writer.write_tagged_padded_vector(b'VSIZ', 10, 10, 10)
+        # RotX / RotY / RotZ
+        writer.write_tagged_float(b'RTV0', 0)
+        writer.write_tagged_float(b'RTV1', 0)
+        writer.write_tagged_float(b'RTV2', 0)
+        # TransX / TransY / TransZ
+        writer.write_tagged_float(b'RTV3', 0)
+        writer.write_tagged_float(b'RTV4', 0)
+        writer.write_tagged_float(b'RTV5', 0)
+        # ObjRotX / ObjRotY / ObjRotZ
+        writer.write_tagged_float(b'RTV6', 0)
+        writer.write_tagged_float(b'RTV7', 0)
+        writer.write_tagged_float(b'RTV8', 0)
+        writer.write_tagged_string(b'IMAG', f'VLM.Nestmap{nestmap_index}')
+        writer.write_tagged_string(b'NRMA', '')
+        writer.write_tagged_u32(b'SIDS', 4)
+        writer.write_tagged_wide_string(b'NAME', f'VLM_Warmup_Nestmap_{nestmap_index}')
+        writer.write_tagged_string(b'MATR', '')
+        writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
+        writer.write_tagged_bool(b'TVIS', True)
+        writer.write_tagged_bool(b'DTXI', False)
+        writer.write_tagged_bool(b'HTEV', False)
+        writer.write_tagged_float(b'THRS', 2.0)
+        writer.write_tagged_float(b'ELAS', 0.3)
+        writer.write_tagged_float(b'ELFO', 0.0)
+        writer.write_tagged_float(b'RFCT', 0.0)
+        writer.write_tagged_float(b'RSCT', 0.0)
+        writer.write_tagged_float(b'EFUI', 0.0)
+        writer.write_tagged_float(b'CORF', 0.0)
+        writer.write_tagged_bool(b'CLDR', False)
+        writer.write_tagged_bool(b'ISTO', True)
+        writer.write_tagged_bool(b'U3DM', False)
+        writer.write_tagged_bool(b'STRE', False)
+        writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
+        writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
+        writer.write_tagged_bool(b'REEN', False)
+        writer.write_tagged_bool(b'EBFC', False)
+        writer.write_tagged_string(b'MAPH', '')
+        writer.write_tagged_bool(b'OVPH', False)
+        writer.write_tagged_bool(b'DIPT', False)
+        writer.write_tagged_bool(b'OSNM', False)
+        writer.write_tagged_float(b'PIDB', 0.0)
+        writer.write_tagged_bool(b'ADDB', False) # Additive blending VPX mod
+        writer.write_tagged_float(b'FALP', 100) # Additive blending VPX mod
+        writer.write_tagged_u32(b'COLR', 0xFFFFFF)
+        writer.write_tagged_bool(b'LOCK', True)
+        writer.write_tagged_bool(b'LVIS', True)
+        writer.write_tagged_u32(b'LAYR', 0)
+        writer.write_tagged_string(b'LANR', 'VLM.Visuals')
+        writer.close()
+        dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+        dst_stream.Write(writer.get_data())
+        n_game_items += 1
+        
         print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
         nestmap_index += 1
         n_images += 1
@@ -835,6 +894,26 @@ def export_vpx(op, context):
     code += "' be copy/pasted ONLY ONCE, since the toolkit will take care of\n"
     code += "' updating them directly in your table script, each time an\n"
     code += "' export is made.\n"
+
+    code += "\n"
+    code += "\n"
+    code += "' ===============================================================\n"
+    code += "' The following code NEEDS to be copy/pasted to hide the elements \n"
+    code += "' that are placed to avoid stutters when VPX loads all the nestmaps\n"
+    code += "' to the GPU. It also NEEDS the following line to be added to the.\n"
+    code += "' table init function:\n"
+    code += "\n"
+    code += "	vpmTimer.AddTimer 1000, \"WarmUpDone '\n\""
+    code += "\n"
+    code += 'Sub WarmUpDone\n'
+    nestmap_index = 0
+    while True:
+        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap == nestmap_index]
+        if not objects: break
+        code += f"	VLM_Warmup_Nestmap_{nestmap_index}.Visible = False\n"
+        nestmap_index += 1
+    code += 'End Sub\n'
+    code += "\n"
 
     code += "\n"
     code += "\n"
