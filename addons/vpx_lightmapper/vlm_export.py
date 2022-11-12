@@ -903,7 +903,7 @@ def export_vpx(op, context):
     code += "' to the GPU. It also NEEDS the following line to be added to the.\n"
     code += "' table init function:\n"
     code += "\n"
-    code += "	vpmTimer.AddTimer 1000, \"WarmUpDone '\n\""
+    code += "	vpmTimer.AddTimer 1000, \"WarmUpDone '\"\n"
     code += "\n"
     code += 'Sub WarmUpDone\n'
     nestmap_index = 0
