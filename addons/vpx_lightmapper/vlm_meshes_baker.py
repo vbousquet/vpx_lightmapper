@@ -185,7 +185,10 @@ def create_bake_meshes(op, context):
             with context.temp_override(active_object=dup, selected_objects=[dup]):
                 for modifier in dup.modifiers:
                     if 'NoExp' in modifier.name: break # or (modifier.type == 'BEVEL' and modifier.width < 0.1)
-                    bpy.ops.object.modifier_apply(modifier=modifier.name)
+                    try:
+                        bpy.ops.object.modifier_apply(modifier=modifier.name)
+                    except:
+                        print(f'. ERROR {obj_name} has an invalid modifier which was not applied')
                 dup.modifiers.clear()
 
             # Remove custom normals since they will be lost during mesh optimization
