@@ -171,6 +171,8 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
             splitted_objects.extend(v[1:])
         elif r == 'SUCCESS':
             islands_to_pack.append(v)
+        elif r == 'EMPTY':
+            print(f'>> WARNING: Object {obj.name} is empty. It doesn\'t have any faces to nest.\n')
     prepare_length = time.time() - tick_time
 
     # Nest groups of islands into nestmaps
@@ -351,6 +353,8 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                     if r == 'SUCCESS':
                         print(f'. {len(remaining_islands)} islands were splitted, and still need to be nested.')
                         islands_to_pack.append(v)
+                    elif r == 'EMPTY':
+                        print(f'>> WARNING: Object {dup.name} is empty. It doesn\'t have any faces to nest.\n')
                     else:
                         print(f'. nesting the remaining island failed.')
 
@@ -696,6 +700,9 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
     ftv, vtf = create_vert_face_db([f for f in bm.faces], uv_layer)
     islands = get_island(bm, ftv, vtf, uv_layer)
     islands = get_merged_overlapping_islands(islands, uv_layer)
+    
+    if len(islands) == 0:
+        return ('EMPTY', '')
 
     # Compute island masks by rendering masks then creating a simplified span view
     offscreen = None
