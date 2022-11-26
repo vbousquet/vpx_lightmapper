@@ -620,7 +620,7 @@ def export_vpx(op, context):
             lampz_id = '0'
             # try to identify lights and flashers with the pattern 'l11' or 'f11'
             if vpx_name:
-                id = re.fullmatch(r'[lfLF]([0-9]+)', vpx_name)
+                id = re.fullmatch(r'[lfLF](\d+)\w?', vpx_name)
                 if id:
                     lampz_id = f'1{id[1]}' if vpx_name.startswith('f') else id[1]
                     if lampz_id not in light_processed:
@@ -947,9 +947,10 @@ def export_vpx(op, context):
     for obj in lightmaps:
         vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
         lampz_id = '0'
+        vpx_name = vpx_name.strip()
         # try to identify lights and flashers with the pattern 'l11' or 'f11'
         if vpx_name:
-            id = re.fullmatch(r'[lfLF]([0-9]+)', vpx_name)
+            id = re.fullmatch(r'[lfLF](\d+)\w?', vpx_name)
             if id:
                 lampz_id = f'1{id[1]}' if vpx_name.startswith('f') else id[1]
                 if lampz_id not in light_processed:
@@ -964,6 +965,31 @@ def export_vpx(op, context):
                     code += f'	\' Sync on {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
                     light_processed.append(vpx_name)
         code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100.0, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
+    code += 'End Sub\n'
+
+    code += "\n"
+    code += "\n"
+    code += "' ===============================================================\n"
+    code += "' The following code can be copy/pasted to adjust all the lightmaps\n"
+    code += "' attached to a given light\n"
+    code += "\n"
+    code += 'Sub LightHelper\n'
+    for li in light_processed:
+        code += f'	Dim l{li}_LM: l{li}_LM=Array('
+        first = True
+        for obj in lightmaps:
+            vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
+            lampz_id = '0'
+            if vpx_name:
+                id = re.fullmatch(r'[lfLF](\d+)\w?', vpx_name)
+                if id:
+                    lampz_id = f'1{id[1]}' if vpx_name.startswith('f') else id[1]
+                    if lampz_id == li:
+                        if not first: code += f', '
+                        code += f'{export_name(obj.name)}'
+                        first = False
+        code += f')\n'
+                    
     code += 'End Sub\n'
 
     code += "\n"
