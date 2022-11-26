@@ -468,6 +468,11 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'LVIS', True)
         writer.write_tagged_u32(b'LAYR', 0)
         writer.write_tagged_string(b'LANR', 'VLM.Visuals')
+        # For VPX 10.8, write link to light. If the light does not exist or if open in VPX < 10.8, this will be ignored
+        if is_light:
+            sync_light = bpy.data.objects.get(obj.vlmSettings.bake_sync_light)
+            if sync_light:
+                writer.write_tagged_string(b'LMAP', sync_light.vlmSettings.vpx_object)
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
