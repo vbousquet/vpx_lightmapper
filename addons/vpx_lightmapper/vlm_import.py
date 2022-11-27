@@ -650,7 +650,10 @@ def read_vpx(op, context, filepath):
                 obj = context.view_layer.objects.active
                 mesh = obj.data
                 # Set bevelling on top and bottom edges
-                mesh.use_customdata_edge_bevel = True
+                if bpy.app.version < (3, 4, 0):
+                    mesh.use_customdata_edge_bevel = True
+                #elif not mesh.has_bevel_weight_edge:
+                #    bpy.ops.mesh.customdata_bevel_weight_edge_add()
                 for edge in mesh.edges:
                     if abs(mesh.vertices[edge.vertices[0]].co.z - mesh.vertices[edge.vertices[1]].co.z) < 0.01 * global_scale:
                          edge.bevel_weight = 1.0
