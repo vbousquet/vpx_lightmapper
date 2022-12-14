@@ -99,7 +99,7 @@ def create_bake_meshes(op, context):
     
     # Texture packing
     proj_ar = vlm_utils.get_render_proj_ar(context)
-    opt_render_height = int(context.scene.vlmSettings.render_height)
+    opt_render_height = vlm_utils.get_render_height(context)
     opt_ar = context.scene.vlmSettings.render_aspect_ratio
 
     # Bake mesh generation settings

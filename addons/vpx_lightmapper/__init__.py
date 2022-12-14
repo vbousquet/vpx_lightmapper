@@ -16,7 +16,7 @@
 bl_info = {
     "name": "Visual Pinball X Light Mapper",
     "author": "Vincent Bousquet",
-    "version": (0, 0, 5),
+    "version": (0, 0, 7),
     "blender": (3, 2, 0),
     "description": "Import/Export Visual Pinball X tables with automated light baking",
     "warning": "Requires installation of external dependencies",
@@ -181,7 +181,6 @@ class VLM_Scene_props(PropertyGroup):
         default='unstarted'
     )
     batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
-    render_height: IntProperty(name="Render Height", description="Render height. Width is automatically computed. Height must be smaller than the texture size.", default = 256, min = 0, max=8192, update=vlm_camera.camera_inclination_update)
     tex_size: EnumProperty(
         items=[
             ('256', '256', '256x256', '', 256),
@@ -194,13 +193,14 @@ class VLM_Scene_props(PropertyGroup):
         name='Texture size', description="Size of the exported texture. This size must be greater than the render height.",
         default='256', update=vlm_camera.camera_inclination_update
     )
+    render_ratio: IntProperty(name="Render Ratio", description="- For projective baking, render height is computed from this ratio and texture size.\n- For baking, this ratio is applied to the user defined bake size", default = 100, min = 5, max=100, subtype="PERCENTAGE", update=vlm_camera.camera_inclination_update)
     render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
     padding: IntProperty(name="Padding", description="Padding between bakes", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
     keep_pf_reflection_faces: BoolProperty(name="Keep playfield reflection", description="Keep faces only visible through playfield reflection", default = False)
     max_lighting: IntProperty(name="Max Light.", description="Maximum number of lighting scenario baked simultaneously at 4K (0 = no limit)", default = 0, min = 0)
     # Exporter options
-    enable_vpx_reflection: BoolProperty(name="Enable VPX reflection", description="Enable VPX playfield reflection for exported models and lightmaps. Note that this will usually leads to 'double' reflections since indirect light is already baked.", default = False)
+    enable_vpx_reflection: BoolProperty(name="Enable VPX reflection", description="Enable VPX playfield reflection for exported models and lightmaps. Note that this will usually leads to 'double' reflections since indirect light is already baked", default = False)
     export_mode: EnumProperty(
         items=[
             ('default', 'Default', 'Add bakes and lightmap to the table', '', 0),
@@ -785,8 +785,8 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         if vlmProps.last_bake_step == 'renders': step = 2
         if vlmProps.last_bake_step == 'meshes': step = 3
         if vlmProps.last_bake_step == 'nestmaps': step = 4
-        layout.prop(vlmProps, "render_height")
         layout.prop(vlmProps, "tex_size")
+        layout.prop(vlmProps, "render_ratio")
         layout.prop(vlmProps, "max_lighting")
         layout.prop(vlmProps, "padding")
         layout.prop(vlmProps, "remove_backface", text='Backface')

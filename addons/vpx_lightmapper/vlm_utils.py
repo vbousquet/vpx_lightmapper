@@ -48,8 +48,12 @@ def get_lm_threshold():
     return 0.01
 
 
+def get_render_height(context):
+    return int(int(context.scene.vlmSettings.tex_size) * context.scene.vlmSettings.render_ratio / 100.0) - 4 - 2 * context.scene.vlmSettings.padding
+
+
 def get_render_size(context):
-    opt_render_height = int(context.scene.vlmSettings.render_height)
+    opt_render_height = get_render_height(context)
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     render_size = (int(opt_render_height * render_aspect_ratio), opt_render_height)
     if context.scene.vlmSettings.layback_mode == 'fit_pf' and context.scene.vlmSettings.playfield_col:

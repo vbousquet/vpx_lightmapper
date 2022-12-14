@@ -270,7 +270,8 @@ def render_all_groups(op, context):
     if context.scene.vlmSettings.max_lighting == 0:
         max_scenarios_in_batch = 1024
     else:
-        max_scenarios_in_batch = int(context.scene.vlmSettings.max_lighting * 4096 / int(context.scene.vlmSettings.render_height))
+        opt_render_height = vlm_utils.get_render_height(context)
+        max_scenarios_in_batch = int(context.scene.vlmSettings.max_lighting * 4096 / opt_render_height)
     opt_force_render = False # Force rendering even if cache is available
     render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     n_render_groups = vlm_utils.get_n_render_groups(context)
