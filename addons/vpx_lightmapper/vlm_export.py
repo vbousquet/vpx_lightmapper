@@ -951,6 +951,9 @@ def export_vpx(op, context):
     light_processed = []
     for obj in lightmaps:
         vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
+        if vpx_name is None:
+            print(f'. ERROR: {obj.name} has no vpx object defined')
+            continue
         lampz_id = '0'
         vpx_name = vpx_name.strip()
         # try to identify lights and flashers with the pattern 'l11' or 'f11'
