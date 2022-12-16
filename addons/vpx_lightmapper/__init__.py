@@ -196,7 +196,7 @@ class VLM_Scene_props(PropertyGroup):
     render_ratio: IntProperty(name="Render Ratio", description="- For projective baking, render height is computed from this ratio and texture size.\n- For baking, this ratio is applied to the user defined bake size", default = 100, min = 5, max=100, subtype="PERCENTAGE", update=vlm_camera.camera_inclination_update)
     render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
     padding: IntProperty(name="Padding", description="Padding between bakes", default = 2, min = 0)
-    remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal", default = 0.0)
+    remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal\n90 will disable backface removal, 0 is full backface removal", default = 0.0)
     keep_pf_reflection_faces: BoolProperty(name="Keep playfield reflection", description="Keep faces only visible through playfield reflection", default = False)
     max_lighting: IntProperty(name="Max Light.", description="Maximum number of lighting scenario baked simultaneously at 4K (0 = no limit)", default = 0, min = 0)
     # Exporter options

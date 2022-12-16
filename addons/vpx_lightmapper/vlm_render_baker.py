@@ -283,7 +283,7 @@ def render_all_groups(op, context):
         fixed_view.nodes['Incoming'].inputs[0].default_value = camera_object.location
 
     # Create temp render scene, using the user render settings setup
-    scene = bpy.data.scenes.new('VLM.Tmp Scene')
+    scene = bpy.data.scenes.new('VLM.Tmp Render Scene')
     scene.collection.objects.link(camera_object)
     scene.camera = camera_object
     for prop in context.scene.render.bl_rna.properties:
@@ -303,6 +303,26 @@ def render_all_groups(op, context):
     scene.view_settings.look = 'None'
     scene.view_layers[0].use_pass_z = False
     scene.use_nodes = False
+
+    # Create temp render scene for rendering object/group masks
+    opt_mask_size = 1024 # Height used for the object masks
+    opt_mask_pad = math.ceil(opt_mask_size * 2 / render_size[1])
+    mask_scene = bpy.data.scenes.new('VLM.Tmp Mask Scene')
+    mask_scene.collection.objects.link(camera_object)
+    mask_scene.camera = camera_object
+    mask_scene.render.engine = 'BLENDER_EEVEE'
+    mask_scene.render.film_transparent = True
+    mask_scene.render.resolution_y = opt_mask_size
+    mask_scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
+    mask_scene.render.pixel_aspect_x = context.scene.render.pixel_aspect_x
+    mask_scene.render.image_settings.file_format = "PNG"
+    mask_scene.render.image_settings.color_mode = 'RGBA'
+    mask_scene.render.image_settings.color_depth = '8'
+    mask_scene.eevee.taa_render_samples = 1
+    mask_scene.view_settings.view_transform = 'Raw'
+    mask_scene.view_settings.look = 'None'
+    mask_scene.world = None
+    mask_scene.use_nodes = False
 
     # Setup the scene with all the bake objects with indirect render influence
     indirect_col = bpy.data.collections.new('Indirect')
@@ -556,18 +576,40 @@ def render_all_groups(op, context):
     #
     # Baking using rendering and projective texture gives (surprisingly) good results in most situations but it will look wrong for some
     # objects that will need traditional baking. This is especially true for movable parts like spinners, flipper bats,...
-    # These objects will be processed with traditional bake which requires them to be UV unwrapped and to use view point aware materials
+    # These objects will be processed with traditional bake which requires them to be UV unwrapped and either use view point aware materials 
+    # or have bake from camera selected in the bake panel
 
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 2.0
     for obj in [obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake]:
+        if obj.vlmSettings.bake_mask:
+            render_col.objects.link(obj.vlmSettings.bake_mask)
         if not obj.vlmSettings.hide_from_others:
             indirect_col.objects.unlink(obj)
         render_col.objects.link(obj)
         elapsed = time.time() - start_time
-        im = Image.open(bpy.path.abspath(f'{mask_path}Mask - Bake - {obj.name} (Padded LD).png'))
-        obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "L"))
+        
+        # Render object mask (or load from cache if available)
+        mask_scene.render.filepath = f'{mask_path}Mask - Bake - {vlm_utils.clean_filename(obj.name)} (Padded LD).png'
+        need_render = not os.path.exists(bpy.path.abspath(mask_scene.render.filepath))
+        if not need_render:
+            im = Image.open(bpy.path.abspath(mask_scene.render.filepath))
+            obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "A"))
+            need_render = im.size[0] != mask_scene.render.resolution_x or im.size[1] != mask_scene.render.resolution_y
+        if need_render:
+            mask_scene.collection.objects.link(obj)
+            bpy.ops.render.render(write_still=True, scene=mask_scene.name)
+            mask_scene.collection.objects.unlink(obj)
+            im = Image.open(bpy.path.abspath(mask_scene.render.filepath))
+            for p in range(opt_mask_pad):
+                im.alpha_composite(im, (0, 1))
+                im.alpha_composite(im, (0, -1))
+                im.alpha_composite(im, (1, 0))
+                im.alpha_composite(im, (-1, 0))
+            obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "A"))
+        
+        # Bake object for each lighting scenario
         for i, scenario in enumerate(light_scenarios, start=1):
             name, is_lightmap, light_col, lights = scenario
             render_path = f'{bakepath}{scenario[0]} - Bake - {obj.name}.exr'
@@ -609,12 +651,15 @@ def render_all_groups(op, context):
             else:
                 print(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
+        if obj.vlmSettings.bake_mask:
+            render_col.objects.unlink(obj.vlmSettings.bake_mask)
         if not obj.vlmSettings.hide_from_others:
             indirect_col.objects.link(obj)
         render_col.objects.unlink(obj)
 
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 0.0
     bpy.data.scenes.remove(scene)
+    bpy.data.scenes.remove(mask_scene)
     length = time.time() - start_time
     print(f"\nRendering finished in a total time of {vlm_utils.format_time(length)}")
     if n_existing > 0: print(f". {n_existing:>3} renders were skipped since they were already existing")
