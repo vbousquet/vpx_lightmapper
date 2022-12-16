@@ -470,10 +470,10 @@ def create_bake_meshes(op, context):
                 print(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.2f}) for {bake_col if sync_obj is None else bake_name}')
                 if sync_obj:
                     dup = bpy.data.objects[sync_obj]
-                    bake_instance.data.transform(Matrix(dup.matrix_basis).inverted())
-                    bake_instance.matrix_basis = dup.matrix_basis
+                    bake_instance.data.transform(Matrix(dup.matrix_world).inverted())
+                    bake_instance.matrix_world = dup.matrix_world
                 else:
-                    bake_instance.matrix_basis.identity()
+                    bake_instance.matrix_world.identity()
                 bake_instance.vlmSettings.bake_type = 'lightmap'
                 bake_instance.vlmSettings.bake_lighting = light_name
                 bake_instance.vlmSettings.bake_objects = bake_col

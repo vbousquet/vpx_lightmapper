@@ -90,7 +90,7 @@ def compute_render_groups(op, context):
     scene.world = None
     scene.use_nodes = False
 
-    modelview_matrix = camera_object.matrix_basis.inverted()
+    modelview_matrix = camera_object.matrix_world.inverted()
     projection_matrix = camera_object.calc_matrix_camera(context.evaluated_depsgraph_get(),
         x = scene.render.resolution_x,
         y = scene.render.resolution_y,

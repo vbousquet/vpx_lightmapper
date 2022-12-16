@@ -95,7 +95,7 @@ def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_
     for i in range(3): # iterations since it depends on the aspect ratio fitting which change after each computation
         # Compute the camera distance with the current aspect ratio
         camera_object.location = (playfield_left + 0.5 * playfield_width, -playfield_top -0.5 * playfield_height, 0)
-        modelview_matrix = camera_object.matrix_basis.inverted()
+        modelview_matrix = camera_object.matrix_world.inverted()
         s = 1.0 / math.tan(camera_fov/2.0)
         sx = s if aspect_ratio > 1.0 else s/aspect_ratio
         sy = s if aspect_ratio < 1.0 else s*aspect_ratio
@@ -109,7 +109,7 @@ def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_
         camera_object.location.y -= min_dist * view_vector.y
         camera_object.location.z -= min_dist * view_vector.z
         # adjust aspect ratio and compute camera shift to fill the render output
-        modelview_matrix = camera_object.matrix_basis.inverted()
+        modelview_matrix = camera_object.matrix_world.inverted()
         projection_matrix = camera_object.calc_matrix_camera(context.evaluated_depsgraph_get())
         max_x = max_y = -10000000
         min_x = min_y = 10000000

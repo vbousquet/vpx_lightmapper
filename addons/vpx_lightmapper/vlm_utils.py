@@ -67,7 +67,7 @@ def get_render_size(context):
             for obj in context.scene.vlmSettings.playfield_col.all_objects:
                 if obj.type == 'MESH':
                     mesh = obj.data
-                    obj_mat = obj.matrix_basis
+                    obj_mat = obj.matrix_world
                     modelview_matrix = camera.matrix_world.normalized().inverted()
                     if winx > winy:
                         xasp = 1.0
@@ -118,7 +118,7 @@ def project_uv(camera, obj, ar):
     if camera.type != 'CAMERA':
         raise Exception(f"Object {camera.name} is not a camera.")
     mesh = obj.data
-    obj_mat = obj.matrix_basis
+    obj_mat = obj.matrix_world
     modelview_matrix = camera.matrix_world.normalized().inverted()
     if ar > 1.0:
         xasp = 1.0
