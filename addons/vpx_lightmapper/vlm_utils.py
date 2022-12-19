@@ -49,7 +49,7 @@ def get_lm_threshold():
 
 
 def get_render_height(context):
-    return int(int(context.scene.vlmSettings.tex_size) * context.scene.vlmSettings.render_ratio / 100.0) - 4 - 2 * context.scene.vlmSettings.padding
+    return int(int(context.scene.vlmSettings.render_height) * context.scene.vlmSettings.render_ratio / 100.0) - 4 - 2 * context.scene.vlmSettings.padding
 
 
 def get_render_size(context):

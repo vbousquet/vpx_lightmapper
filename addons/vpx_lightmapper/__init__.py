@@ -156,6 +156,7 @@ class VLM_Scene_props(PropertyGroup):
     use_pf_translucency_map: BoolProperty(name="Translucency Map", description="Generate a translucency map for inserts", default = True)
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
+    # Camera options
     camera_inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 15.0, update=vlm_camera.camera_inclination_update)
     camera_layback: FloatProperty(name="Layback", description="Camera layback", default = 35.0, update=vlm_camera.camera_inclination_update)
     layback_mode: EnumProperty(
@@ -181,6 +182,16 @@ class VLM_Scene_props(PropertyGroup):
         default='unstarted'
     )
     batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
+    render_height: IntProperty(
+        name="Render Height", description="Render height used for projective baking (a margin and the padding is applied to this)", 
+        default = 256, min = 256, max=8192, update=vlm_camera.camera_inclination_update
+    )
+    render_ratio: IntProperty(name="Render Ratio", description="- For projective baking, this ratio is applied to the target render height.\n- For baking, this ratio is applied to the user defined bake size", default = 100, min = 5, max=100, subtype="PERCENTAGE", update=vlm_camera.camera_inclination_update)
+    render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
+    padding: IntProperty(name="Padding", description="Padding between bakes", default = 2, min = 0)
+    remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal\n90 will disable backface removal, 0 is full backface removal", default = 0.0)
+    keep_pf_reflection_faces: BoolProperty(name="Keep playfield reflection", description="Keep faces only visible through playfield reflection", default = False)
+    max_lighting: IntProperty(name="Max Light.", description="Maximum number of lighting scenario baked simultaneously at 4K (0 = no limit)", default = 0, min = 0)
     tex_size: EnumProperty(
         items=[
             ('256', '256', '256x256', '', 256),
@@ -190,15 +201,9 @@ class VLM_Scene_props(PropertyGroup):
             ('4096', '4096', '4096x4096', '', 4096),
             ('8192', '8192', '8192x8192', '', 8192),
         ],
-        name='Texture size', description="Size of the exported texture. This size must be greater than the render height.",
-        default='256', update=vlm_camera.camera_inclination_update
+        name='Texture size', description="Size of the exported texture in which rendered/baked parts will be nested (Should be greater than render size to avoid too much splitting).",
+        default='256'
     )
-    render_ratio: IntProperty(name="Render Ratio", description="- For projective baking, render height is computed from this ratio and texture size.\n- For baking, this ratio is applied to the user defined bake size", default = 100, min = 5, max=100, subtype="PERCENTAGE", update=vlm_camera.camera_inclination_update)
-    render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
-    padding: IntProperty(name="Padding", description="Padding between bakes", default = 2, min = 0)
-    remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal\n90 will disable backface removal, 0 is full backface removal", default = 0.0)
-    keep_pf_reflection_faces: BoolProperty(name="Keep playfield reflection", description="Keep faces only visible through playfield reflection", default = False)
-    max_lighting: IntProperty(name="Max Light.", description="Maximum number of lighting scenario baked simultaneously at 4K (0 = no limit)", default = 0, min = 0)
     # Exporter options
     enable_vpx_reflection: BoolProperty(name="Enable VPX reflection", description="Enable VPX playfield reflection for exported models and lightmaps. Note that this will usually leads to 'double' reflections since indirect light is already baked", default = False)
     export_mode: EnumProperty(
@@ -785,15 +790,25 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         if vlmProps.last_bake_step == 'renders': step = 2
         if vlmProps.last_bake_step == 'meshes': step = 3
         if vlmProps.last_bake_step == 'nestmaps': step = 4
-        layout.prop(vlmProps, "tex_size")
+        # Render properties
+        layout.prop(vlmProps, "render_height")
         layout.prop(vlmProps, "render_ratio")
         layout.prop(vlmProps, "max_lighting")
-        layout.prop(vlmProps, "padding")
+        layout.separator()
+        # Mesh properties
         layout.prop(vlmProps, "remove_backface", text='Backface')
         layout.prop(vlmProps, "keep_pf_reflection_faces")
+        layout.separator()
+        # Nest properties
+        layout.prop(vlmProps, "tex_size")
+        layout.prop(vlmProps, "padding")
+        layout.separator()
+        # Export properties
         layout.prop(vlmProps, "export_mode")
         layout.prop(vlmProps, "playfield_col")
         layout.prop(vlmProps, "enable_vpx_reflection")
+        layout.separator()
+        # Actions buttons
         row = layout.row()
         row.scale_y = 1.5
         row.operator(VLM_OT_compute_render_groups.bl_idname, icon='GROUP_VERTEX', text='Groups')
@@ -805,9 +820,9 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         row.operator(VLM_OT_export_vpx.bl_idname, icon='EXPORT', text='Export', emboss=step>3)
         row.operator(VLM_OT_batch_bake.bl_idname)
         layout.prop(vlmProps, "batch_inc_group", expand=True)
-        layout.separator()
-        layout.prop(vlmProps, "active_scale")
-        layout.prop(vlmProps, "playfield_size")
+        #layout.separator()
+        #layout.prop(vlmProps, "active_scale")
+        #layout.prop(vlmProps, "playfield_size")
 
 
 class VLM_PT_Col_Props(bpy.types.Panel):
@@ -891,9 +906,9 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                     if obj.vlmSettings.use_bake:
                         layout.prop(obj.vlmSettings, 'bake_width')
                         layout.prop(obj.vlmSettings, 'bake_height')
+                        layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
                     else:
                         layout.prop(obj.vlmSettings, 'no_mesh_optimization')
-                        layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
                         layout.prop(bake_objects[0].vlmSettings, 'bake_to')
             
             layout.separator()
