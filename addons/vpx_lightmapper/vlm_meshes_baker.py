@@ -212,7 +212,7 @@ def create_bake_meshes(op, context):
             # Create base UV projected layer
             if is_bake:
                 if not dup.data.uv_layers.get('UVMap'):
-                    print(f'. ERROR {obj_name} is using traidtional bake and is missing its UVMap')
+                    print(f'. ERROR {obj_name} is using traditional bake and is missing its UVMap')
             else:
                 uvs = [uv for uv in dup.data.uv_layers]
                 while uvs:
@@ -241,7 +241,7 @@ def create_bake_meshes(op, context):
                 bm = bmesh.new()
                 bm.from_mesh(dup.data)
                 bm.faces.ensure_lookup_table()
-                uv_loop = bm.loops.layers.uv[0]
+                uv_loop = bm.loops.layers.uv['UVMap']
                 triangle_loops = bm.calc_loop_triangles()
                 areas = {face: 0.0 for face in bm.faces} 
                 for loop in triangle_loops:
@@ -305,38 +305,38 @@ def create_bake_meshes(op, context):
             bpy.ops.object.mode_set(mode='OBJECT')
 
             # Subdivide long edges to avoid visible projection distortion, and allow better lightmap face pruning (recursive subdivisions)
-            if optimize_mesh:
-                opt_cut_threshold = 0.1
-                for i in range(8): # FIXME Limit the amount since there are situations were subdividing fails
-                    bme = bmesh.new()
-                    bme.from_mesh(dup.data)
-                    bme.edges.ensure_lookup_table()
-                    bme.faces.ensure_lookup_table()
-                    bme.verts.ensure_lookup_table()
-                    long_edges = []
-                    longest_edge = 0
-                    uv_layer = bme.loops.layers.uv.verify()
-                    for edge in bme.edges:
-                        if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
-                            continue
-                        ua, va = edge.verts[0].link_loops[0][uv_layer].uv
-                        ub, vb = edge.verts[1].link_loops[0][uv_layer].uv
-                        l = math.sqrt((ub-ua)*(ub-ua)*opt_ar*opt_ar+(vb-va)*(vb-va))
-                        longest_edge = max(longest_edge, l)
-                        if l >= opt_cut_threshold:
-                            long_edges.append(edge)
-                    if not long_edges:
-                        bme.to_mesh(dup.data)
-                        bme.free()
-                        dup.data.update()
-                        break
-                    bmesh.ops.subdivide_edges(bme, edges=long_edges, cuts=1, use_grid_fill=True)
-                    bmesh.ops.triangulate(bme, faces=bme.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
+            opt_cut_threshold = 0.1
+            for i in range(8): # FIXME Limit the amount since there are situations were subdividing fails
+                bme = bmesh.new()
+                bme.from_mesh(dup.data)
+                bme.edges.ensure_lookup_table()
+                bme.faces.ensure_lookup_table()
+                bme.verts.ensure_lookup_table()
+                long_edges = []
+                longest_edge = 0
+                uv_layer = bme.loops.layers.uv['UVMap']
+                for edge in bme.edges:
+                    if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
+                        continue
+                    ua, va = edge.verts[0].link_loops[0][uv_layer].uv
+                    ub, vb = edge.verts[1].link_loops[0][uv_layer].uv
+                    l = math.sqrt((ub-ua)*(ub-ua)*opt_ar*opt_ar+(vb-va)*(vb-va))
+                    longest_edge = max(longest_edge, l)
+                    if l >= opt_cut_threshold:
+                        long_edges.append(edge)
+                if not long_edges:
                     bme.to_mesh(dup.data)
                     bme.free()
                     dup.data.update()
+                    break
+                bmesh.ops.subdivide_edges(bme, edges=long_edges, cuts=1, use_grid_fill=True)
+                bmesh.ops.triangulate(bme, faces=bme.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
+                bme.to_mesh(dup.data)
+                bme.free()
+                dup.data.update()
+                if not is_bake:
                     vlm_utils.project_uv(camera, dup, proj_ar)
-                    print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
+                print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
             
             objects_to_join.append(dup)
         
