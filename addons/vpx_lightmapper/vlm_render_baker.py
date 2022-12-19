@@ -595,7 +595,7 @@ def render_all_groups(op, context):
         need_render = not os.path.exists(bpy.path.abspath(mask_scene.render.filepath))
         if not need_render:
             im = Image.open(bpy.path.abspath(mask_scene.render.filepath))
-            obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "A"))
+            obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "L"))
             need_render = im.size[0] != mask_scene.render.resolution_x or im.size[1] != mask_scene.render.resolution_y
         if need_render:
             mask_scene.collection.objects.link(obj)
@@ -607,7 +607,7 @@ def render_all_groups(op, context):
                 im.alpha_composite(im, (0, -1))
                 im.alpha_composite(im, (1, 0))
                 im.alpha_composite(im, (-1, 0))
-            obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "A"))
+            obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "L"))
         
         # Bake object for each lighting scenario
         for i, scenario in enumerate(light_scenarios, start=1):
