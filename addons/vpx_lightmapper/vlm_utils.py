@@ -507,3 +507,63 @@ def render_mask(context, width, height, target_image, view_matrix, projection_ma
     target_image.scale(width, height)
     buffer.dimensions = width * height * 4
     target_image.pixels = [v / 255 for v in buffer]
+
+
+def render_blueprint(context, height = 4096):
+    image_name = 'blueprint'
+    playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
+    view_matrix = mathutils.Matrix.LocRotScale(mathutils.Vector((-1.0, 1.0, 0)), None, mathutils.Vector((2.0 / playfield_width, 2.0 / playfield_height, 0.1)))
+    projection_matrix = mathutils.Matrix.OrthoProjection('XY', 4)
+    width = int(height * playfield_width / playfield_height)
+    offscreen = gpu.types.GPUOffScreen(width, height)
+    area = next((a for a in context.screen.areas if a.type == 'VIEW_3D'), None)
+    space = area.spaces.active
+    state = [
+        space.overlay.show_floor,
+        space.overlay.show_overlays,
+        space.shading.background_type,
+        space.shading.background_color,
+        space.shading.light,
+        space.shading.color_type,
+        space.shading.single_color,
+        space.shading.type,
+        space.shading.render_pass
+    ]
+    space.overlay.show_floor = False
+    space.overlay.show_overlays = False
+    space.shading.background_type = 'VIEWPORT'
+    space.shading.background_color = (1,1,1)
+    space.shading.light = 'FLAT'
+    space.shading.color_type = 'SINGLE'
+    space.shading.single_color = (0,0,0)
+    space.shading.type = 'WIREFRAME'
+    with offscreen.bind():
+        fb = gpu.state.active_framebuffer_get()
+        fb.clear(color=(0.0, 0.0, 0.0, 0.0))
+        offscreen.draw_view3d(
+            context.scene,
+            context.view_layer,
+            space,
+            area.regions[-1],
+            view_matrix,
+            projection_matrix,
+            do_color_management=False)
+        buffer = fb.read_color(0, 0, width, height, 4, 0, 'UBYTE')
+    offscreen.free()
+    space.overlay.show_floor = state[0]
+    space.overlay.show_overlays = state[1]
+    space.shading.background_type = state[2]
+    space.shading.background_color = state[3]
+    space.shading.light = state[4]
+    if state[5] != '':
+        space.shading.color_type = state[5]
+    space.shading.single_color = state[6]
+    space.shading.type = state[7]
+    
+    if image_name not in bpy.data.images:
+        bpy.data.images.new(image_name, width, height)
+    image = bpy.data.images[image_name]
+    image.scale(width, height)
+
+    buffer.dimensions = width * height * 4
+    image.pixels = [v / 255 for v in buffer]

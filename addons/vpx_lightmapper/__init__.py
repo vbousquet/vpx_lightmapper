@@ -677,6 +677,25 @@ class VLM_OT_apply_aoi(Operator):
         return {"FINISHED"}
 
 
+class VLM_OT_render_blueprint(Operator):
+    bl_idname = "vlm.blueprint"
+    bl_label = "Render Blueprint"
+    bl_description = "Render a blueprint"
+    bl_options = {"REGISTER", "UNDO"}
+    height: IntProperty(
+        name="Blueprint Height", description="Blueprint height (width will be computed from table size)", 
+        default = 4096, min = 256, max=8192
+    )
+    
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        vlm_utils.render_blueprint(context, self.height);
+        return {"FINISHED"}
+
+
 class VLM_OT_load_render_images(Operator):
     bl_idname = "vlm.load_render_images_operator"
     bl_label = "Load/Unload Renders"
@@ -994,6 +1013,8 @@ class VLM_PT_3D_Tools(bpy.types.Panel):
         layout.separator()
         layout.operator(VLM_OT_table_uv.bl_idname)
         layout.separator()
+        layout.operator(VLM_OT_render_blueprint.bl_idname)
+        layout.separator()
         layout.operator(VLM_OT_export_obj.bl_idname, icon='EXPORT')
 
 
@@ -1110,6 +1131,7 @@ classes = (
     VLM_OT_toggle_no_exp_modifier,
     VLM_OT_apply_aoi,
     VLM_OT_table_uv,
+    VLM_OT_render_blueprint,
     VLM_OT_load_render_images,
     VLM_OT_export_obj,
     VLM_OT_export_vpx,
