@@ -627,7 +627,7 @@ def export_vpx(op, context):
             if vpx_name:
                 id = re.fullmatch(r'[lfLF](\d+)\w?', vpx_name)
                 if id:
-                    lampz_id = f'1{id[1]}' if vpx_name.startswith('f') else id[1]
+                    lampz_id = f'1{id[1].zfill(2)}' if vpx_name.startswith('f') else id[1]
                     if lampz_id not in light_processed:
                         if vpx_name.lower() not in table_lights and vpx_name.upper() not in table_lights:
                             code += f'	\' Lampz.MassAssign({lampz_id}) = {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
@@ -960,7 +960,7 @@ def export_vpx(op, context):
         if vpx_name:
             id = re.fullmatch(r'[lfLF](\d+)\w?', vpx_name)
             if id:
-                lampz_id = f'1{id[1]}' if vpx_name.startswith('f') else id[1]
+                lampz_id = f'1{id[1].zfill(2)}' if vpx_name.startswith('f') else id[1]
                 if lampz_id not in light_processed:
                     if vpx_name.lower() not in table_lights and vpx_name.upper() not in table_lights:
                         print(f'. light "{vpx_name}" is missing from the VPX file')
@@ -991,7 +991,7 @@ def export_vpx(op, context):
             if vpx_name:
                 id = re.fullmatch(r'[lfLF](\d+)\w?', vpx_name)
                 if id:
-                    lampz_id = f'1{id[1]}' if vpx_name.startswith('f') else id[1]
+                    lampz_id = f'1{id[1].zfill(2)}' if vpx_name.startswith('f') else id[1]
                     if lampz_id == li:
                         if not first: code += f', '
                         code += f'{export_name(obj.name)}'
