@@ -609,17 +609,31 @@ class VLM_OT_select_nestmap_group(Operator):
 
 class VLM_OT_table_uv(Operator):
     bl_idname = "vlm.set_table_uv"
-    bl_label = "Project Table UV"
-    bl_description = "Set UV to table coordinates"
+    bl_label = "Add Table UV Project"
+    bl_description = "Add a UV modifier adjusted to table coordinates"
     bl_options = {"REGISTER", "UNDO"}
     
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT' and len(context.selected_objects) > 0
+
     def execute(self, context):
         l, t, w, h = context.scene.vlmSettings.playfield_size
+        o = bpy.data.objects.new("Table UV", None)
+        context.scene.collection.objects.link(o)
+        o.empty_display_type = 'ARROWS'
+        o.empty_display_size = 0.1
+        o.location = (0.5*w, -0.5*h, 0.0)
+        o.scale = (0.5*w, 0.5*h, 1.0)
         for obj in context.selected_objects:
-            uv_layer = obj.data.uv_layers.active
-            for loop in obj.data.loops:
-                pt = obj.matrix_world @ mathutils.Vector(obj.data.vertices[loop.vertex_index].co)
-                uv_layer.data[loop.index].uv = ((pt[0]-l) / w, (pt[1]-t+h) / h)
+            uv_modifier = obj.modifiers.new('Table UV', 'UV_PROJECT')
+            uv_modifier.uv_layer = 'UVMap'
+            uv_modifier.projector_count = 1
+            uv_modifier.projectors[0].object = o
+            # uv_layer = obj.data.uv_layers.active
+            # for loop in obj.data.loops:
+                # pt = obj.matrix_world @ mathutils.Vector(obj.data.vertices[loop.vertex_index].co)
+                # uv_layer.data[loop.index].uv = ((pt[0]-l) / w, (pt[1]-t+h) / h)
         return {"FINISHED"}
 
 
@@ -629,6 +643,10 @@ class VLM_OT_toggle_no_exp_modifier(Operator):
     bl_description = "Toggle modifiers marked with NoExp"
     bl_options = {"REGISTER", "UNDO"}
     
+    @classmethod
+    def poll(cls, context):
+        return len(context.selected_objects) > 0
+
     def execute(self, context):
         all_on = True
         for obj in context.selected_objects:
@@ -679,20 +697,17 @@ class VLM_OT_apply_aoi(Operator):
 
 class VLM_OT_render_blueprint(Operator):
     bl_idname = "vlm.blueprint"
-    bl_label = "Render Blueprint"
-    bl_description = "Render a blueprint"
+    bl_label = "Render Blueprint/Mask"
+    bl_description = "Render a blueprint or a mask of the table\nRender object visible viewport in a fitted top-down view"
     bl_options = {"REGISTER", "UNDO"}
     height: IntProperty(
         name="Blueprint Height", description="Blueprint height (width will be computed from table size)", 
         default = 4096, min = 256, max=8192
     )
+    solid: bpy.props.BoolProperty(name="Solid Blueprint", description="Render filled parts with solid black", default = False)
     
-    @classmethod
-    def poll(cls, context):
-        return True
-
     def execute(self, context):
-        vlm_utils.render_blueprint(context, self.height);
+        vlm_utils.render_blueprint(context, self.height, self.solid);
         return {"FINISHED"}
 
 
