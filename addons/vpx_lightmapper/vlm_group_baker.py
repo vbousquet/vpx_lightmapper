@@ -85,6 +85,7 @@ def compute_render_groups(op, context):
     scene.render.image_settings.color_mode = 'RGBA'
     scene.render.image_settings.color_depth = '8'
     scene.eevee.taa_render_samples = 1
+    scene.eevee.volumetric_samples = 1
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
     scene.world = None
