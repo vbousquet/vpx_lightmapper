@@ -68,7 +68,7 @@ def get_vpx_sync_light(obj, context, light_col):
 
 def export_vpx(op, context):
     """Export bakes by updating the reference VPX file:
-    . Remove all items in 'VLM.Visuals' layer
+    . Remove all items in 'VLM.Visuals' and 'VLM.Lightmaps' layer
     . Disable rendering for all baked objects, eventually removing them
     . Add all nestmaps as texture with 'VLM.' prefixed name
     . Add base materials with 'VLM.' prefixed name
@@ -266,7 +266,7 @@ def export_vpx(op, context):
         if is_playfield_mesh and not layer_name == 'VLM.Visuals':
             needs_playfield_physics = False
         # Filters out objects
-        remove = layer_name == 'VLM.Visuals'
+        remove = (layer_name == 'VLM.Visuals') or (layer_name == 'VLM.Lightmaps')
         if export_mode == 'remove' or export_mode == 'remove_all':
             # Baked objects are only kept if contributing to physics
             if is_baked and not is_physics: remove = True
@@ -402,13 +402,13 @@ def export_vpx(op, context):
         writer.write_tagged_float(b'ELFO', pf_falloff if obj == pfobj else 0.0)
         writer.write_tagged_float(b'RFCT', pf_friction if obj == pfobj else 0.0)
         writer.write_tagged_float(b'RSCT', pf_scatter if obj == pfobj else 0.0)
-        writer.write_tagged_float(b'EFUI', 0.0)
+        writer.write_tagged_float(b'EFUI', 0.0 if is_light else 1.0)
         writer.write_tagged_float(b'CORF', 0.0)
         writer.write_tagged_bool(b'CLDR', obj == pfobj)
         writer.write_tagged_bool(b'ISTO', obj != pfobj)
         writer.write_tagged_bool(b'U3DM', True)
         writer.write_tagged_bool(b'STRE', is_static)
-        writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
+        writer.write_tagged_u32(b'DILI', 255) # 255 is 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
         writer.write_tagged_bool(b'REEN', not is_playfield and context.scene.vlmSettings.enable_vpx_reflection)
         writer.write_tagged_bool(b'EBFC', False)
@@ -467,12 +467,11 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'LOCK', True)
         writer.write_tagged_bool(b'LVIS', True)
         writer.write_tagged_u32(b'LAYR', 0)
-        writer.write_tagged_string(b'LANR', 'VLM.Visuals')
+        writer.write_tagged_string(b'LANR', 'VLM.Lightmaps' if is_light else 'VLM.Visuals')
         # For VPX 10.8, write link to light. If the light does not exist or if open in VPX < 10.8, this will be ignored
         if is_light:
-            sync_light = bpy.data.objects.get(obj.vlmSettings.bake_sync_light)
-            if sync_light:
-                writer.write_tagged_string(b'LMAP', sync_light.vlmSettings.vpx_object)
+            sync_light, _ = get_vpx_sync_light(obj, context, light_col)
+            writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
