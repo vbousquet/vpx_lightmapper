@@ -940,10 +940,10 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                     if obj.vlmSettings.use_bake:
                         layout.prop(obj.vlmSettings, 'bake_width')
                         layout.prop(obj.vlmSettings, 'bake_height')
-                        layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
                     else:
                         layout.prop(obj.vlmSettings, 'no_mesh_optimization')
                         layout.prop(bake_objects[0].vlmSettings, 'bake_to')
+                    layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
             
             layout.separator()
             layout.label(text="Render group:")
