@@ -328,6 +328,7 @@ def export_vpx(op, context):
                 pf_scatter = br.get_float()
             br.skip_tag()
     new_playfield_image = None
+    bm_room_meshes = []
     for obj in meshes_to_export:
         obj.data.validate()
         obj.data.calc_normals_split() # compute loop normal (would be 0,0,0 otherwise)
@@ -402,12 +403,12 @@ def export_vpx(op, context):
         writer.write_tagged_float(b'ELFO', pf_falloff if obj == pfobj else 0.0)
         writer.write_tagged_float(b'RFCT', pf_friction if obj == pfobj else 0.0)
         writer.write_tagged_float(b'RSCT', pf_scatter if obj == pfobj else 0.0)
-        writer.write_tagged_float(b'EFUI', 0.0 if is_light else 1.0)
+        writer.write_tagged_float(b'EFUI', 0.0 if is_light else 0.1)
         writer.write_tagged_float(b'CORF', 0.0)
         writer.write_tagged_bool(b'CLDR', obj == pfobj)
         writer.write_tagged_bool(b'ISTO', obj != pfobj)
         writer.write_tagged_bool(b'U3DM', True)
-        writer.write_tagged_bool(b'STRE', is_static)
+        writer.write_tagged_bool(b'STRE', False)
         writer.write_tagged_u32(b'DILI', 255) # 255 is 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
         writer.write_tagged_bool(b'REEN', not is_playfield and context.scene.vlmSettings.enable_vpx_reflection)
@@ -472,6 +473,8 @@ def export_vpx(op, context):
         if is_light:
             sync_light, _ = get_vpx_sync_light(obj, context, light_col)
             writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
+        elif obj != pfobj:
+            bm_room_meshes.append('playfield_mesh' if is_playfield else export_name(obj.name))
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
@@ -761,6 +764,11 @@ def export_vpx(op, context):
                             if new_pending != pending:
                                 new_code += push_pending(pending)
                                 pending = new_pending
+                        elif '\' VLM.Array;BM_Room' in line: # BM_Room array
+                            new_code += "Dim BM_Room : BM_Room = Array("
+                            new_code += ', '.join(f'{obj}' for obj in bm_room_meshes)
+                            new_code += f') \' VLM.Array;BM_Room\n'
+                            pending = None                               
                         else:
                             new_code += push_pending(pending)
                             pending = None
@@ -933,6 +941,16 @@ def export_vpx(op, context):
         code += push_map_array(export_name(sync_trans), 'LM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
         code += push_map_array(export_name(sync_trans), 'BM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
         code += push_map_array(export_name(sync_trans), 'BL', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
+
+    code += "\n"
+    code += "\n"
+    code += "' ===============================================================\n"
+    code += "' The following code can be copy/pasted to have premade array for\n"
+    code += "' VLM Visuals Room Brightness:\n"
+    code += "\n"
+    code += "Dim ba : BM_Room = Array("
+    code += ', '.join(f'{obj}' for obj in bm_room_meshes)
+    code += f') \' VLM.Array;BM_Room\n'
 
     code += "\n"
     code += "\n"
