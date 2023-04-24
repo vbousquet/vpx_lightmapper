@@ -948,7 +948,7 @@ def export_vpx(op, context):
     code += "' The following code can be copy/pasted to have premade array for\n"
     code += "' VLM Visuals Room Brightness:\n"
     code += "\n"
-    code += "Dim ba : BM_Room = Array("
+    code += "Dim BM_Room : BM_Room = Array("
     code += ', '.join(f'{obj}' for obj in bm_room_meshes)
     code += f') \' VLM.Array;BM_Room\n'
 
