@@ -105,6 +105,8 @@ def export_vpx(op, context):
     print(f'\nExporting bake results to {bpy.path.basename(output_path)}')
 
     src_storage = olefile.OleFileIO(input_path)
+    version = vlm_utils.get_vpx_file_version(context, input_path)
+    
     dst_storage = pythoncom.StgCreateStorageEx(output_path, storagecon.STGM_TRANSACTED | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, storagecon.STGFMT_DOCFILE, 0, pythoncom.IID_IStorage, None, None)
     dst_gamestg = dst_storage.CreateStorage("GameStg", storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
     dst_tableinfo = dst_storage.CreateStorage("TableInfo", storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
@@ -296,6 +298,13 @@ def export_vpx(op, context):
 
     # Add new bake models and default playfield collider if needed
     meshes_to_export = sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}')
+
+    if version < 1080 and playfield_col:    
+        playfield_mesh = next(obj for obj in meshes_to_export if (obj.vlmSettings.bake_type != 'lightmap' and obj.vlmSettings.bake_objects == playfield_col.name))
+        pf_bm_dup = playfield_mesh.copy()
+        pf_bm_dup.name = 'playfield_mesh_bm'
+        meshes_to_export.append(pf_bm_dup)
+
     pfobj = None
     pf_friction = pf_elasticity = pf_falloff = pf_scatter = 0
     if needs_playfield_physics:
@@ -328,6 +337,7 @@ def export_vpx(op, context):
                 pf_scatter = br.get_float()
             br.skip_tag()
     new_playfield_image = None
+    bm_room_meshes = []
     for obj in meshes_to_export:
         obj.data.validate()
         obj.data.calc_normals_split() # compute loop normal (would be 0,0,0 otherwise)
@@ -339,7 +349,10 @@ def export_vpx(op, context):
         is_active = obj.vlmSettings.bake_type == 'active'
         is_static = obj.vlmSettings.bake_type == 'static'
         is_movable = obj.vlmSettings.bake_sync_trans != ''
-        is_playfield = playfield_col != '' and not is_light and obj.vlmSettings.bake_objects == playfield_col.name
+        if version < 1080:
+            is_playfield = playfield_col != '' and not is_light and obj.vlmSettings.bake_objects == playfield_col.name and obj.name != 'playfield_mesh_bm'
+        else:
+            is_playfield = playfield_col != '' and not is_light and obj.vlmSettings.bake_objects == playfield_col.name
         if is_playfield: new_playfield_image = f'VLM.Nestmap{obj.vlmSettings.bake_nestmap}'
         depth_bias = None
         for col_name in obj.vlmSettings.bake_objects.split(';'):
@@ -394,7 +407,10 @@ def export_vpx(op, context):
         # writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if is_playfield or obj == pfobj else export_name(obj.name))
         writer.write_tagged_string(b'MATR', 'VLM.Lightmap' if is_light else 'VLM.Bake.Active' if is_active else 'VLM.Bake.Solid')
         writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
-        writer.write_tagged_bool(b'TVIS', obj != pfobj)
+        if version < 1080:
+            writer.write_tagged_bool(b'TVIS', obj != pfobj and not is_playfield)
+        else:
+            writer.write_tagged_bool(b'TVIS', obj != pfobj)
         writer.write_tagged_bool(b'DTXI', False)
         writer.write_tagged_bool(b'HTEV', obj == pfobj)
         writer.write_tagged_float(b'THRS', 2.0)
@@ -402,12 +418,12 @@ def export_vpx(op, context):
         writer.write_tagged_float(b'ELFO', pf_falloff if obj == pfobj else 0.0)
         writer.write_tagged_float(b'RFCT', pf_friction if obj == pfobj else 0.0)
         writer.write_tagged_float(b'RSCT', pf_scatter if obj == pfobj else 0.0)
-        writer.write_tagged_float(b'EFUI', 0.0 if is_light else 1.0)
+        writer.write_tagged_float(b'EFUI', 0.0 if is_light else 0.1)
         writer.write_tagged_float(b'CORF', 0.0)
         writer.write_tagged_bool(b'CLDR', obj == pfobj)
         writer.write_tagged_bool(b'ISTO', obj != pfobj)
         writer.write_tagged_bool(b'U3DM', True)
-        writer.write_tagged_bool(b'STRE', is_static)
+        writer.write_tagged_bool(b'STRE', False)
         writer.write_tagged_u32(b'DILI', 255) # 255 is 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
         writer.write_tagged_bool(b'REEN', not is_playfield and context.scene.vlmSettings.enable_vpx_reflection)
@@ -472,6 +488,11 @@ def export_vpx(op, context):
         if is_light:
             sync_light, _ = get_vpx_sync_light(obj, context, light_col)
             writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
+        elif version < 1080:
+            if obj != pfobj and not is_playfield:
+                bm_room_meshes.append(export_name(obj.name))
+        elif obj != pfobj:
+            bm_room_meshes.append('playfield_mesh' if is_playfield else export_name(obj.name))
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
@@ -761,6 +782,11 @@ def export_vpx(op, context):
                             if new_pending != pending:
                                 new_code += push_pending(pending)
                                 pending = new_pending
+                        elif '\' VLM.Array;BM_Room' in line: # BM_Room array
+                            new_code += "Dim BM_Room : BM_Room = Array("
+                            new_code += ', '.join(f'{obj}' for obj in bm_room_meshes)
+                            new_code += f') \' VLM.Array;BM_Room\n'
+                            pending = None                               
                         else:
                             new_code += push_pending(pending)
                             pending = None
@@ -933,6 +959,16 @@ def export_vpx(op, context):
         code += push_map_array(export_name(sync_trans), 'LM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
         code += push_map_array(export_name(sync_trans), 'BM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
         code += push_map_array(export_name(sync_trans), 'BL', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
+
+    code += "\n"
+    code += "\n"
+    code += "' ===============================================================\n"
+    code += "' The following code can be copy/pasted to have premade array for\n"
+    code += "' VLM Visuals Room Brightness:\n"
+    code += "\n"
+    code += "Dim BM_Room : BM_Room = Array("
+    code += ', '.join(f'{obj}' for obj in bm_room_meshes)
+    code += f') \' VLM.Array;BM_Room\n'
 
     code += "\n"
     code += "\n"
