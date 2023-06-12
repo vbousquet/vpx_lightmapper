@@ -214,9 +214,8 @@ def create_bake_meshes(op, context):
                 if not dup.data.uv_layers.get('UVMap'):
                     print(f'. ERROR {obj_name} is using traditional bake and is missing its UVMap')
             else:
-                uvs = [uv for uv in dup.data.uv_layers]
-                while uvs:
-                    dup.data.uv_layers.remove(uvs.pop())
+                for uv in dup.data.uv_layers:
+                    dup.data.uv_layers.remove(dup.data.uv_layers[0])
                 dup.data.uv_layers.new(name='UVMap')
                 vlm_utils.project_uv(camera, dup, proj_ar)
             
