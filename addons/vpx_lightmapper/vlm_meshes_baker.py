@@ -213,6 +213,9 @@ def create_bake_meshes(op, context):
             if is_bake:
                 if not dup.data.uv_layers.get('UVMap'):
                     print(f'. ERROR {obj_name} is using traditional bake and is missing its UVMap')
+                dup.data.uv_layers.new(name="UV_Projected")
+                dup.data.uv_layers['UV_Projected'].active = True 
+                vlm_utils.project_uv(camera, dup, proj_ar)
             else:
                 for uv in dup.data.uv_layers:
                     dup.data.uv_layers.remove(dup.data.uv_layers[0])
@@ -313,7 +316,7 @@ def create_bake_meshes(op, context):
                 bme.verts.ensure_lookup_table()
                 long_edges = []
                 longest_edge = 0
-                uv_layer = bme.loops.layers.uv['UVMap']
+                uv_layer = bme.loops.layers.uv['UVMap'] if not is_bake else bme.loops.layers.uv['UV_Projected']
                 for edge in bme.edges:
                     if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
                         continue
@@ -337,6 +340,9 @@ def create_bake_meshes(op, context):
                     vlm_utils.project_uv(camera, dup, proj_ar)
                 print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
             
+            if is_bake:
+                dup.data.uv_layers.remove(dup.data.uv_layers['UV_Projected'])
+
             objects_to_join.append(dup)
         
         if len(objects_to_join) == 0: continue
