@@ -353,6 +353,22 @@ class VLM_OT_select_indirect(Operator):
         return {'FINISHED'}
 
 
+class VLM_OT_select_baked(Operator):
+    bl_idname = "vlm.select_baked_operator"
+    bl_label = "Select Baked"
+    bl_description = "Select objects that use traditional baking"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT'
+
+    def execute(self, context):
+        for obj in context.scene.collection.all_objects:
+            obj.select_set(obj.name in context.view_layer.objects and obj.vlmSettings.use_bake)
+        return {'FINISHED'}
+
+
 class VLM_OT_compute_render_groups(Operator):
     bl_idname = "vlm.compute_render_groups_operator"
     bl_label = "1. Groups"
@@ -1019,6 +1035,7 @@ class VLM_PT_3D_Tools(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
         layout.prop(context.scene.vlmSettings, 'render_group_select', expand=True, text='Select Group', icon='RESTRICT_RENDER_OFF')
+        layout.operator(VLM_OT_select_baked.bl_idname)
         layout.operator(VLM_OT_select_indirect.bl_idname)
         layout.operator(VLM_OT_select_occluded.bl_idname)
         layout.separator()
@@ -1141,6 +1158,7 @@ classes = (
     VLM_OT_clear_render_group_cache,
     VLM_OT_select_render_group,
     VLM_OT_select_nestmap_group,
+    VLM_OT_select_baked,
     VLM_OT_select_indirect,
     VLM_OT_select_occluded,
     VLM_OT_toggle_no_exp_modifier,
