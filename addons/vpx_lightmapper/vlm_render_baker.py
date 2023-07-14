@@ -624,7 +624,8 @@ def render_all_groups(op, context):
                 if state:
                     print(msg)
                     img_nodes = []
-                    bake_img = bpy.data.images.new('Bake', obj.vlmSettings.bake_width, obj.vlmSettings.bake_height, alpha=True, float_buffer=True)
+                    render_ratio = context.scene.vlmSettings.render_ratio / 100
+                    bake_img = bpy.data.images.new('Bake', int(obj.vlmSettings.bake_width * render_ratio), int(obj.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
                     for mat in obj.data.materials:
                         ti = mat.node_tree.nodes.new("ShaderNodeTexImage")
                         ti.image = bake_img
