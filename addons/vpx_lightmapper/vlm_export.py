@@ -959,6 +959,7 @@ def export_vpx(op, context):
         code += push_map_array(export_name(sync_trans), 'LM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
         code += push_map_array(export_name(sync_trans), 'BM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
         code += push_map_array(export_name(sync_trans), 'BL', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
+    code += push_map_array('World', 'BM', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
 
     code += "\n"
     code += "\n"
