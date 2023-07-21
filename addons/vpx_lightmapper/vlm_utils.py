@@ -326,6 +326,14 @@ def get_packmap_bakepath(context, mat):
     return f'{bakepath}{light} - Group {render}.exr' if isinstance(render, int) else f'{bakepath}{light} - Bake - {render}.exr'
 
 
+def get_packmap_normalmappath(context, mat):
+    render = mat.get('VLM.Render')
+    bakepath = get_bakepath(context, type='RENDERS')
+    if bakepath is None or render is None:
+        return None
+    return f'{bakepath}NormalMap - Group {render}.exr' if isinstance(render, int) else f'{bakepath}NormalMap - Bake - {render}.exr'
+
+
 def set_selected_and_active(context, obj):
     bpy.ops.object.select_all(action='DESELECT')
     context.view_layer.objects.active = obj

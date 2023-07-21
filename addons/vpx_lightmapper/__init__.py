@@ -262,9 +262,11 @@ class VLM_Object_props(PropertyGroup):
     bake_to: PointerProperty(name="Bake To", type=bpy.types.Object, description="Target object used as bake mesh target")
     bake_mask: PointerProperty(name="Bake Mask", type=bpy.types.Object, description="Object to be rendered with this object (for example for alpha layers)")
     indirect_only: BoolProperty(name="Indirect", description="Do not bake this object but consider its influence on the scene", default = False)
-    hide_from_others: BoolProperty(name="Hide from others", description="Hide this object from other objects. For example hide flipper bat from playfield. WARNING: this feature has limited support. see doc.", default = False)
+    hide_from_others: BoolProperty(name="Hide from others", description="Hide this object from other objects. For example hide flipper bat from playfield. WARNING: this feature has limited support. see doc", default = False)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     layback_offset: FloatProperty(name="Layback offset", description="Y offset caused by current layback", default = 0.0)
+    bake_normalmap: BoolProperty(name="Normal Map", description="Bake a normal map", default = False)
+    bake_orm: BoolProperty(name="O.R.M.", description="Bake an ORM map (Occlusion/Roughness/Metallic)", default = False)
     use_bake: BoolProperty(name="Use Bake", description="Use traditional baking instead of render + UV projection. The object needs to be unwrapped and use point of view aware materials", default = False)
     bake_width: IntProperty(name="Bake width:", description="Width of bake texture", default = 256, min = 2, max=8192)
     bake_height: IntProperty(name="Bake height:", description="Height of bake texture", default = 256, min = 2, max=8192)
@@ -954,6 +956,7 @@ class VLM_PT_3D_Bake_Object(bpy.types.Panel):
                     layout.prop(obj.vlmSettings, 'hide_from_others', text='Hide')
                     layout.prop(obj.vlmSettings, 'use_bake')
                     if obj.vlmSettings.use_bake:
+                        layout.prop(obj.vlmSettings, 'bake_normalmap')
                         layout.prop(obj.vlmSettings, 'bake_width')
                         layout.prop(obj.vlmSettings, 'bake_height')
                     else:

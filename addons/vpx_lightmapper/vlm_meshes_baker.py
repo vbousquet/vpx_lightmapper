@@ -166,6 +166,7 @@ def create_bake_meshes(op, context):
         poly_start = 0
         objects_to_join = []
         last_obj = None
+        use_normalmap = False
         for i, obj_name in enumerate(bake_col_object_set):
             dup = bpy.data.objects[obj_name].copy()
             dup.data = dup.data.copy()
@@ -180,6 +181,11 @@ def create_bake_meshes(op, context):
             dup.data.validate()
             is_bake = dup.vlmSettings.use_bake
             optimize_mesh = not is_bake and not dup.vlmSettings.no_mesh_optimization
+            if dup.vlmSettings.bake_normalmap:
+                if not use_normalmap and len(objects_to_join) > 0:
+                    print(f". ERROR: '{bake_name}' use normal map for '{obj_name}' while other objects dont. Normal map disabled.")
+                else:
+                    use_normalmap = True
 
             # Apply modifiers
             with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -201,7 +207,7 @@ def create_bake_meshes(op, context):
 
             # Save normals
             dup.data.validate()
-            dup.data.calc_normals_split() # compute loop normal (would 0,0,0 otherwise since if free them above)
+            dup.data.calc_normals_split() # compute loop normal (would 0,0,0 otherwise since we free them above)
             
             # Switch material to baked ones (needs to be done after applying modifiers which may create material slots)
             for poly in dup.data.polygons:
@@ -398,6 +404,7 @@ def create_bake_meshes(op, context):
             bake_instance.vlmSettings.bake_hdr_scale = 1.0
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
+            bake_instance.vlmSettings.bake_normalmap = use_normalmap
             if is_translucent:
                 bake_instance.vlmSettings.bake_type = 'active'
             elif sync_obj is None:

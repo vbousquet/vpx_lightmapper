@@ -144,7 +144,7 @@ import collections
 NestBlock = namedtuple("NestBlock", "obj bm islands pix_count")
 NestMap = namedtuple("NestMap", "padding islands targets target_heights")
 
-def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_name, nestmap_offset):
+def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_name, nestmap_offset, with_normalmap):
     '''Perform nesting of a group of objects to a minimal (not optimal) set of nestmaps
     Eventually splitting objects that can't fit into a single nestmap.
     '''
@@ -225,7 +225,7 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                 print(f'. Nesting succeeded.')
                 # Success: store result for later nestmap render
                 tick_time = time.time()
-                render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
+                render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index, with_normalmap)
                 render_length = time.time() - tick_time
                 nestmap_index = nestmap_index + 1
                 for block in selection:
@@ -365,7 +365,7 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                     # Render the resulting nestmap
                     nestmap = NestMap(padding, processed_islands, targets[0:1], target_heights[0:1])
                     tick_time = time.time()
-                    render_nestmap(context, [NestBlock(obj, None, processed_islands, processed_pix_count)], uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
+                    render_nestmap(context, [NestBlock(obj, None, processed_islands, processed_pix_count)], uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index, with_normalmap)
                     render_length = time.time() - tick_time
                     nestmap_index = nestmap_index + 1
                     print(f'. {len(processed_islands)} islands were nested on the first page and kept.')
@@ -404,7 +404,7 @@ def cache_clear(cache):
     cache.clear()
 
 
-def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_index):
+def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_index, with_normalmap):
     padding, islands, targets, target_heights = nestmap
     n_render_groups = vlm_utils.get_n_render_groups(context)
     nestmaps = [np.zeros((len(target) * height * 4), 'f') for target, height in zip(targets, target_heights)]
@@ -412,6 +412,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
 
     # Offscreen surface where the nestmaps are rendered
     offscreen_renders = []
+    offscreen_normalmaps = []
     has_alpha = []
     for target, height in zip(targets, target_heights):
         offscreen_render = gpu.types.GPUOffScreen(len(target), height, format='RGBA16F')
@@ -419,6 +420,12 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
             fb = gpu.state.active_framebuffer_get()
             fb.clear(color=(0.0, 0.0, 0.0, 0.0))
         offscreen_renders.append(offscreen_render)
+        if with_normalmap:
+            offscreen_render = gpu.types.GPUOffScreen(len(target), height, format='RGBA16F')
+            with offscreen_render.bind():
+                fb = gpu.state.active_framebuffer_get()
+                fb.clear(color=(0.0, 0.0, 0.0, 0.0))
+            offscreen_normalmaps.append(offscreen_render)
         has_alpha.append(False)
     render_vs = '''
         in vec2 pos; 
@@ -549,9 +556,9 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                 obj.vlmSettings.bake_nestmap = nestmap_index
             
             # Loaded the bake and mask if not already loaded and cached
-            render_path = vlm_utils.get_packmap_bakepath(context, island_obj.data.materials[island['mat_index']])
-            island_render = cache_get(image_cache, render_path)
-            if island_render is None:
+            island_render = cache_get(image_cache, vlm_utils.get_packmap_bakepath(context, island_obj.data.materials[island['mat_index']]))
+            island_normalmap = cache_get(image_cache, vlm_utils.get_packmap_normalmappath(context, island_obj.data.materials[island['mat_index']])) if with_normalmap else None
+            if island_render is None and island_normalmap is None:
                 print('. No render (likely uninfluenced lightmap), skipping island')
                 continue
             #FIXME for traditional bake, use the solid bake alpha channel ?
@@ -620,27 +627,42 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
 
             # Copy the render, applying offset, rotation, flipping, masking, border/padding fading, and lightmap seam fading
             gpu.state.blend_set('ALPHA')
-            with offscreen_renders[n].bind():
-                render_shader.bind()
-                render_shader.uniform_float("src_size", (src_w, src_h))
-                render_shader.uniform_float("dst_size", (target_w, target_h))
-                render_shader.uniform_float("ref_width", mask_w)
-                render_shader.uniform_float("pos_ref", (min_x - padding, min_y - padding))
-                render_shader.uniform_float("pos_dec", (x, y))
-                render_shader.uniform_int("rot", rot)
-                render_shader.uniform_int("padding", padding)
-                render_shader.uniform_sampler("render_mask", gpu.texture.from_image(island_render_mask))
-                render_shader.uniform_sampler("seam_mask", offscreen_seams.texture_color)
-                render_shader.uniform_sampler("render", gpu.texture.from_image(island_render))
-                render_batch.draw(render_shader)
-                # fb = gpu.state.active_framebuffer_get()
-                # image_data = fb.read_color(0, 0, target_w, target_h, 4, 0, 'UBYTE')
-                # image_data.dimensions = target_w * target_h * 4
-                # if 'Debug-Out' not in bpy.data.images:
-                    # bpy.data.images.new('Debug-Out', target_w, target_h, alpha=True, float_buffer=True)
-                # pack_image = bpy.data.images['Debug-Out']
-                # pack_image.scale(target_w, target_h)
-                # pack_image.pixels = [v / 255 for v in image_data]
+            if not island_render is None:
+                with offscreen_renders[n].bind():
+                    render_shader.bind()
+                    render_shader.uniform_float("src_size", (src_w, src_h))
+                    render_shader.uniform_float("dst_size", (target_w, target_h))
+                    render_shader.uniform_float("ref_width", mask_w)
+                    render_shader.uniform_float("pos_ref", (min_x - padding, min_y - padding))
+                    render_shader.uniform_float("pos_dec", (x, y))
+                    render_shader.uniform_int("rot", rot)
+                    render_shader.uniform_int("padding", padding)
+                    render_shader.uniform_sampler("render_mask", gpu.texture.from_image(island_render_mask))
+                    render_shader.uniform_sampler("seam_mask", offscreen_seams.texture_color)
+                    render_shader.uniform_sampler("render", gpu.texture.from_image(island_render))
+                    render_batch.draw(render_shader)
+                    # fb = gpu.state.active_framebuffer_get()
+                    # image_data = fb.read_color(0, 0, target_w, target_h, 4, 0, 'UBYTE')
+                    # image_data.dimensions = target_w * target_h * 4
+                    # if 'Debug-Out' not in bpy.data.images:
+                        # bpy.data.images.new('Debug-Out', target_w, target_h, alpha=True, float_buffer=True)
+                    # pack_image = bpy.data.images['Debug-Out']
+                    # pack_image.scale(target_w, target_h)
+                    # pack_image.pixels = [v / 255 for v in image_data]
+            if with_normalmap and not island_normalmap is None:
+                with offscreen_normalmaps[n].bind():
+                    render_shader.bind()
+                    render_shader.uniform_float("src_size", (src_w, src_h))
+                    render_shader.uniform_float("dst_size", (target_w, target_h))
+                    render_shader.uniform_float("ref_width", mask_w)
+                    render_shader.uniform_float("pos_ref", (min_x - padding, min_y - padding))
+                    render_shader.uniform_float("pos_dec", (x, y))
+                    render_shader.uniform_int("rot", rot)
+                    render_shader.uniform_int("padding", padding)
+                    render_shader.uniform_sampler("render_mask", gpu.texture.from_image(island_render_mask))
+                    render_shader.uniform_sampler("seam_mask", offscreen_seams.texture_color)
+                    render_shader.uniform_sampler("render", gpu.texture.from_image(island_normalmap))
+                    render_batch.draw(render_shader)
 
     # Cleanup loaded images
     cache_clear(image_cache)
@@ -686,6 +708,39 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                 if span[0] < target_h:
                     filled += min(target_h - 1, span[1]) - span[0] + 1
         print(f'. Texture #{i} has a size of {target_w}x{target_h} for a fill rate of {1.0 - (filled/(target_w*target_h)):>6.2%} (alpha: {has_alpha[i]})')
+    
+    # Save the normalmap nestmaps
+    if with_normalmap:
+        base_filepath = f'{vlm_utils.get_bakepath(context, type="EXPORT")}NormalMap {nestmap_index}'
+        for i, target in enumerate(targets):
+            target_w = len(target)
+            target_h = target_heights[i]
+
+            image_data = offscreen_normalmaps[i].texture_color.read()
+            image_data.dimensions = target_w * target_h * 4
+            pack_image = bpy.data.images.new(f'Nest {i}', target_w, target_h, alpha=has_alpha[i], float_buffer=True)
+            pack_image.pixels = [v for v in image_data]
+            
+            if len(targets) > 1:
+                path_exr = bpy.path.abspath(f'{base_filepath} {i}.exr')
+                path_png = bpy.path.abspath(f'{base_filepath} {i}.png')
+                path_webp = bpy.path.abspath(f'{base_filepath} {i}.webp')
+            else:
+                path_exr = bpy.path.abspath(f'{base_filepath}.exr')
+                path_png = bpy.path.abspath(f'{base_filepath}.png')
+                path_webp = bpy.path.abspath(f'{base_filepath}.webp')
+            scene.render.image_settings.color_mode = 'RGB'
+            scene.render.image_settings.file_format = 'OPEN_EXR'
+            scene.render.image_settings.exr_codec = 'DWAA'
+            scene.render.image_settings.color_depth = '16'
+            pack_image.save_render(path_exr, scene=scene)
+            # Saving through save_render would save a linear PNG, not an sRGB one which is required by VPX
+            pack_image.filepath_raw = path_png
+            pack_image.file_format = 'PNG'
+            pack_image.save()
+            bpy.data.images.remove(pack_image)
+            Image.open(path_png).save(path_webp, format = "WebP", lossless = True)
+    
     bpy.data.scenes.remove(scene)
     print(f'. Nest map generated and saved to {base_filepath}')
 

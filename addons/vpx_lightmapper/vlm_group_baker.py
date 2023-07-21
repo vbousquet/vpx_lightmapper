@@ -131,6 +131,9 @@ def compute_render_groups(op, context):
             bpy.ops.render.render(write_still=True, scene=scene.name)
             for o in obj_group: scene.collection.objects.unlink(o)
             im = Image.open(bpy.path.abspath(scene.render.filepath))
+        if obj.vlmSettings.use_bake:
+            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it use traditional baking instead of projective baking")
+            continue
         # Evaluate if this object can be grouped with previous renders (no overlaps)
         for p in range(opt_mask_pad):
             im.alpha_composite(im, (0, 1))
@@ -138,11 +141,6 @@ def compute_render_groups(op, context):
             im.alpha_composite(im, (1, 0))
             im.alpha_composite(im, (-1, 0))
         alpha = im.tobytes("raw", "A")
-        if obj.vlmSettings.use_bake:
-            im = Image.frombytes('L', (scene.render.resolution_x, scene.render.resolution_y), bytes(alpha), 'raw')
-            im.save(bpy.path.abspath(f'{bakepath}Mask - Bake - {obj.name} (Padded LD).png'))
-            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it use traditional baking instead of projective baking")
-            continue
         n_groups = len(object_masks)
         g = n_groups
         for group_index in range(n_groups):

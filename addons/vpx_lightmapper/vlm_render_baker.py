@@ -345,7 +345,8 @@ def render_all_groups(op, context):
     n_lighting_situations = len(light_scenarios)
     n_render_performed = n_skipped = n_existing = 0
     n_bake_objects = len([obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake])
-    n_total_render = (n_render_groups + n_bake_objects) * n_lighting_situations
+    n_bake_normalmaps = len([obj for obj in bake_col.all_objects if obj.vlmSettings.bake_normalmap])
+    n_total_render = (n_render_groups + n_bake_objects) * n_lighting_situations + n_bake_normalmaps
     print(f'\nEvaluating {n_total_render} renders ({n_render_groups} render groups and {n_bake_objects} bakes for {n_lighting_situations} lighting situations)')
     
     # Perform the actual rendering of all the passes
@@ -591,46 +592,45 @@ def render_all_groups(op, context):
         elapsed = time.time() - start_time
         
         # Render object mask (or load from cache if available)
-        mask_scene.render.filepath = f'{mask_path}Mask - Bake - {vlm_utils.clean_filename(obj.name)} (Padded LD).png'
+        mask_scene.render.filepath = f'{mask_path}{vlm_utils.clean_filename(obj.name)}.png'
         need_render = not os.path.exists(bpy.path.abspath(mask_scene.render.filepath))
         if not need_render:
             im = Image.open(bpy.path.abspath(mask_scene.render.filepath))
-            obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "L"))
             need_render = im.size[0] != mask_scene.render.resolution_x or im.size[1] != mask_scene.render.resolution_y
         if need_render:
             mask_scene.collection.objects.link(obj)
             bpy.ops.render.render(write_still=True, scene=mask_scene.name)
             mask_scene.collection.objects.unlink(obj)
             im = Image.open(bpy.path.abspath(mask_scene.render.filepath))
-            for p in range(opt_mask_pad):
-                im.alpha_composite(im, (0, 1))
-                im.alpha_composite(im, (0, -1))
-                im.alpha_composite(im, (1, 0))
-                im.alpha_composite(im, (-1, 0))
-            obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "L"))
+        for p in range(opt_mask_pad):
+            im.alpha_composite(im, (0, 1))
+            im.alpha_composite(im, (0, -1))
+            im.alpha_composite(im, (1, 0))
+            im.alpha_composite(im, (-1, 0))
+        obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "A"))
         
         # Bake object for each lighting scenario
+        render_ratio = context.scene.vlmSettings.render_ratio / 100.0
+        img_nodes = []
+        bake_img = bpy.data.images.new('Bake', int(obj.vlmSettings.bake_width * render_ratio), int(obj.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
+        for mat in obj.data.materials:
+            ti = mat.node_tree.nodes.new("ShaderNodeTexImage")
+            ti.image = bake_img
+            mat.node_tree.nodes.active = ti
+            img_nodes.append(ti)
         for i, scenario in enumerate(light_scenarios, start=1):
             name, is_lightmap, light_col, lights = scenario
             render_path = f'{bakepath}{scenario[0]} - Bake - {obj.name}.exr'
+            msg = f". Baking '{obj.name}' for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
                 state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, obj_mask, render_col)
                 elapsed = time.time() - start_time
-                msg = f". Baking '{obj.name}' for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
                 if elapsed > 0 and n_render_performed > 0:
                     elapsed_per_render = elapsed / n_render_performed
                     remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
                     msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
                 if state:
                     print(msg)
-                    img_nodes = []
-                    render_ratio = context.scene.vlmSettings.render_ratio / 100
-                    bake_img = bpy.data.images.new('Bake', int(obj.vlmSettings.bake_width * render_ratio), int(obj.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
-                    for mat in obj.data.materials:
-                        ti = mat.node_tree.nodes.new("ShaderNodeTexImage")
-                        ti.image = bake_img
-                        mat.node_tree.nodes.active = ti
-                        img_nodes.append(ti)
                     scene.render.filepath = render_path
                     scene.render.image_settings.file_format = 'OPEN_EXR'
                     scene.render.image_settings.color_mode = 'RGB' if is_lightmap else 'RGBA'
@@ -640,9 +640,6 @@ def render_all_groups(op, context):
                     with context.temp_override(scene=scene, active_object=obj, selected_objects=[obj]):
                         bpy.ops.object.bake(type='COMBINED', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
                         bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
-                    for mat, ti in zip(obj.data.materials, img_nodes):
-                        mat.node_tree.nodes.remove(ti)
-                    bpy.data.images.remove(bake_img)
                     restore_func(state)
                     print('\n')
                     n_render_performed += 1
@@ -652,6 +649,33 @@ def render_all_groups(op, context):
             else:
                 print(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
+        if obj.vlmSettings.bake_normalmap:
+            render_path = f'{bakepath}NormalMap - Bake - {obj.name}.exr'
+            if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
+                elapsed = time.time() - start_time
+                msg = f". Baking '{obj.name}' normal map. Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+                if elapsed > 0 and n_render_performed > 0:
+                    elapsed_per_render = elapsed / n_render_performed
+                    remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
+                    msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
+                print(msg)
+                scene.render.filepath = render_path
+                scene.render.image_settings.file_format = 'OPEN_EXR'
+                scene.render.image_settings.color_mode = 'RGB'
+                scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
+                scene.render.image_settings.color_depth = '16'
+                # context needs an active, linked, not hidden, mesh
+                with context.temp_override(scene=scene, active_object=obj, selected_objects=[obj]):
+                    bpy.ops.object.bake(type='NORMAL', normal_space='OBJECT', normal_r='POS_X', normal_g='POS_Y', normal_b='POS_Z', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
+                    bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
+                print('\n')
+                n_render_performed += 1
+            else:
+                print(f'{msg} - Skipped since it is already rendered and cached')
+                n_existing += 1
+        for mat, ti in zip(obj.data.materials, img_nodes):
+            mat.node_tree.nodes.remove(ti)
+        bpy.data.images.remove(bake_img)
         if obj.vlmSettings.bake_mask:
             render_col.objects.unlink(obj.vlmSettings.bake_mask)
         if not obj.vlmSettings.hide_from_others:
