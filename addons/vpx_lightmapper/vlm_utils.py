@@ -30,7 +30,7 @@ from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
 from . import vlm_collections
 from . import biff_io
-import olefile
+
 
 def get_global_scale(context):
     if context.scene.vlmSettings.units_mode == 'vpx':
@@ -577,8 +577,3 @@ def render_blueprint(context, height, is_solid):
 
     buffer.dimensions = width * height * 4
     image.pixels = [v / 255 for v in buffer]
-
-def get_vpx_file_version(context, file_path):
-    with olefile.OleFileIO(file_path) as ole:
-        version = biff_io.BIFF_reader(ole.openstream('GameStg/Version').read()).get_32()
-        return version

@@ -36,6 +36,12 @@ def export_name(object_name):
     return object_name.replace(".", "_").replace(" ", "_").replace("-", "_")
 
 
+def get_vpx_file_version(context, file_path):
+    with olefile.OleFileIO(file_path) as ole:
+        version = biff_io.BIFF_reader(ole.openstream('GameStg/Version').read()).get_32()
+        return version
+
+
 def elem_ref(name):
     name = name[:31] if len(name) > 31 else name
     if ' ' in name or '.' in name:
