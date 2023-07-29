@@ -54,14 +54,14 @@ def render_nestmaps(op, context):
         obj.data.uv_layers.active = uvmap
         obj.data.uv_layers.new(name='UVMap Nested')
         obj.data.uv_layers.active = uvmap
-        nm_mat = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True), None)
+        has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None)  is not None
         if obj.vlmSettings.bake_type == 'active' or obj.vlmSettings.bake_hdr_range <= 1.0:
-            if nm_mat is not None:
+            if has_normalmap:
                 to_nest_ldr_nm.append(obj)
             else:
                 to_nest_ldr.append(obj)
-        else: # VPX only supports opaque HDR
-            if nm_mat is not None:
+        else: # VPX only supports opaque HDR (luckily we don't really need this since lightmaps are RGB only)
+            if has_normalmap:
                 to_nest_hdr_nm.append(obj)
             else:
                 to_nest_hdr.append(obj)
@@ -71,19 +71,19 @@ def render_nestmaps(op, context):
     max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size))
     if len(to_nest_ldr) > 0:
         print('\nNesting all LDR parts')
-        n_ldr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps, False)
+        n_ldr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps)
         n_nestmaps += n_ldr_nestmaps
     if len(to_nest_hdr) > 0:
         print('\nNesting all HDR parts')
-        n_hdr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_hdr, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps, False)
+        n_hdr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_hdr, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps)
         n_nestmaps += n_hdr_nestmaps
     if len(to_nest_ldr_nm) > 0:
         print('\nNesting all LDR parts with normal maps')
-        n_ldr_nm_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr_nm, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps, True)
+        n_ldr_nm_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr_nm, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps)
         n_nestmaps += n_ldr_nm_nestmaps
     if len(to_nest_hdr_nm) > 0:
         print('\nNesting all HDR parts with normal maps')
-        n_hdr_nm_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_hdr_nm, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps, True)
+        n_hdr_nm_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_hdr_nm, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps)
         n_nestmaps += n_hdr_nm_nestmaps
 
     # Restore initial state
