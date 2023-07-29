@@ -67,7 +67,7 @@ def export_obj(op, context):
             op.report({'ERROR'}, 'Texture size must be greater than render height')
             return {'CANCELLED'}
 
-        n_nestmap, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, export_name, 0)
+        n_nestmap, splitted_objects = vlm_nest.nest(context, to_nest, 'UVMap', 'UVMap Nested', render_size, max_tex_size, max_tex_size, export_name, 0, False)
         to_nest.extend(splitted_objects)
 
         # Export Wavefront objects

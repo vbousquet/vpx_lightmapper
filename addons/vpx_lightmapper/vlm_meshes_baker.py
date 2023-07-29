@@ -32,20 +32,19 @@ from . import vlm_collections
 from PIL import Image # External dependency
 
 
-def get_material(light_name, is_lightmap, render_id):
-    ''' Find or create the material for the given lighting scenario, for the given object id (aither render group number or bake object name)
+def get_material(light_name, is_lightmap, is_group, has_normalmap, render_id):
+    ''' Find or create the material for the given lighting scenario, for the given object id (either render group number or bake object name)
     '''
-    for mat in bpy.data.materials:
-        light = mat.get('VLM.Light')
-        render = mat.get('VLM.Render')
-        if light == light_name and render == render_id:
-            return mat
-    mat_name = f'VLM.{light_name}.RG{render_id}' if isinstance(render_id, int) else f'VLM.{light_name}.{render_id}'
-    packmat = bpy.data.materials["VPX.Core.Mat.PackMap"]
-    mat = packmat.copy()
-    mat.name = mat_name
+    mat = next((mat for mat in bpy.data.materials if mat.get('VLM.Light') == light_name and mat.get('VLM.Render') == render_id), None)
+    if mat is None:
+        packmat = bpy.data.materials["VPX.Core.Mat.PackMap"]
+        mat = packmat.copy()
+    mat.name = f'VLM.{light_name}.RG{render_id}' if is_group else f'VLM.{light_name}.{render_id}'
     mat['VLM.Light'] = light_name
     mat['VLM.Render'] = render_id
+    mat['VLM.IsGroup'] = is_group
+    mat['VLM.IsLightmap'] = is_lightmap
+    mat['VLM.HasNormalMap'] = has_normalmap
     if is_lightmap:
         mat.blend_method = 'BLEND'
         mat.shadow_method = 'NONE'
@@ -58,10 +57,14 @@ def get_material(light_name, is_lightmap, render_id):
 
 
 def adapt_materials(mesh, light_name, is_lightmap):
+    ''' Replace mesh's materials by the ones corresponding to the given light scenario
+    '''
     for i, mat in enumerate(mesh.materials):
+        is_group = mat.get('VLM.IsGroup')
+        has_normalmap = mat.get('VLM.HasNormalMap')
         render_id = mat.get('VLM.Render')
         if render_id is not None:
-            mesh.materials[i] = get_material(light_name, is_lightmap, render_id)
+            mesh.materials[i] = get_material(light_name, is_lightmap, is_group, has_normalmap, render_id)
 
 
 def create_bake_meshes(op, context):
@@ -166,7 +169,7 @@ def create_bake_meshes(op, context):
         poly_start = 0
         objects_to_join = []
         last_obj = None
-        use_normalmap = False
+        
         for i, obj_name in enumerate(bake_col_object_set):
             dup = bpy.data.objects[obj_name].copy()
             dup.data = dup.data.copy()
@@ -181,11 +184,6 @@ def create_bake_meshes(op, context):
             dup.data.validate()
             is_bake = dup.vlmSettings.use_bake
             optimize_mesh = not is_bake and not dup.vlmSettings.no_mesh_optimization
-            if dup.vlmSettings.bake_normalmap:
-                if not use_normalmap and len(objects_to_join) > 0:
-                    print(f". ERROR: '{bake_name}' use normal map for '{obj_name}' while other objects dont. Normal map disabled.")
-                else:
-                    use_normalmap = True
 
             # Apply modifiers
             with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -213,7 +211,13 @@ def create_bake_meshes(op, context):
             for poly in dup.data.polygons:
                 poly.material_index = 0
             dup.data.materials.clear()
-            dup.data.materials.append(get_material('Default', False, obj_name if is_bake else dup.vlmSettings.render_group))
+            if is_bake:
+                use_normalmap = dup.vlmSettings.bake_normalmap
+            else:
+                use_normalmap = False
+                for obj in [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == dup.vlmSettings.render_group and not obj.vlmSettings.use_bake]:
+                    use_normalmap = use_normalmap or obj.vlmSettings.bake_normalmap
+            dup.data.materials.append(get_material('Default', False, not is_bake, use_normalmap, obj_name if is_bake else dup.vlmSettings.render_group))
             
             # Create base UV projected layer
             if is_bake:
@@ -404,7 +408,6 @@ def create_bake_meshes(op, context):
             bake_instance.vlmSettings.bake_hdr_scale = 1.0
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
-            bake_instance.vlmSettings.bake_normalmap = use_normalmap
             if is_translucent:
                 bake_instance.vlmSettings.bake_type = 'active'
             elif sync_obj is None:

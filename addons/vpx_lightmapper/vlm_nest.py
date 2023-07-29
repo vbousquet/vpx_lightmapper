@@ -711,7 +711,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
     
     # Save the normalmap nestmaps
     if with_normalmap:
-        base_filepath = f'{vlm_utils.get_bakepath(context, type="EXPORT")}NormalMap {nestmap_index}'
+        base_filepath = f'{vlm_utils.get_bakepath(context, type="EXPORT")}{nestmap_name} {nestmap_index} - NM'
         for i, target in enumerate(targets):
             target_w = len(target)
             target_h = target_heights[i]

@@ -54,13 +54,14 @@ def render_nestmaps(op, context):
         obj.data.uv_layers.active = uvmap
         obj.data.uv_layers.new(name='UVMap Nested')
         obj.data.uv_layers.active = uvmap
+        nm_mat = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True), None)
         if obj.vlmSettings.bake_type == 'active' or obj.vlmSettings.bake_hdr_range <= 1.0:
-            if obj.vlmSettings.bake_normalmap:
+            if nm_mat is not None:
                 to_nest_ldr_nm.append(obj)
             else:
                 to_nest_ldr.append(obj)
         else: # VPX only supports opaque HDR
-            if obj.vlmSettings.bake_normalmap:
+            if nm_mat is not None:
                 to_nest_hdr_nm.append(obj)
             else:
                 to_nest_hdr.append(obj)
