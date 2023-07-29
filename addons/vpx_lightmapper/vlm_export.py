@@ -36,12 +36,6 @@ def export_name(object_name):
     return object_name.replace(".", "_").replace(" ", "_").replace("-", "_")
 
 
-def get_vpx_file_version(context, file_path):
-    with olefile.OleFileIO(file_path) as ole:
-        version = biff_io.BIFF_reader(ole.openstream('GameStg/Version').read()).get_32()
-        return version
-
-
 def elem_ref(name):
     name = name[:31] if len(name) > 31 else name
     if ' ' in name or '.' in name:
@@ -80,7 +74,7 @@ def export_vpx(op, context):
     . Add base materials with 'VLM.' prefixed name
     . Add all bakes as primitives in the 'VLM.Visuals' layer
     . Create a helper script file with the light/lightmap and movable sync code
-    . If a playfield_mesh exists, hide it and rename it to playfield_phys
+    . Hide playfield_mesh if it exists, otherwise creates it
     """
     if context.blend_data.filepath == '':
         op.report({'ERROR'}, 'You must save your project before exporting')
@@ -111,7 +105,7 @@ def export_vpx(op, context):
     print(f'\nExporting bake results to {bpy.path.basename(output_path)}')
 
     src_storage = olefile.OleFileIO(input_path)
-    version = vlm_utils.get_vpx_file_version(context, input_path)
+    version = biff_io.BIFF_reader(src_storage.openstream('GameStg/Version').read()).get_32()
     
     dst_storage = pythoncom.StgCreateStorageEx(output_path, storagecon.STGM_TRANSACTED | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, storagecon.STGFMT_DOCFILE, 0, pythoncom.IID_IStorage, None, None)
     dst_gamestg = dst_storage.CreateStorage("GameStg", storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
@@ -152,7 +146,6 @@ def export_vpx(op, context):
     table_flashers = []
     baked_vpx_lights = set(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in light_col.all_objects))
     baked_vpx_objects = list(itertools.chain.from_iterable(o.vlmSettings.vpx_object.split(';') for o in bake_col.all_objects))
-    if playfield_col: baked_vpx_objects.append('playfield_mesh')
 
     # Remove previous baked models and append the new ones, also hide/remove baked items
     n_read_item = n_game_items = 0
@@ -196,11 +189,7 @@ def export_vpx(op, context):
             reflection_field = visibility_field = False
             is_part_baked = is_baked
             if item_data.tag == 'NAME':
-                if (name == 'playfield_mesh' or name == 'playfield_phys') and playfield_col:
-                    item_data.skip(24) # Rename to playfield_phys and hide
-                    item_data.put_u32(0x00680070)
-                    item_data.put_u32(0x00730079)
-                    is_playfield_mesh = True
+                is_playfield_mesh = name == 'playfield_mesh'
             elif item_data.tag == 'LANR':
                 layer_name = item_data.get_string()
             elif item_data.tag == 'REEN':
@@ -268,7 +257,8 @@ def export_vpx(op, context):
                     if item_data.tag == 'FHEI':
                         item_data.skip(-4)
                         item_data.put_float(-2800)
-            if is_part_baked and (visibility_field or reflection_field):
+            # Hide baked parts
+            if (is_part_baked or is_playfield_mesh) and visibility_field:
                 item_data.put_bool(False)
             item_data.skip_tag()
         if is_playfield_mesh and not layer_name == 'VLM.Visuals':
@@ -305,12 +295,6 @@ def export_vpx(op, context):
     # Add new bake models and default playfield collider if needed
     meshes_to_export = sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}')
 
-    if version < 1080 and playfield_col:    
-        playfield_mesh = next(obj for obj in meshes_to_export if (obj.vlmSettings.bake_type != 'lightmap' and obj.vlmSettings.bake_objects == playfield_col.name))
-        pf_bm_dup = playfield_mesh.copy()
-        pf_bm_dup.name = 'playfield_mesh_bm'
-        meshes_to_export.append(pf_bm_dup)
-
     pfobj = None
     pf_friction = pf_elasticity = pf_falloff = pf_scatter = 0
     if needs_playfield_physics:
@@ -327,9 +311,7 @@ def export_vpx(op, context):
         pfmesh.from_pydata(vert, [], [(0, 1, 2), (1, 3, 2)])
         pfmesh.uv_layers.new(name='UVMap Nested')
         pfobj = bpy.data.objects.new("VPX.Mesh.Playfield.Exp", pfmesh)
-        # FIXME For the time being, for some reason I can't get VPX to render the right playfield
-        meshes_to_export.insert(0, pfobj) # collidable playfield_mesh must be the first
-        # meshes_to_export.append(pfobj) # collidable playfield_mesh must be the last
+        meshes_to_export.insert(0, pfobj)
         br = biff_io.BIFF_reader(src_storage.openstream('GameStg/GameData').read())
         while not br.is_eof():
             br.next()
@@ -342,7 +324,6 @@ def export_vpx(op, context):
             elif br.tag == "PFSC":
                 pf_scatter = br.get_float()
             br.skip_tag()
-    new_playfield_image = None
     bm_room_meshes = []
     for obj in meshes_to_export:
         obj.data.validate()
@@ -351,15 +332,12 @@ def export_vpx(op, context):
         if not uv_layer_nested:
             print(f'. Missing nested uv map for {obj.name}')
             continue
-        is_light = obj.vlmSettings.bake_type == 'lightmap'
+        is_lightmap = obj.vlmSettings.bake_type == 'lightmap'
         is_active = obj.vlmSettings.bake_type == 'active'
         is_static = obj.vlmSettings.bake_type == 'static'
         is_movable = obj.vlmSettings.bake_sync_trans != ''
-        if version < 1080:
-            is_playfield = playfield_col != '' and not is_light and obj.vlmSettings.bake_objects == playfield_col.name and obj.name != 'playfield_mesh_bm'
-        else:
-            is_playfield = playfield_col != '' and not is_light and obj.vlmSettings.bake_objects == playfield_col.name
-        if is_playfield: new_playfield_image = f'VLM.Nestmap{obj.vlmSettings.bake_nestmap}'
+        is_playfield = playfield_col != '' and not is_lightmap and obj.vlmSettings.bake_objects == playfield_col.name
+        has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None) is not None
         depth_bias = None
         for col_name in obj.vlmSettings.bake_objects.split(';'):
             col = vlm_collections.get_collection(bake_col, col_name, create=False)
@@ -370,7 +348,7 @@ def export_vpx(op, context):
             elif obj != pfobj:
                 print(f'ERROR: {obj.name} contains object of missing bake collection {col}')
         if not depth_bias: depth_bias = 0
-        if is_light: depth_bias = depth_bias - 10
+        if is_lightmap: depth_bias = depth_bias - 10
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', obj.location[0]/global_scale, -obj.location[1]/global_scale, obj.location[2]/global_scale)
@@ -407,16 +385,12 @@ def export_vpx(op, context):
             writer.write_tagged_float(b'RTV7', 0)
             writer.write_tagged_float(b'RTV8', 0)
         writer.write_tagged_string(b'IMAG', f'VLM.Nestmap{obj.vlmSettings.bake_nestmap}')
-        writer.write_tagged_string(b'NRMA', '')
+        writer.write_tagged_string(b'NRMA', f'VLM.Nestmap{obj.vlmSettings.bake_nestmap} - NM' if has_normalmap else '')
         writer.write_tagged_u32(b'SIDS', 4)
-        writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if is_playfield else 'playfield_physics' if obj == pfobj else export_name(obj.name))
-        # writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if is_playfield or obj == pfobj else export_name(obj.name))
-        writer.write_tagged_string(b'MATR', 'VLM.Lightmap' if is_light else 'VLM.Bake.Active' if is_active else 'VLM.Bake.Solid')
+        writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if obj == pfobj else export_name(obj.name))
+        writer.write_tagged_string(b'MATR', '' if is_lightmap or (obj == pfobj) else 'VLM.Bake.Active' if is_active else 'VLM.Bake.Solid')
         writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
-        if version < 1080:
-            writer.write_tagged_bool(b'TVIS', obj != pfobj and not is_playfield)
-        else:
-            writer.write_tagged_bool(b'TVIS', obj != pfobj)
+        writer.write_tagged_bool(b'TVIS', obj != pfobj)
         writer.write_tagged_bool(b'DTXI', False)
         writer.write_tagged_bool(b'HTEV', obj == pfobj)
         writer.write_tagged_float(b'THRS', 2.0)
@@ -424,7 +398,7 @@ def export_vpx(op, context):
         writer.write_tagged_float(b'ELFO', pf_falloff if obj == pfobj else 0.0)
         writer.write_tagged_float(b'RFCT', pf_friction if obj == pfobj else 0.0)
         writer.write_tagged_float(b'RSCT', pf_scatter if obj == pfobj else 0.0)
-        writer.write_tagged_float(b'EFUI', 0.0 if is_light else 0.1)
+        writer.write_tagged_float(b'EFUI', 0.0 if is_lightmap else 0.1)
         writer.write_tagged_float(b'CORF', 0.0)
         writer.write_tagged_bool(b'CLDR', obj == pfobj)
         writer.write_tagged_bool(b'ISTO', obj != pfobj)
@@ -437,7 +411,7 @@ def export_vpx(op, context):
         writer.write_tagged_string(b'MAPH', '')
         writer.write_tagged_bool(b'OVPH', True if obj == pfobj else False)
         writer.write_tagged_bool(b'DIPT', False)
-        writer.write_tagged_bool(b'OSNM', False)
+        writer.write_tagged_bool(b'OSNM', True)
         writer.write_tagged_string(b'M3DN', f'VLM.{obj.name}')
         indices = []
         vertices = []
@@ -483,41 +457,24 @@ def export_vpx(op, context):
             writer.write_tagged_u32(b'M3CJ', len(compressed_indices))
             writer.write_tagged_data(b'M3CI', compressed_indices)
         writer.write_tagged_float(b'PIDB', depth_bias)
-        writer.write_tagged_bool(b'ADDB', is_light) # Additive blending VPX mod
-        writer.write_tagged_float(b'FALP', 100) # Additive blending VPX mod
+        writer.write_tagged_bool(b'ADDB', is_lightmap)
+        writer.write_tagged_float(b'FALP', 100)
         writer.write_tagged_u32(b'COLR', 0xFFFFFF)
         writer.write_tagged_bool(b'LOCK', True)
         writer.write_tagged_bool(b'LVIS', True)
+        writer.write_tagged_bool(b'ZMSK', False if (is_active or is_lightmap) else True)
         writer.write_tagged_u32(b'LAYR', 0)
-        writer.write_tagged_string(b'LANR', 'VLM.Lightmaps' if is_light else 'VLM.Visuals')
-        # For VPX 10.8, write link to light. If the light does not exist or if open in VPX < 10.8, this will be ignored
-        if is_light:
+        writer.write_tagged_string(b'LANR', 'VLM.Lightmaps' if is_lightmap else 'VLM.Visuals')
+        if is_lightmap:
             sync_light, _ = get_vpx_sync_light(obj, context, light_col)
             writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
-        elif version < 1080:
-            if obj != pfobj and not is_playfield:
-                bm_room_meshes.append(export_name(obj.name))
         elif obj != pfobj:
-            bm_room_meshes.append('playfield_mesh' if is_playfield else export_name(obj.name))
+            bm_room_meshes.append(export_name(obj.name))
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
         n_game_items += 1
             
-    # Mark playfield image has removable
-    if new_playfield_image:
-        br = biff_io.BIFF_reader(src_storage.openstream('GameStg/GameData').read())
-        while not br.is_eof():
-            br.next()
-            if br.tag == "IMAG":
-                image = br.get_string()
-                if image not in removed_images:
-                    removed_images[image] = ['PF']
-                else:
-                    removed_images[image].append('PF')
-                break
-            br.skip_tag()
-
     # Remove previous nestmaps
     n_images = 0
     n_read_images = 0
@@ -550,8 +507,7 @@ def export_vpx(op, context):
             break
         is_hdr = next( (o for o in objects if o.vlmSettings.bake_hdr_range > 1.0), None) is not None
         base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}')
-        nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.webp' # VPX does not support HDR
-        #nestmap_path = f'{base_path}.webp'
+        nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.webp'
         if not os.path.exists(nestmap_path):
             op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
             return {'CANCELLED'}
@@ -579,69 +535,54 @@ def export_vpx(op, context):
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
-        
-        # Add a 'Warm up' primitive that forces VPX to load the nestmap at startup. This primitive should be hidden after startup (see helper script)
-        writer = biff_io.BIFF_writer()
-        writer.write_u32(19)
-        playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
-        writer.write_tagged_padded_vector(b'VPOS', 10 + nestmap_index * 10, playfield_height/global_scale - 15, -15) # Under apron, just below the playfield
-        writer.write_tagged_padded_vector(b'VSIZ', 10, 10, 10)
-        # RotX / RotY / RotZ
-        writer.write_tagged_float(b'RTV0', 0)
-        writer.write_tagged_float(b'RTV1', 0)
-        writer.write_tagged_float(b'RTV2', 0)
-        # TransX / TransY / TransZ
-        writer.write_tagged_float(b'RTV3', 0)
-        writer.write_tagged_float(b'RTV4', 0)
-        writer.write_tagged_float(b'RTV5', 0)
-        # ObjRotX / ObjRotY / ObjRotZ
-        writer.write_tagged_float(b'RTV6', 0)
-        writer.write_tagged_float(b'RTV7', 0)
-        writer.write_tagged_float(b'RTV8', 0)
-        writer.write_tagged_string(b'IMAG', f'VLM.Nestmap{nestmap_index}')
-        writer.write_tagged_string(b'NRMA', '')
-        writer.write_tagged_u32(b'SIDS', 4)
-        writer.write_tagged_wide_string(b'NAME', f'VLM_Warmup_Nestmap_{nestmap_index}')
-        writer.write_tagged_string(b'MATR', '')
-        writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
-        writer.write_tagged_bool(b'TVIS', True)
-        writer.write_tagged_bool(b'DTXI', False)
-        writer.write_tagged_bool(b'HTEV', False)
-        writer.write_tagged_float(b'THRS', 2.0)
-        writer.write_tagged_float(b'ELAS', 0.3)
-        writer.write_tagged_float(b'ELFO', 0.0)
-        writer.write_tagged_float(b'RFCT', 0.0)
-        writer.write_tagged_float(b'RSCT', 0.0)
-        writer.write_tagged_float(b'EFUI', 0.0)
-        writer.write_tagged_float(b'CORF', 0.0)
-        writer.write_tagged_bool(b'CLDR', False)
-        writer.write_tagged_bool(b'ISTO', True)
-        writer.write_tagged_bool(b'U3DM', False)
-        writer.write_tagged_bool(b'STRE', False)
-        writer.write_tagged_u32(b'DILI', 255) # 255 if 1.0 for disable lighting
-        writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
-        writer.write_tagged_bool(b'REEN', False)
-        writer.write_tagged_bool(b'EBFC', False)
-        writer.write_tagged_string(b'MAPH', '')
-        writer.write_tagged_bool(b'OVPH', False)
-        writer.write_tagged_bool(b'DIPT', False)
-        writer.write_tagged_bool(b'OSNM', False)
-        writer.write_tagged_float(b'PIDB', 0.0)
-        writer.write_tagged_bool(b'ADDB', False) # Additive blending VPX mod
-        writer.write_tagged_float(b'FALP', 100) # Additive blending VPX mod
-        writer.write_tagged_u32(b'COLR', 0xFFFFFF)
-        writer.write_tagged_bool(b'LOCK', True)
-        writer.write_tagged_bool(b'LVIS', True)
-        writer.write_tagged_u32(b'LAYR', 0)
-        writer.write_tagged_string(b'LANR', 'VLM.Visuals')
-        writer.close()
-        dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-        dst_stream.Write(writer.get_data())
-        n_game_items += 1
-        
         print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
-        nestmap_index += 1
         n_images += 1
+        nestmap_index += 1
+
+
+    # Add new normalmap textures
+    nestmap_index = 0
+    while True:
+        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap == nestmap_index]
+        if not objects:
+            break
+        has_nm = False
+        for obj in objects:
+            has_nm = has_nm or (next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None) is not None)
+        if has_nm:
+            base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index} - NM')
+            nestmap_path = f'{base_path}.webp'
+            if not os.path.exists(nestmap_path):
+                op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
+                return {'CANCELLED'}
+            img_writer = biff_io.BIFF_writer()
+            img_writer.write_tagged_string(b'NAME', f'VLM.Nestmap{nestmap_index} - NM')
+            img_writer.write_tagged_string(b'PATH', nestmap_path)
+            with open(nestmap_path, 'rb') as f:
+                img_data = f.read()
+                img_writer.write_tagged_u32(b'SIZE', len(img_data))
+                img_writer.write_tagged_data(b'DATA', img_data)
+            img_writer.close()
+            loaded, image = vlm_utils.get_image_or_black(f'{base_path}.png', black_is_none=True)
+            width = height = 0
+            if image:
+                width, height = image.size
+                if loaded == 'loaded': bpy.data.images.remove(image)
+            writer = biff_io.BIFF_writer()
+            writer.write_tagged_string(b'NAME', f'VLM.Nestmap{nestmap_index} - NM')
+            writer.write_tagged_string(b'PATH', nestmap_path)
+            writer.write_tagged_u32(b'WDTH', width)
+            writer.write_tagged_u32(b'HGHT', height)
+            writer.write_tagged_empty(b'JPEG') # Strangely, raw data are pushed outside of the JPEG tag (breaking the BIFF structure of the file)
+            writer.write_data(img_writer.get_data())
+            writer.write_tagged_float(b'ALTV', 1.0) # Limit for pixel cut and z write
+            writer.close()
+            dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+            dst_stream.Write(writer.get_data())
+            print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
+            n_images += 1
+        nestmap_index += 1
+
 
     def push_lampz(lightmaps, lampz_factors):
         code = ''
@@ -704,7 +645,7 @@ def export_vpx(op, context):
             return push_map_array(pending[1], 'BL', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_objects == pending[1]])
 
 
-    # Copy data from reference file
+    # Copy all other data from reference file, adjusting version and game data on the fly
     for src_path, mode, hashed in file_structure:
         if not src_storage.exists(src_path):
             continue
@@ -713,6 +654,11 @@ def export_vpx(op, context):
         else:
             dst_st = dst_tableinfo
         data = src_storage.openstream(src_path).read()
+        if src_path == 'GameStg/Version' and version < 1080:
+            data = bytearray(data)
+            br = biff_io.BIFF_reader(data)
+            br.put_u32(1080)
+            data = bytes(br.data)
         if src_path == 'GameStg/GameData':
             data = bytearray(data)
             br = biff_io.BIFF_reader(data)
@@ -726,21 +672,6 @@ def export_vpx(op, context):
                 elif br.tag == "MASI": # Number of materials
                     masi_pos = br.pos
                     n_materials = br.get_u32()
-                elif br.tag == "IMAG": # Playfield image
-                    if new_playfield_image:
-                        wr = biff_io.BIFF_writer()
-                        wr.new_tag(b'IMAG')
-                        wr.write_string(new_playfield_image)
-                        wr.close(write_endb=False)
-                        br.delete_tag()
-                        br.insert_data(wr.get_data())
-                elif br.tag == "PLMA": # Playfield material
-                    wr = biff_io.BIFF_writer()
-                    wr.new_tag(b'PLMA')
-                    wr.write_string('VLM.Bake.Active')
-                    wr.close(write_endb=False)
-                    br.delete_tag()
-                    br.insert_data(wr.get_data())
                 elif br.tag == "MATE": # Materials
                     mate_pos = br.pos
                     for i in range(n_materials):
@@ -930,26 +861,6 @@ def export_vpx(op, context):
     code += "' be copy/pasted ONLY ONCE, since the toolkit will take care of\n"
     code += "' updating them directly in your table script, each time an\n"
     code += "' export is made.\n"
-
-    code += "\n"
-    code += "\n"
-    code += "' ===============================================================\n"
-    code += "' The following code NEEDS to be copy/pasted to hide the elements \n"
-    code += "' that are placed to avoid stutters when VPX loads all the nestmaps\n"
-    code += "' to the GPU. It also NEEDS the following line to be added to the.\n"
-    code += "' table init function:\n"
-    code += "\n"
-    code += "	vpmTimer.AddTimer 1000, \"WarmUpDone '\"\n"
-    code += "\n"
-    code += 'Sub WarmUpDone\n'
-    nestmap_index = 0
-    while True:
-        objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap == nestmap_index]
-        if not objects: break
-        code += f"	VLM_Warmup_Nestmap_{nestmap_index}.Visible = False\n"
-        nestmap_index += 1
-    code += 'End Sub\n'
-    code += "\n"
 
     code += "\n"
     code += "\n"
