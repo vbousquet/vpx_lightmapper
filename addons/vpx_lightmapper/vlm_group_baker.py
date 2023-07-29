@@ -104,14 +104,13 @@ def compute_render_groups(op, context):
     vlm_utils.mkpath(bakepath)
     for obj in bake_col.all_objects:
         obj.vlmSettings.render_group = -1
-    all_objects = list([o for o in bake_col.all_objects if not o.vlmSettings.indirect_only])
+    all_objects = list([o for o in bake_col.all_objects if not o.vlmSettings.indirect_only and not o.vlmSettings.use_bake])
     object_surfaces = [projected_bounds_area(mvp_matrix, o) for o in all_objects]
     all_objects = sorted(zip(object_surfaces, all_objects), key=lambda pair: pair[0], reverse=True)
     for i, (area, obj) in enumerate(all_objects, start=1):
-        if obj.vlmSettings.indirect_only:
-            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it is only indirectly influencing the scene")
-            continue
-        if obj.vlmSettings.render_group != -1: # Render group already defined
+        assert not obj.vlmSettings.indirect_only
+        assert not obj.vlmSettings.use_bake
+        if obj.vlmSettings.render_group != -1: # Render group already defined (may happen when multipe objects have the same 'bake_to' property)
             continue
         if obj.vlmSettings.bake_to:
             scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(obj.vlmSettings.bake_to.name)}.png"
@@ -131,9 +130,6 @@ def compute_render_groups(op, context):
             bpy.ops.render.render(write_still=True, scene=scene.name)
             for o in obj_group: scene.collection.objects.unlink(o)
             im = Image.open(bpy.path.abspath(scene.render.filepath))
-        if obj.vlmSettings.use_bake:
-            print(f". Skipping   object mask #{i:>3}/{len(all_objects)} for '{obj.name}' since it use traditional baking instead of projective baking")
-            continue
         # Evaluate if this object can be grouped with previous renders (no overlaps)
         for p in range(opt_mask_pad):
             im.alpha_composite(im, (0, 1))
@@ -231,7 +227,7 @@ def render_group_masks(op, context):
     for group_index in range(n_render_groups):
         linked_objects = []
         for obj in bake_col.all_objects:
-            if obj.vlmSettings.render_group == group_index and not obj.vlmSettings.indirect_only:
+            if obj.vlmSettings.render_group == group_index and not obj.vlmSettings.indirect_only and not obj.vlmSettings.use_bake:
                 # if obj.vlmSettings.bake_mask and obj.vlmSettings.bake_mask not in linked_objects:
                     # scene.collection.objects.link(obj.vlmSettings.bake_mask)
                     # linked_objects.append(obj.vlmSettings.bake_mask)

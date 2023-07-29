@@ -145,7 +145,7 @@ def create_bake_meshes(op, context):
     # Prepare the list of solid bake mesh to produce
     to_bake = []
     for bake_col in root_bake_col.children:
-        object_names = sorted({obj.vlmSettings.bake_to.name if obj.vlmSettings.bake_to else obj.name for obj in bake_col.objects if not obj.hide_render and not obj.vlmSettings.indirect_only})
+        object_names = sorted({obj.vlmSettings.bake_to.name if (obj.vlmSettings.bake_to and not obj.vlmSettings.use_bake) else obj.name for obj in bake_col.objects if not obj.hide_render and not obj.vlmSettings.indirect_only})
         if bake_col.vlmSettings.bake_mode == 'split':
             for obj_name in object_names:
                 to_bake.append((obj_name, bake_col, [obj_name], obj_name, not bake_col.vlmSettings.is_opaque))
