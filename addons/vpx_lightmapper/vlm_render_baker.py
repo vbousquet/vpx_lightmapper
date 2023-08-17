@@ -304,26 +304,6 @@ def render_all_groups(op, context):
     scene.view_layers[0].use_pass_z = False
     scene.use_nodes = False
 
-    # Create temp render scene for rendering object/group masks
-    opt_mask_size = 1024 # Height used for the object masks
-    opt_mask_pad = math.ceil(opt_mask_size * 2 / render_size[1])
-    mask_scene = bpy.data.scenes.new('VLM.Tmp Mask Scene')
-    mask_scene.collection.objects.link(camera_object)
-    mask_scene.camera = camera_object
-    mask_scene.render.engine = 'BLENDER_EEVEE'
-    mask_scene.render.film_transparent = True
-    mask_scene.render.resolution_y = opt_mask_size
-    mask_scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
-    mask_scene.render.pixel_aspect_x = context.scene.render.pixel_aspect_x
-    mask_scene.render.image_settings.file_format = "PNG"
-    mask_scene.render.image_settings.color_mode = 'RGBA'
-    mask_scene.render.image_settings.color_depth = '8'
-    mask_scene.eevee.taa_render_samples = 1
-    mask_scene.view_settings.view_transform = 'Raw'
-    mask_scene.view_settings.look = 'None'
-    mask_scene.world = None
-    mask_scene.use_nodes = False
-
     # Setup the scene with all the bake objects with indirect render influence
     indirect_col = bpy.data.collections.new('Indirect')
     render_col = bpy.data.collections.new('Render')
@@ -573,12 +553,31 @@ def render_all_groups(op, context):
             render_col.objects.unlink(obj)
 
     #########
-    # Traditional baking
+    # Traditional UV unwrapped baking
     #
     # Baking using rendering and projective texture gives (surprisingly) good results in most situations but it will look wrong for some
     # objects that will need traditional baking. This is especially true for movable parts like spinners, flipper bats,...
-    # These objects will be processed with traditional bake which requires them to be UV unwrapped and either use view point aware materials 
-    # or have bake from camera selected in the bake panel
+    # These objects will be processed with traditional bake which requires them to be UV unwrapped
+
+    # Create temp render scene for rendering object masks & influence map
+    opt_mask_size = 1024 # Height used for the object masks
+    opt_mask_pad = math.ceil(opt_mask_size * 2 / render_size[1])
+    mask_scene = bpy.data.scenes.new('VLM.Tmp Mask Scene')
+    mask_scene.collection.objects.link(camera_object)
+    mask_scene.camera = camera_object
+    mask_scene.render.engine = 'BLENDER_EEVEE'
+    mask_scene.render.film_transparent = True
+    mask_scene.render.resolution_y = opt_mask_size
+    mask_scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
+    mask_scene.render.pixel_aspect_x = context.scene.render.pixel_aspect_x
+    mask_scene.render.image_settings.file_format = "PNG"
+    mask_scene.render.image_settings.color_mode = 'RGBA'
+    mask_scene.render.image_settings.color_depth = '8'
+    mask_scene.eevee.taa_render_samples = 1
+    mask_scene.view_settings.view_transform = 'Raw'
+    mask_scene.view_settings.look = 'None'
+    mask_scene.world = None
+    mask_scene.use_nodes = False
 
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
@@ -621,8 +620,9 @@ def render_all_groups(op, context):
         for i, scenario in enumerate(light_scenarios, start=1):
             name, is_lightmap, light_col, lights = scenario
             render_path = f'{bakepath}{scenario[0]} - Bake - {obj.name}.exr'
+            influence_path = f'{bakepath}{scenario[0]} - Influence - {obj.name}.exr'
             msg = f". Baking '{obj.name}' for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
-            if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
+            if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)) or not os.path.exists(bpy.path.abspath(influence_path)):
                 state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, obj_mask, render_col)
                 elapsed = time.time() - start_time
                 if elapsed > 0 and n_render_performed > 0:
@@ -636,11 +636,41 @@ def render_all_groups(op, context):
                     scene.render.image_settings.color_mode = 'RGB' if is_lightmap else 'RGBA'
                     scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
                     scene.render.image_settings.color_depth = '16'
-                    # context needs an active, linked, not hidden, mesh
+                    # Bake texture (context needs an active, linked, not hidden, mesh)
                     with context.temp_override(scene=scene, active_object=obj, selected_objects=[obj]):
+                        scene.render.bake.view_from = 'ACTIVE_CAMERA'
                         bpy.ops.object.bake(type='COMBINED', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
                         bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
                     restore_func(state)
+                    # Render for influence map
+                    dup = obj.copy()
+                    dup.data = dup.data.copy()
+                    for poly in dup.data.polygons:
+                        poly.material_index = 0
+                    dup.data.materials.clear()
+                    mat = bpy.data.materials.new(name)
+                    mat.use_nodes = True
+                    nodes = mat.node_tree.nodes
+                    nodes.clear()
+                    links = mat.node_tree.links
+                    emission = nodes.new('ShaderNodeEmission')
+                    node_output = nodes.new(type='ShaderNodeOutputMaterial')   
+                    node_tex = nodes.new(type='ShaderNodeTexImage')
+                    node_tex.image = bake_img
+                    node_uvmap = nodes.new(type='ShaderNodeUVMap')
+                    node_uvmap.uv_map = 'UVMap'
+                    links.new(emission.outputs[0], node_output.inputs[0])
+                    links.new(node_tex.outputs[0], emission.inputs[0])
+                    links.new(node_tex.outputs[1], emission.inputs[1])
+                    links.new(node_uvmap.outputs[0], node_tex.inputs[0])
+                    dup.data.materials.append(mat)
+                    mask_scene.render.filepath = influence_path
+                    mask_scene.collection.objects.link(dup)
+                    mask_scene.render.image_settings.file_format = "OPEN_EXR"
+                    bpy.ops.render.render(write_still=True, scene=mask_scene.name)
+                    mask_scene.collection.objects.unlink(dup)
+                    mask_scene.render.image_settings.file_format = "PNG"
+                    bpy.data.materials.remove(mat)
                     print('\n')
                     n_render_performed += 1
                 else:
