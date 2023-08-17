@@ -114,8 +114,10 @@ def create_bake_meshes(op, context):
     #opt_lod_threshold = 0 # Disable LOD
     opt_lod_threshold = int(opt_lod_threshold * opt_lod_threshold)
     opt_lightmap_prune_res = min(256, opt_render_height) # resolution used in the algorithm for unlit face pruning (artefact observed at 256)
+    render_path = vlm_utils.get_bakepath(context, type='RENDERS')
     prunemap_width = int(opt_lightmap_prune_res * opt_ar)
     prunemap_height = opt_lightmap_prune_res
+    lm_threshold = vlm_utils.get_lm_threshold()
 
     # Delete existing results
     to_delete = [obj for obj in result_col.all_objects]
@@ -141,6 +143,18 @@ def create_bake_meshes(op, context):
     light_scenarios = vlm_utils.get_lightings(context)
     #light_scenarios = [l for l in light_scenarios if l[0] == 'Inserts-L8'] # Debug: For quickly testing a single light scenario
     light_merge_groups = {light_scenario[0]: [] for light_scenario in light_scenarios}
+
+    # Compute HDR range of non lightmaps
+    bake_hdr_range = {}
+    for light_scenario in light_scenarios:
+        light_name, is_lightmap, _, lights = light_scenario
+        if is_lightmap: continue
+        influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
+        hdr_range = 0.0
+        gmap = influence['Global']
+        for xy in range(prunemap_width * prunemap_height):
+            hdr_range = max(hdr_range, gmap[4 * xy + 1]) # HDR Range is maximum of channels
+        bake_hdr_range[light_name] = hdr_range
 
     # Prepare the list of solid bake mesh to produce
     to_bake = []
@@ -223,14 +237,16 @@ def create_bake_meshes(op, context):
             if is_bake:
                 if not dup.data.uv_layers.get('UVMap'):
                     print(f'. ERROR {obj_name} is using traditional bake and is missing its UVMap')
-                dup.data.uv_layers.new(name="UV_Projected")
-                dup.data.uv_layers['UV_Projected'].active = True 
-                vlm_utils.project_uv(camera, dup, proj_ar)
+                projected_uv = dup.data.uv_layers.new()
+                projected_uv.active = True 
+                vlm_utils.project_uv(camera, dup, proj_ar, projected_uv)
+                projected_uv = projected_uv.name
             else:
                 for uv in dup.data.uv_layers:
                     dup.data.uv_layers.remove(dup.data.uv_layers[0])
-                dup.data.uv_layers.new(name='UVMap')
-                vlm_utils.project_uv(camera, dup, proj_ar)
+                projected_uv = dup.data.uv_layers.new(name='UVMap')
+                vlm_utils.project_uv(camera, dup, proj_ar, projected_uv)
+                projected_uv = projected_uv.name
             
             # Apply base transform
             dup.data.transform(dup.matrix_world)
@@ -326,7 +342,7 @@ def create_bake_meshes(op, context):
                 bme.verts.ensure_lookup_table()
                 long_edges = []
                 longest_edge = 0
-                uv_layer = bme.loops.layers.uv['UVMap'] if not is_bake else bme.loops.layers.uv['UV_Projected']
+                uv_layer = bme.loops.layers.uv[projected_uv]
                 for edge in bme.edges:
                     if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
                         continue
@@ -351,7 +367,7 @@ def create_bake_meshes(op, context):
                 print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
             
             if is_bake:
-                dup.data.uv_layers.remove(dup.data.uv_layers['UV_Projected'])
+                dup.data.uv_layers.remove(dup.data.uv_layers[projected_uv])
 
             objects_to_join.append(dup)
         
@@ -405,9 +421,9 @@ def create_bake_meshes(op, context):
             adapt_materials(bake_instance.data, light_name, is_lightmap)
             bake_instance.vlmSettings.bake_lighting = light_name
             bake_instance.vlmSettings.bake_objects = bake_col.name
-            bake_instance.vlmSettings.bake_hdr_scale = 1.0
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
+            bake_instance.vlmSettings.bake_hdr_range = bake_hdr_range[light_name]
             if is_translucent:
                 bake_instance.vlmSettings.bake_type = 'active'
             elif sync_obj is None:
@@ -456,8 +472,6 @@ def create_bake_meshes(op, context):
         result_col.objects.unlink(obj)
 
     # Process each of the bake meshes according to the light scenario, pruning unneeded faces
-    render_path = vlm_utils.get_bakepath(context, type='RENDERS')
-    lm_threshold = vlm_utils.get_lm_threshold()
     for i, light_scenario in enumerate(light_scenarios):
         light_name, is_lightmap, _, lights = light_scenario
         if not is_lightmap: continue
@@ -495,6 +509,15 @@ def create_bake_meshes(op, context):
                 bake_instance.vlmSettings.bake_hdr_range = hdr_range
                 bake_instance.vlmSettings.bake_sync_light = ';'.join([l.name for l in lights]) if lights else ''
                 bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
+
+    # Perform sanity check on the result
+    for obj in result_col.all_objects:
+        has_nm = has_no_nm = False
+        for mat in obj.data.materials:
+            if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False: has_nm = True
+            if mat.get('VLM.HasNormalMap') != True and mat['VLM.IsLightmap'] == False: has_no_nm = True
+        if has_nm and has_no_nm:
+            print(f'\nERROR: {obj.name} has parts with normal maps and others without. The normal map will not be usable (it would break the shading of subparts with no normal map).\n')
 
     # Purge unlinked datas and clean up
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -633,6 +656,8 @@ def build_influence_map(render_path, name, w, h):
     for path_exr in glob.glob(bpy.path.abspath(f'{render_path}{name} - *.exr')):
         id = path_exr[len(bpy.path.abspath(f'{render_path}{name} - ')):]
         id = id[:-4]
+        if id.startswith('Bake - '): # Skip UV unwrapped texture bake and use influence map rendered during render step
+            continue
         image = bpy.data.images.load(path_exr, check_existing=False)
         im_width, im_height = image.size
         nx = int(im_width / w)
@@ -700,7 +725,7 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, 
         if isinstance(render, int):
             ids.append(f'Group {render}')
         else:
-            ids.append(f'Bake - {render}')
+            ids.append(f'Influence - {render}')
     
     # Mark faces that are actually influenced
     hdr_range = 0.0
