@@ -188,10 +188,10 @@ class VLM_Scene_props(PropertyGroup):
     )
     render_ratio: IntProperty(name="Render Ratio", description="- For projective baking, this ratio is applied to the target render height.\n- For baking, this ratio is applied to the user defined bake size", default = 100, min = 5, max=100, subtype="PERCENTAGE", update=vlm_camera.camera_inclination_update)
     render_aspect_ratio: FloatProperty(name="Render AR", description="Aspect ratio of render bakes", default = 1.0)
-    padding: IntProperty(name="Padding", description="Padding between bakes", default = 2, min = 0)
+    padding: IntProperty(name="Padding", description="Padding between nested texture parts", default = 2, min = 0)
     remove_backface: FloatProperty(name="Backface Limit", description="Angle (degree) limit for backfacing geometry removal\n90 will disable backface removal, 0 is full backface removal", default = 0.0)
     keep_pf_reflection_faces: BoolProperty(name="Keep playfield reflection", description="Keep faces only visible through playfield reflection", default = False)
-    max_lighting: IntProperty(name="Max Light.", description="Maximum number of lighting scenario baked simultaneously at 4K (0 = no limit)", default = 0, min = 0)
+    max_lighting: IntProperty(name="Max Light.", description="Maximum number of lighting scenario rendered simultaneously at 4K (0 = no limit)", default = 0, min = 0)
     tex_size: EnumProperty(
         items=[
             ('256', '256', '256x256', '', 256),
@@ -201,7 +201,7 @@ class VLM_Scene_props(PropertyGroup):
             ('4096', '4096', '4096x4096', '', 4096),
             ('8192', '8192', '8192x8192', '', 8192),
         ],
-        name='Texture size', description="Size of the exported texture in which rendered/baked parts will be nested (Should be greater than render size to avoid too much splitting).",
+        name='Texture size', description="Size of the exported texture in which rendered/baked parts will be nested (Should be greater than render size to avoid too much splitting)",
         default='256'
     )
     # Exporter options
@@ -254,7 +254,6 @@ class VLM_Object_props(PropertyGroup):
     # Bake objects properties (for all objects except the one in the result collection)
     vpx_object: StringProperty(name="VPX", description="Identifier of reference VPX object", default = '')
     vpx_subpart: StringProperty(name="Part", description="Sub part identifier for multi part object like bumpers,...", default = '')
-    movable_script: StringProperty(name="Sync", description="VBS script for movable/mod scynchronization", default = '')
     import_mesh: BoolProperty(name="Mesh", description="Update mesh on import", default = True)
     import_transform: BoolProperty(name="Transform", description="Update transform on import", default = True)
     is_rgb_led: BoolProperty(name="RGB Led", description="RGB Led (lightmapped to white then colored in VPX for dynamic colors)", default = False)
@@ -262,16 +261,18 @@ class VLM_Object_props(PropertyGroup):
     bake_to: PointerProperty(name="Bake To", type=bpy.types.Object, description="Target object used as bake mesh target")
     bake_mask: PointerProperty(name="Bake Mask", type=bpy.types.Object, description="Object to be rendered with this object (for example for alpha layers)")
     indirect_only: BoolProperty(name="Indirect", description="Do not bake this object but consider its influence on the scene", default = False)
-    hide_from_others: BoolProperty(name="Hide from others", description="Hide this object from other objects. For example hide flipper bat from playfield. WARNING: this feature has limited support. see doc", default = False)
+    hide_from_others: BoolProperty(name="Hide from others", description="Hide this object from other objects. For example hide flipper bat from playfield. WARNING: when using UV projected baking the part will only be hidden from parts in other render groups", default = False)
     render_group: IntProperty(name="Render Group", description="ID of group for batch rendering", default = -1)
     layback_offset: FloatProperty(name="Layback offset", description="Y offset caused by current layback", default = 0.0)
     bake_normalmap: BoolProperty(name="Normal Map", description="Bake a normal map", default = False)
     bake_orm: BoolProperty(name="O.R.M.", description="Bake an ORM map (Occlusion/Roughness/Metallic)", default = False)
-    use_bake: BoolProperty(name="Use Bake", description="Use traditional baking instead of render + UV projection. The object needs to be unwrapped and use point of view aware materials", default = False)
+    use_bake: BoolProperty(name="Use Bake", description="Use UV unwrapped baking instead of using UV projected and renders. The object needs to be UV unwrapped. The process will be much slower but will produce better results", default = False)
     bake_width: IntProperty(name="Bake width:", description="Width of bake texture", default = 256, min = 2, max=8192)
     bake_height: IntProperty(name="Bake height:", description="Height of bake texture", default = 256, min = 2, max=8192)
-    no_mesh_optimization: BoolProperty(name="No Optimization", description="Disable mesh optimization (for example to preserve normals)", default = False)
+    no_mesh_optimization: BoolProperty(name="No Optimization", description="Disable mesh optimization (for example to preserve normals or unwrapped UV)", default = False)
     # Both bake object and bake result
+    #movable_script: StringProperty(name="Sync", description="VBS script for movable/mod scynchronization", default = '')
+    is_movable: BoolProperty(name="Movable", description="Movable part for which the bake/light meshes may only be merged with parts linked to the same VPX object", default = False)
     use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot instead of Rot when exporting", default = False)
     # Bake result properties (for object inside the bake result collection)
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
@@ -288,7 +289,7 @@ class VLM_Object_props(PropertyGroup):
         name="Type",
         default='default'
     )
-    bake_hdr_range: FloatProperty(name="HDR Range", description="HDR range of this bake", default=1)
+    bake_hdr_range: FloatProperty(name="HDR Range", description="HDR range of this bake", default=-1)
     bake_nestmap: IntProperty(name="Nestmap", description="ID of output nestmap (multiple bakes may share a nestmap)", default = -1)
 
 
@@ -327,8 +328,8 @@ class VLM_OT_update(Operator):
 
 class VLM_OT_select_occluded(Operator):
     bl_idname = "vlm.select_occluded_operator"
-    bl_label = "Select Occluded"
-    bl_description = "Select occluded objects"
+    bl_label = "Select Occluded Parts"
+    bl_description = "Select objects that are occluded by other parts from the defined view point (lengthy operation)"
     bl_options = {"REGISTER", "UNDO"}
     
     @classmethod
@@ -341,8 +342,8 @@ class VLM_OT_select_occluded(Operator):
 
 class VLM_OT_select_indirect(Operator):
     bl_idname = "vlm.select_indirect_operator"
-    bl_label = "Select Indirect"
-    bl_description = "Select objects that indirectly affect rendering"
+    bl_label = "Select Unbaked Parts"
+    bl_description = "Select objects that are not baked/exported, and only affect rendering"
     bl_options = {"REGISTER", "UNDO"}
     
     @classmethod
@@ -357,8 +358,8 @@ class VLM_OT_select_indirect(Operator):
 
 class VLM_OT_select_baked(Operator):
     bl_idname = "vlm.select_baked_operator"
-    bl_label = "Select Baked"
-    bl_description = "Select objects that use traditional baking"
+    bl_label = "Select UV Unwrapped Baked"
+    bl_description = "Select objects that use UV Unwrapped baking"
     bl_options = {"REGISTER", "UNDO"}
     
     @classmethod
@@ -377,6 +378,13 @@ class VLM_OT_compute_render_groups(Operator):
     bl_description = "Evaluate render groups"
     bl_options = {"REGISTER", "UNDO"}
     
+    @classmethod
+    def poll(cls, context):
+        if context.blend_data.filepath == '': return False
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
+        if not vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True): return False
+        return True
+        
     def execute(self, context):
         return vlm_group_baker.compute_render_groups(self, context)
 
@@ -387,6 +395,14 @@ class VLM_OT_render_all_groups(Operator):
     bl_description = "Render all groups for all lighting situation"
     bl_options = {"REGISTER"}
     
+    @classmethod
+    def poll(cls, context):
+        if context.blend_data.filepath == '': return False
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False): return False
+        if not vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True): return False
+        return True
+        
     def execute(self, context):
         return vlm_render_baker.render_all_groups(self, context)
 
@@ -397,6 +413,14 @@ class VLM_OT_create_bake_meshes(Operator):
     bl_description = "Create all bake meshes for all lighting situation"
     bl_options = {"REGISTER", "UNDO"}
     
+    @classmethod
+    def poll(cls, context):
+        if context.blend_data.filepath == '': return False
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False): return False
+        if not vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True): return False
+        return True
+        
     def execute(self, context):
         return vlm_meshes_baker.create_bake_meshes(self, context)
 
@@ -451,6 +475,14 @@ class VLM_OT_export_vpx(Operator):
     bl_description = "Export to an updated VPX table file"
     bl_options = {"REGISTER"}
     
+    @classmethod
+    def poll(cls, context):
+        if context.blend_data.filepath == '': return False
+        if not os.path.isfile(bpy.path.abspath(context.scene.vlmSettings.table_file)): return False
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False): return False
+        return True
+
     def execute(self, context):
         return vlm_export.export_vpx(self, context)
 
@@ -563,35 +595,6 @@ class VLM_OT_state_import_transform(Operator):
         return {"FINISHED"}
 
 
-class VLM_OT_clear_render_group_cache(Operator):
-    bl_idname = "vlm.clear_render_group_cache"
-    bl_label = "Clear Cache"
-    bl_description = "Remove render group from cache"
-    bl_options = {"REGISTER"}
-    
-    @classmethod
-    def poll(cls, context):
-        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
-        if bake_col is not None:
-            files = glob.glob(bpy.path.abspath(f"{vlm_utils.get_bakepath(context, type='RENDERS')}") + "* - Group *.exr")
-            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.render_group >= 0]:
-                if next((f for f in files if f.endswith(f' {obj.vlmSettings.render_group}.exr')),None) != None:
-                    return True
-        return False
-
-    def execute(self, context):
-        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
-        delete_set = {}
-        if bake_col is not None:
-            files = glob.glob(bpy.path.abspath(f"{vlm_utils.get_bakepath(context, type='RENDERS')}") + "* - Group *.exr")
-            for obj in [obj for obj in context.selected_objects if obj.name in bake_col.all_objects and obj.vlmSettings.render_group >= 0]:
-                for f in (f for f in files if f.endswith(f' {obj.vlmSettings.render_group}.exr')):
-                    delete_set[f] = True
-            for f in delete_set:
-                os.remove(f)
-        return {"FINISHED"}
-
-
 class VLM_OT_select_render_group(Operator):
     bl_idname = "vlm.select_render_group"
     bl_label = "Select"
@@ -658,7 +661,7 @@ class VLM_OT_table_uv(Operator):
 class VLM_OT_toggle_no_exp_modifier(Operator):
     bl_idname = "vlm.toggle_no_exp_modifier"
     bl_label = "Toogle NoExp"
-    bl_description = "Toggle modifiers marked with NoExp"
+    bl_description = "Toggle modifiers marked with NoExp of the current selection"
     bl_options = {"REGISTER", "UNDO"}
     
     @classmethod
@@ -744,7 +747,6 @@ class VLM_OT_load_render_images(Operator):
 
     def execute(self, context):
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
-        bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
         for obj in [o for o in context.selected_objects if o.name in result_col.all_objects]:
             paths = [vlm_utils.get_packmap_bakepath(context, mat) for mat in obj.data.materials]
             images = [vlm_utils.image_by_path(path) for path in paths]
@@ -901,92 +903,225 @@ class VLM_PT_Col_Props(bpy.types.Panel):
             layout.label(text="Select a bake or light group") 
 
 
-class VLM_PT_3D_Bake_Object(bpy.types.Panel):
-    bl_label = "Bake Object"
+class VLM_PT_3D_VPX_Import(bpy.types.Panel):
+    bl_label = "VPX Import"
     bl_category = "VLM"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     
+    @classmethod
+    def poll(cls, context):
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        bake_objects = [obj for obj in context.selected_objects if result_col is None or obj.name not in result_col.all_objects]
+        return bake_objects
+
+    def draw(self, context):
+        self.layout.use_property_split = True
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        bake_objects = [obj for obj in context.selected_objects if result_col is None or obj.name not in result_col.all_objects]
+        row = self.layout.row(align=True)
+        row.scale_y = 1.5
+        if all((x.vlmSettings.import_mesh for x in bake_objects)):
+            row.operator(VLM_OT_state_import_mesh.bl_idname, text='On', icon='MESH_DATA').enable_import = False
+        elif all((not x.vlmSettings.import_mesh for x in bake_objects)):
+            row.operator(VLM_OT_state_import_mesh.bl_idname, text='Off', icon='MESH_DATA').enable_import = True
+        else:
+            row.operator(VLM_OT_state_import_mesh.bl_idname, text='-', icon='MESH_DATA').enable_import = True
+        if all((x.vlmSettings.import_transform for x in bake_objects)):
+            row.operator(VLM_OT_state_import_transform.bl_idname, text='On', icon='OBJECT_ORIGIN').enable_transform = False
+        elif all((not x.vlmSettings.import_transform for x in bake_objects)):
+            row.operator(VLM_OT_state_import_transform.bl_idname, text='Off', icon='OBJECT_ORIGIN').enable_transform = True
+        else:
+            row.operator(VLM_OT_state_import_transform.bl_idname, text='-', icon='MATERIAL').enable_transform = True
+
+
+class VLM_PT_3D_VPX_Object(bpy.types.Panel):
+    bl_label = "VPX Object"
+    bl_category = "VLM"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    
+    @classmethod
+    def poll(cls, context):
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+        return bake_col and context.active_object and context.active_object.name in bake_col.all_objects and len(context.selected_objects) == 1
+
+    def draw(self, context):
+        self.layout.use_property_split = True
+        self.layout.prop(context.active_object.vlmSettings, 'vpx_object', text='Name', expand=True)
+        self.layout.prop(context.active_object.vlmSettings, 'vpx_subpart', text='Subpart', expand=True)
+
+
+class VLM_PT_3D_VPX_Light(bpy.types.Panel):
+    bl_label = "VPX Light"
+    bl_category = "VLM"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    
+    @classmethod
+    def poll(cls, context):
+        light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
+        return light_col and context.active_object and context.active_object.name in light_col.all_objects and len(context.selected_objects) == 1
+
+    def draw(self, context):
+        self.layout.use_property_split = True
+        self.layout.prop(context.active_object.vlmSettings, 'vpx_object', text='Light', expand=True)
+        self.layout.prop(context.active_object.vlmSettings, 'is_rgb_led', text='White Bake', expand=True)
+        self.layout.prop(context.active_object.vlmSettings, 'enable_aoi', text='Enable AOI', expand=True)
+        self.layout.operator(VLM_OT_apply_aoi.bl_idname)
+
+from itertools import pairwise
+
+class VLM_OT_calc_bake_size(Operator):
+    bl_idname = "vlm.calc_bake_size"
+    bl_label = "Fit Bake Size"
+    bl_description = "Compute bake size based on selected UVMap edges and scene settings.\nIf 2 ortogonal UV edges are selected, aspect ratio of texture is computed. Otherwise, the size of the texture is computed, keeping the user defined aspect ratio.\n\nNote that you must select some UV edges, without using 'UV Sync Selection' which does not select UV edges"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    @classmethod
+    def poll(cls, context):
+        if context.object.mode != 'OBJECT':
+            return False
+        camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+        if not camera:
+            return False
+        if 'UVMap' not in context.active_object.data.uv_layers:
+            return False
+        return True
+
+    def execute(self, context):
+        camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+        uv_unwrapped_layer = context.active_object.data.uv_layers['UVMap']
+        uv_projected_layer = context.active_object.data.uv_layers.new()
+        proj_ar = vlm_utils.get_render_proj_ar(context)
+        render_size = vlm_utils.get_render_size(context)
+        vlm_utils.project_uv(camera, context.active_object, proj_ar, uv_projected_layer)
+        width = height = 0
+        minimum_length_u = 0.0001
+        # First try to fit separately x and y axis (needs to have 2 orthogonal UV edges selected)
+        print('Trying to fit to user selected orthogonal UV edges:')
+        for face in context.active_object.data.polygons:
+            for loop_idx0, loop_idx1 in pairwise(list(face.loop_indices) + [face.loop_indices[0]]):
+                if uv_unwrapped_layer.edge_selection[loop_idx0].value:
+                    uv_u = uv_unwrapped_layer.uv[loop_idx1].vector - uv_unwrapped_layer.uv[loop_idx0].vector
+                    l_u = uv_u.length
+                    if l_u >= minimum_length_u:
+                        uv_p = uv_projected_layer.uv[loop_idx1].vector - uv_projected_layer.uv[loop_idx0].vector
+                        uv_p[0] *= render_size[0]
+                        uv_p[1] *= render_size[1]
+                        l_p = uv_p.length
+                        if abs(uv_u.x) > 100 * abs(uv_u.y):
+                            width = max(width, l_p / l_u)
+                        elif abs(uv_u.y) > 100 * abs(uv_u.x):
+                            height = max(height, l_p / l_u)
+                        print(f'. {uv_unwrapped_layer.uv[loop_idx0].vector} {uv_unwrapped_layer.uv[loop_idx1].vector} => {l_u:.5f} {l_p:10.5f} {l_p / l_u:.5f} => {width:5.0f}x{height:5.0f}')
+        # If failed, try to fit using the user defined aspect ratio
+        if round(width) < 2 or round(height) < 2:
+            print('Trying to fit to user selected UV edges, using user defined aspect ratio:')
+            bake_ar = context.active_object.vlmSettings.bake_height / context.active_object.vlmSettings.bake_width
+            for face in context.active_object.data.polygons:
+                for loop_idx0, loop_idx1 in pairwise(list(face.loop_indices) + [face.loop_indices[0]]):
+                    if uv_unwrapped_layer.edge_selection[loop_idx0].value:
+                        uv_u = uv_unwrapped_layer.uv[loop_idx1].vector - uv_unwrapped_layer.uv[loop_idx0].vector
+                        uv_u[1] = uv_u[1] * bake_ar
+                        l_u = uv_u.length
+                        if l_u >= minimum_length_u:
+                            uv_p = uv_projected_layer.uv[loop_idx1].vector - uv_projected_layer.uv[loop_idx0].vector
+                            uv_p[0] *= render_size[0]
+                            uv_p[1] *= render_size[1]
+                            l_p = uv_p.length
+                            width = max(width, l_p / l_u)
+                            height = bake_ar * width
+                            print(f'. {uv_unwrapped_layer.uv[loop_idx0].vector} {uv_unwrapped_layer.uv[loop_idx1].vector} => {l_u:.5f} {l_p:10.5f} {l_p / l_u:.5f} => {width:5.0f}x{height:5.0f}')
+        context.active_object.data.uv_layers.remove(uv_projected_layer)
+        if round(width) < 2 or round(height) < 2:
+            self.report({"ERROR"}, 'Failed to compute fitted bake size')
+            return {"CANCELLED"}
+        context.active_object.vlmSettings.bake_width = round(width)
+        context.active_object.vlmSettings.bake_height = round(height)
+        print(f'Bake size fitting succeeded. Result: {context.active_object.vlmSettings.bake_width}x{context.active_object.vlmSettings.bake_height}')
+        return {"FINISHED"}
+
+
+class VLM_PT_3D_Bake_Options(bpy.types.Panel):
+    bl_label = "Bake Options"
+    bl_category = "VLM"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    
+    @classmethod
+    def poll(cls, context):
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+        bake_objects = [obj for obj in context.selected_objects if bake_col and obj.name in bake_col.all_objects]
+        return bake_objects
+
     def draw(self, context):
         layout = self.layout
-        layout.use_property_split = True
+        self.layout.use_property_split = True
         bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
-        light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
-        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
-        
-        bake_objects = [obj for obj in context.selected_objects if result_col is None or obj.name not in result_col.all_objects]
-        if bake_objects:
-            if len(bake_objects) == 1:
-                obj = bake_objects[0]
-                layout.label(text="VPX object:")
-                layout.prop(obj.vlmSettings, 'vpx_object', text='VPX', expand=True)
-                layout.prop(obj.vlmSettings, 'vpx_subpart', text='Subpart', expand=True)
-                layout.prop(obj.vlmSettings, 'movable_script', expand=True)
-                layout.prop(obj.vlmSettings, 'use_obj_pos')
-                if light_col and obj.name in light_col.all_objects:
-                    layout.prop(obj.vlmSettings, 'is_rgb_led', expand=True)
-                    layout.prop(obj.vlmSettings, 'enable_aoi', expand=True)
+        bake_objects = [obj for obj in context.selected_objects if bake_col and obj.name in bake_col.all_objects]
+        if context.active_object in bake_objects and len(bake_objects) == 1:
+            layout.prop(context.active_object.vlmSettings, 'indirect_only', text='Bake Part', invert_checkbox=True)
+            if not context.active_object.vlmSettings.indirect_only:
+                col = layout.column()
+                col.enabled = context.active_object.vlmSettings.use_bake
+                col.prop(context.active_object.vlmSettings, 'bake_normalmap', text='Bake Normal Map')
+                col = layout.column()
+                col.enabled = False
+                col.prop(context.active_object.vlmSettings, 'bake_orm', text = 'Bake ORM Map')
+                layout.prop(context.active_object.vlmSettings, 'hide_from_others', text='Hide from others')
+                layout.prop(context.active_object.vlmSettings, 'bake_mask', text='Mask')
                 layout.separator()
-            layout.label(text="Import options:")
-            row = layout.row(align=True)
-            row.scale_y = 1.5
-            if all((x.vlmSettings.import_mesh for x in bake_objects)):
-                row.operator(VLM_OT_state_import_mesh.bl_idname, text='On', icon='MESH_DATA').enable_import = False
-            elif all((not x.vlmSettings.import_mesh for x in bake_objects)):
-                row.operator(VLM_OT_state_import_mesh.bl_idname, text='Off', icon='MESH_DATA').enable_import = True
-            else:
-                row.operator(VLM_OT_state_import_mesh.bl_idname, text='-', icon='MESH_DATA').enable_import = True
-            if all((x.vlmSettings.import_transform for x in bake_objects)):
-                row.operator(VLM_OT_state_import_transform.bl_idname, text='On', icon='OBJECT_ORIGIN').enable_transform = False
-            elif all((not x.vlmSettings.import_transform for x in bake_objects)):
-                row.operator(VLM_OT_state_import_transform.bl_idname, text='Off', icon='OBJECT_ORIGIN').enable_transform = True
-            else:
-                row.operator(VLM_OT_state_import_transform.bl_idname, text='-', icon='MATERIAL').enable_transform = True
-            
-            layout.separator()
-            layout.label(text="Bake options:")
-            if all((x.vlmSettings.indirect_only for x in bake_objects)):
-                layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Indirect Only', icon='INDIRECT_ONLY_ON').indirect_only = False
-            elif all((not x.vlmSettings.indirect_only for x in bake_objects)):
-                layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Default render', icon='INDIRECT_ONLY_OFF').indirect_only = True
-            else:
-                layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Mixed', icon='REMOVE').indirect_only = True
-            if len(bake_objects) == 1 and bake_col:
-                if not obj.vlmSettings.indirect_only:
-                    layout.prop(obj.vlmSettings, 'hide_from_others', text='Hide')
-                    layout.prop(obj.vlmSettings, 'use_bake')
-                    if obj.vlmSettings.use_bake:
-                        layout.prop(obj.vlmSettings, 'bake_normalmap')
-                        layout.prop(obj.vlmSettings, 'bake_width')
-                        layout.prop(obj.vlmSettings, 'bake_height')
-                    else:
-                        layout.prop(obj.vlmSettings, 'no_mesh_optimization')
-                        layout.prop(bake_objects[0].vlmSettings, 'bake_to')
-                    layout.prop(bake_objects[0].vlmSettings, 'bake_mask')
-            
-            layout.separator()
-            layout.label(text="Render group:")
-            if len(bake_objects) == 1:
-                layout.prop(obj.vlmSettings, 'render_group', text='Group')
-            else:
-                single_group = -1
-                for obj in bake_objects:
-                    if single_group == -1:
-                        single_group = obj.vlmSettings.render_group
-                    elif single_group != obj.vlmSettings.render_group:
-                        single_group = -2
-                if single_group == -2:
-                    layout.label(text="Multiple render groups")
-                elif single_group == -1:
-                    layout.label(text="Undefined render groups")
+                layout.prop(context.active_object.vlmSettings, 'is_movable', text='Movable')
+                col = layout.column()
+                col.enabled = context.active_object.vlmSettings.is_movable
+                col.prop(context.active_object.vlmSettings, 'use_obj_pos')
+                layout.separator()
+                layout.prop(context.active_object.vlmSettings, 'use_bake', toggle=1, text='Unwrapped UV Bake' if context.active_object.vlmSettings.use_bake else 'Projected UV Bake')
+                if context.active_object.vlmSettings.use_bake:
+                    layout.prop(context.active_object.vlmSettings, 'bake_width', text='Width')
+                    layout.prop(context.active_object.vlmSettings, 'bake_height', text='Height')
+                    layout.operator(VLM_OT_calc_bake_size.bl_idname, text='Fit size to UV edges')
                 else:
-                    layout.label(text=f"Render Group #{single_group}")
-            row = layout.row(align=True)
-            row.operator(VLM_OT_clear_render_group_cache.bl_idname)
-            row.operator(VLM_OT_select_render_group.bl_idname)
-            if len(bake_objects) == 1 and bake_objects[0].type == 'CAMERA':
-                layout.separator()
-                layout.operator(VLM_OT_export_pov.bl_idname)
+                    layout.prop(context.active_object.vlmSettings, 'no_mesh_optimization', text='Optimize mesh', invert_checkbox=True)
+                    layout.prop(context.active_object.vlmSettings, 'bake_to')
+                    col = layout.column()
+                    col.enabled = False
+                    #col.active = False # If we still want to allow editing (really need to know what you are doing: better to disable and force a render group evaluation)
+                    col.prop(context.active_object.vlmSettings, 'render_group', text='Group')
+        else:
+            layout.label(text=f"{len(bake_objects)} parts selected")
+            if all((x.vlmSettings.indirect_only for x in bake_objects)):
+                layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Bake disabled', icon='INDIRECT_ONLY_ON').indirect_only = False
+            elif all((not x.vlmSettings.indirect_only for x in bake_objects)):
+                layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Bake enabled', icon='INDIRECT_ONLY_OFF').indirect_only = True
+            else:
+                layout.operator(VLM_OT_state_indirect_only.bl_idname, text='Bake mixed on/off', icon='REMOVE').indirect_only = True
+            single_group = -5
+            for obj in bake_objects:
+                if obj.vlmSettings.use_bake:
+                    if single_group == -5:
+                        single_group = -4
+                    elif single_group != -4:
+                        single_group = -3
+                        break
+                elif single_group == -4:
+                    single_group = -3
+                    break
+                elif single_group == -5:
+                    single_group = obj.vlmSettings.render_group
+                elif single_group != obj.vlmSettings.render_group:
+                    single_group = -2
+            if single_group == -4:
+                layout.label(text="Unwrapped UV bake")
+            elif single_group == -3:
+                layout.label(text="Mixed Unwrapped/Projected UV")
+            elif single_group == -2:
+                layout.label(text="Multiple render groups")
+            elif single_group == -1:
+                layout.label(text="Undefined render groups")
+            else:
+                layout.label(text=f"Render Group #{single_group}")
 
 
 class VLM_PT_3D_Bake_Result(bpy.types.Panel):
@@ -994,39 +1129,45 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
     bl_category = "VLM"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
+    
+    @classmethod
+    def poll(cls, context):
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        result_objects = [obj for obj in context.selected_objects if result_col and obj.name in result_col.all_objects]
+        return result_objects
+
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
-        if not result_col: return
         result_objects = [obj for obj in context.selected_objects if obj.name in result_col.all_objects]
-        if result_objects:
-            if len(result_objects) == 1:
-                props = result_objects[0].vlmSettings
-                layout.prop(props, 'bake_lighting')
-                layout.prop(props, 'bake_objects')
-                layout.prop(props, 'bake_sync_light')
-                layout.prop(props, 'bake_sync_trans')
-                layout.prop(props, 'bake_type')
-                layout.prop(props, 'bake_hdr_range')
-                layout.separator()
-                layout.prop(props, 'bake_nestmap')
-                layout.operator(VLM_OT_select_nestmap_group.bl_idname)
-            has_loaded = False
-            has_unloaded = False
-            bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
-            for obj in result_objects:
-                paths = [f'{bakepath}{obj.vlmSettings.bake_lighting} - Group {i}.exr' for i,_ in enumerate(obj.data.materials)]
-                images = [vlm_utils.image_by_path(path) for path in paths]
-                all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
-                if all_loaded:
-                    has_loaded = True
-                else:
-                    has_unloaded = True
-            if has_loaded:
-                layout.operator(VLM_OT_load_render_images.bl_idname, text='Unload Renders', icon='RESTRICT_RENDER_ON').is_unload = True
+        if len(result_objects) == 1:
+            props = result_objects[0].vlmSettings
+            col = layout.column()
+            col.enabled = False
+            col.prop(props, 'bake_lighting')
+            col.prop(props, 'bake_objects')
+            col.prop(props, 'bake_sync_light')
+            col.prop(props, 'bake_sync_trans')
+            col.prop(props, 'bake_type')
+            col.prop(props, 'bake_hdr_range')
+            col.prop(props, 'bake_nestmap')
+            layout.operator(VLM_OT_select_nestmap_group.bl_idname)
+        has_loaded = False
+        has_unloaded = False
+        bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
+        for obj in result_objects:
+            paths = [vlm_utils.get_packmap_bakepath(context, mat) for mat in obj.data.materials]
+            images = [vlm_utils.image_by_path(path) for path in paths]
+            all_loaded = all((not os.path.exists(bpy.path.abspath(path)) or im is not None for path, im in zip(paths, images)))
+            if all_loaded:
+                has_loaded = True
             else:
-                layout.operator(VLM_OT_load_render_images.bl_idname, text='Load Renders', icon='RESTRICT_RENDER_OFF').is_unload = False
+                has_unloaded = True
+        if has_loaded:
+            layout.operator(VLM_OT_load_render_images.bl_idname, text='Unload Renders', icon='RESTRICT_RENDER_ON').is_unload = True
+        else:
+            layout.operator(VLM_OT_load_render_images.bl_idname, text='Load Renders', icon='RESTRICT_RENDER_OFF').is_unload = False
 
 
 class VLM_PT_3D_Tools(bpy.types.Panel):
@@ -1043,8 +1184,6 @@ class VLM_PT_3D_Tools(bpy.types.Panel):
         layout.operator(VLM_OT_select_occluded.bl_idname)
         layout.separator()
         layout.operator(VLM_OT_toggle_no_exp_modifier.bl_idname)
-        layout.separator()
-        layout.operator(VLM_OT_apply_aoi.bl_idname)
         layout.separator()
         layout.operator(VLM_OT_table_uv.bl_idname)
         layout.separator()
@@ -1145,7 +1284,10 @@ classes = (
     VLM_PT_Camera,
     VLM_PT_Lightmapper,
     VLM_PT_Col_Props,
-    VLM_PT_3D_Bake_Object,
+    VLM_PT_3D_VPX_Import,
+    VLM_PT_3D_VPX_Object,
+    VLM_PT_3D_VPX_Light,
+    VLM_PT_3D_Bake_Options,
     VLM_PT_3D_Bake_Result,
     VLM_PT_3D_Tools,
     VLM_OT_new_from_vpx,
@@ -1158,7 +1300,6 @@ classes = (
     VLM_OT_state_import_mesh,
     VLM_OT_state_import_transform,
     VLM_OT_state_indirect_only,
-    VLM_OT_clear_render_group_cache,
     VLM_OT_select_render_group,
     VLM_OT_select_nestmap_group,
     VLM_OT_select_baked,
@@ -1173,6 +1314,7 @@ classes = (
     VLM_OT_export_vpx,
     VLM_OT_export_pov,
     VLM_OT_select_table_file,
+    VLM_OT_calc_bake_size
     )
 preference_classes = (VLM_PT_3D_warning_panel, VLM_PT_Props_warning_panel, VLM_OT_install_dependencies, VLM_preferences)
 registered_classes = []
