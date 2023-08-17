@@ -23,11 +23,6 @@ from PIL import Image # External dependency
 
 
 def render_nestmaps(op, context):
-    camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
-    if not camera:
-        op.report({'ERROR'}, 'Bake camera is missing')
-        return {'CANCELLED'}
-
     result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
     if not result_col or len(result_col.all_objects) == 0:
         op.report({'ERROR'}, 'No bake result to process')

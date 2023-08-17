@@ -40,7 +40,7 @@ def projected_bounds_area(mvp_matrix, obj):
 
 
 def compute_render_groups(op, context):
-    """Evaluate the set of bake groups (groups of objects that do not overlap when rendered 
+    """Evaluate the set of render groups (groups of objects that do not overlap when rendered 
     from the camera point of view) and store the result in the 'group' property of objects.
     It will also compute 2 group masks:
     - 'Mask - Group xx.png' a full resolution of the group mask, including border fade (used during nesting for border padding)
@@ -246,19 +246,6 @@ def render_group_masks(op, context):
 
         for obj in linked_objects:
             scene.collection.objects.unlink(obj)
-
-    # Hires mask are not used for baked objects
-    # for obj in bake_col.all_objects:
-        # if not obj.vlmSettings.use_bake:
-            # continue
-        # scene.collection.objects.link(obj)
-        # print(f'\n. Rendering mask for {obj}')
-        # scene.render.filepath = f'{bakepath}Mask - Bake - {obj.name}.png'
-        # scene.render.image_settings.file_format = 'PNG'
-        # scene.render.image_settings.color_mode = 'RGBA'
-        # scene.render.image_settings.color_depth = '8'
-        # bpy.ops.render.render(write_still=True, scene=scene.name)
-        # scene.collection.objects.unlink(obj)
 
     bpy.data.materials.remove(mask_mat)
     bpy.data.scenes.remove(scene)
