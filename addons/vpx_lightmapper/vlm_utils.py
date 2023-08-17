@@ -115,7 +115,7 @@ def tri_area(co1, co2, co3):
 # https://developer.blender.org/diffusion/B/browse/master/source/blender/editors/uvedit/uvedit_unwrap_ops.c
 # https://developer.blender.org/diffusion/B/browse/master/source/blender/blenlib/intern/uvproject.c
 # ar is x/y render resolution, including pixel aspect ratio
-def project_uv(camera, obj, ar):
+def project_uv(camera, obj, ar, uv_layer = None):
     if camera.type != 'CAMERA':
         raise Exception(f"Object {camera.name} is not a camera.")
     mesh = obj.data
@@ -130,7 +130,8 @@ def project_uv(camera, obj, ar):
     shiftx = 0.5 - (camera.data.shift_x * xasp)
     shifty = 0.5 - (camera.data.shift_y * yasp)
     camsize = math.tan(camera.data.angle / 2.0)
-    uv_layer = mesh.uv_layers.active
+    if uv_layer is None:
+        uv_layer = mesh.uv_layers.active
     for face in mesh.polygons:
         y_mirror = 1.0
         for loop_idx in face.loop_indices:
@@ -158,36 +159,6 @@ def get_library_path():
     return fixSlash(os.path.dirname(__file__)) + "/assets/VPXMeshes.blend"
  
  
-def install_assetlib():
-    shouldCreate = True
-    for lib in bpy.context.preferences.filepaths.asset_libraries:
-        if lib.path == get_assetlib_path():
-            shouldCreate = False
-    if shouldCreate:
-        bpy.ops.preferences.asset_library_add(directory=get_assetlib_path())
-        for lib in bpy.context.preferences.filepaths.asset_libraries:
-            if lib.path == get_assetlib_path():
-                lib.name = 'VLM Pinball Parts'
-
-
-def uninstall_assetlib():
-    libs = [(lib.name, lib.path) for lib in bpy.context.preferences.filepaths.asset_libraries if lib.path != get_assetlib_path()]
-    for _ in range(len(bpy.context.preferences.filepaths.asset_libraries)):
-        bpy.ops.preferences.asset_library_remove(0)
-    for _, path in libs:
-        bpy.ops.preferences.asset_library_add(directory=path)
-    for lib in bpy.context.preferences.filepaths.asset_libraries:
-        for name, path in libs:
-            if lib.path == path:
-                lib.name = name
-                break
-    if False: # Sadly this is not working as intended as Blender 3.2
-        for index, lib in enumerate(bpy.context.preferences.filepaths.asset_libraries):
-            if lib.path == get_assetlib_path():
-                bpy.ops.preferences.asset_library_remove(index)
-                break
-
-
 def get_vpx_item(context, vpx_name, vpx_subpart, single=False):
     '''
     Search the complete scene for objects linked to the given vpx object/subpart
@@ -396,10 +367,6 @@ def is_rgb_led(objects):
         print(f". Lights are marked as RGB Led but use different colors (Lights: {[o.name for o in objects]}).")
     return True
         
-
-def is_part_of_bake_category(obj, category):
-    return next((col for col in obj.users_collection if col.vlmSettings.bake_mode == category), None) is not None
-
 
 def get_lightings(context):
     """Return the list of lighting situations to be rendered as dictionary of tuples

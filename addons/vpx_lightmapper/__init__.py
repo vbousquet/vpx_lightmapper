@@ -1179,7 +1179,6 @@ registered_classes = []
 
 
 def register():
-    bpy.app.timers.register(vlm_utils.install_assetlib)
     global dependencies_installed
     dependencies_installed = False
     for cls in preference_classes:
@@ -1205,7 +1204,6 @@ def unregister():
         del bpy.types.Scene.vlmSettings
         del bpy.types.Collection.vlmSettings
         del bpy.types.Object.vlmSettings
-    vlm_utils.uninstall_assetlib()
 
 
 if __name__ == "__main__":
