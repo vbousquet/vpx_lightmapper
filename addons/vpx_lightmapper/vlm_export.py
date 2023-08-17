@@ -66,6 +66,30 @@ def get_vpx_sync_light(obj, context, light_col):
     return (vpx_name, sync_color)
 
 
+def push_map_array(prefix, name, parts):
+    return f'Dim {prefix}_{name}: {prefix}_{name}=Array(' + ', '.join([f'{elem_ref(export_name(obj.name))}' for obj in parts]) + ')\n'
+
+
+def get_script_arrays(result_col):
+    code = '\' VLM Arrays - Start\n'
+    # One array for each lighting scenario with all corresponding parts
+    all_sync_light = sorted(list({obj.vlmSettings.bake_sync_light for obj in result_col.all_objects if obj.vlmSettings.bake_sync_light != ''}))
+    for sync_light in all_sync_light:
+        code += push_map_array('BL', export_name(sync_light), sorted([obj for obj in result_col.all_objects if sync_light == obj.vlmSettings.bake_sync_light], key=lambda x: x.name))
+    # One array for each movable object with all corresponding parts (solid bake and lightmaps)
+    all_sync_trans = sorted(list({obj.vlmSettings.bake_sync_trans for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''}))
+    for sync_trans in all_sync_trans:
+        code += push_map_array('BM', export_name(sync_trans), sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
+    # Globals arrays per bake type
+    code += push_map_array('BG', 'Default', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'default'], key=lambda x: x.name))
+    code += push_map_array('BG', 'Static', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'static'], key=lambda x: x.name))
+    code += push_map_array('BG', 'Active', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'active'], key=lambda x: x.name))
+    code += push_map_array('BG', 'Lightmap', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.name))
+    code += push_map_array('BG', 'All', sorted([obj for obj in result_col.all_objects], key=lambda x: x.name))
+    code += '\' VLM Arrays - End\n'
+    return code
+
+
 def export_vpx(op, context):
     """Export bakes by updating the reference VPX file:
     . Remove all items in 'VLM.Visuals' and 'VLM.Lightmaps' layer
@@ -584,67 +608,6 @@ def export_vpx(op, context):
         nestmap_index += 1
 
 
-    def push_lampz(lightmaps, lampz_factors):
-        code = ''
-        light_processed = []
-        for obj in sorted(lightmaps, key=lambda x: x.vlmSettings.bake_sync_light):
-            vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
-            lampz_id = '0'
-            # try to identify lights and flashers with the pattern 'l11' or 'f11'
-            if vpx_name:
-                id = re.fullmatch(r'[lfLF](\d+)\w?', vpx_name)
-                if id:
-                    lampz_id = f'1{id[1].zfill(2)}' if vpx_name.startswith('f') else id[1]
-                    if lampz_id not in light_processed:
-                        if vpx_name.lower() not in table_lights and vpx_name.upper() not in table_lights:
-                            code += f'	\' Lampz.MassAssign({lampz_id}) = {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
-                        else:
-                            code += f'	Lampz.MassAssign({lampz_id}) = {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
-                        light_processed.append(lampz_id)
-                else:
-                    if vpx_name not in light_processed:
-                        code += f'	\' Sync on {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
-                        light_processed.append(vpx_name)
-            elem = elem_ref(export_name(obj.name))
-            factor = lampz_factors.get(elem, '100.0')
-            code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem}, {factor}, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
-        return code
-
-
-    def push_map_move(lightmaps, index):
-        code = ''
-        for obj in sorted(lightmaps, key=lambda x: x.vlmSettings.bake_sync_light):
-            sync = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
-            if sync and sync.vlmSettings.movable_script != '':
-                lines = sync.vlmSettings.movable_script.split(';')
-                if index-1 < len(lines):
-                    code += f'	{elem_ref(export_name(obj.name))}{lines[index-1]} \' VLM.Props;{"LM" if obj.vlmSettings.bake_type=="lightmap" else "BM"};{index};{obj.vlmSettings.bake_sync_trans}\n'
-        return code
-
-
-    def push_map_array(name, mode, lightmaps):
-        code = f'Dim {name}_{mode}: {name}_{mode}=Array('
-        code += ', '.join([f'{elem_ref(export_name(obj.name))}' for obj in sorted(lightmaps, key=lambda x: x.name)])
-        code += f') \' VLM.Array;{mode};{name}\n'
-        return code
-
-
-    def push_pending(pending):
-        if not pending: return ''
-        if pending[0] == 0: # Lampz
-            return push_lampz([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_lighting == pending[2]], pending[1])
-        elif pending[0] == 1: # Movable bakemap
-            return push_map_move([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap' and obj.vlmSettings.bake_sync_trans == pending[2]], int(pending[1]))
-        elif pending[0] == 2: # Movable lightmap
-            return push_map_move([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_sync_trans == pending[2]], int(pending[1]))
-        elif pending[0] == 3: # Movable's Lightmap array
-            return push_map_array(pending[1], 'LM', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_objects == pending[1]])
-        elif pending[0] == 4: # Movable's bakemap array
-            return push_map_array(pending[1], 'BM', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap' and obj.vlmSettings.bake_objects == pending[1]])
-        elif pending[0] == 5: # Movable's Lightmap and bakemap array
-            return push_map_array(pending[1], 'BL', [obj for obj in result_col.all_objects if obj.vlmSettings.bake_objects == pending[1]])
-
-
     # Copy all other data from reference file, adjusting version and game data on the fly
     for src_path, mode, hashed in file_structure:
         if not src_storage.exists(src_path):
@@ -691,45 +654,23 @@ def export_vpx(op, context):
                     br.pos = code_pos
                     br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
                     new_code = ""
-                    pending = None
-                    lampz_factors = {}
+                    in_old_arrays = 0
                     for line in code.splitlines():
-                        if '\' VLM.Lampz;' in line: # Lampz initialization
-                            new_pending = (0, lampz_factors, *(line.split('\' VLM.Lampz;',1)[1].split(';')))
-                            if new_pending != pending:
-                                new_code += push_pending(pending)
-                                pending = new_pending
-                                lampz_factors.clear()
-                            if (len(line.split('\' VLM.Lampz;',1)[0].split('"')) > 1):
-                                result = re.match(r"UpdateLightMap\s+([_a-zA-Z][_a-zA-Z0-9]*)\s*,\s*([_a-zA-Z0-9.]*),\s*", line.split('\' VLM.Lampz;',1)[0].split('"')[1])
-                                if result:
-                                    lampz_factors[result.group(1)] = result.group(2)
-                        elif '\' VLM.Props;BM;' in line: # Object property synchronization => BakeMap
-                            new_pending = (1, *(line.split('\' VLM.Props;BM;',1)[1].split(';')))
-                            if new_pending != pending:
-                                new_code += push_pending(pending)
-                                pending = new_pending
-                        elif '\' VLM.Props;LM;' in line: # Object property synchronization => LightMap
-                            new_pending = (2, *(line.split('\' VLM.Props;LM;',1)[1].split(';')))
-                            if new_pending != pending:
-                                new_code += push_pending(pending)
-                                pending = new_pending
-                        elif '\' VLM.Array;LM;' in line: # LightMap array
-                            new_pending = (3, *(line.split('\' VLM.Array;LM;',1)[1].split(';')))
-                            if new_pending != pending:
-                                new_code += push_pending(pending)
-                                pending = new_pending
-                        elif '\' VLM.Array;BM_Room' in line: # BM_Room array
-                            new_code += "Dim BM_Room : BM_Room = Array("
-                            new_code += ', '.join(f'{obj}' for obj in bm_room_meshes)
-                            new_code += f') \' VLM.Array;BM_Room\n'
-                            pending = None                               
+                        if '\' VLM Arrays - End' in line:
+                            # End of old arrays: add new ones
+                            new_code += get_script_arrays(result_col)
+                            in_old_arrays = 2
+                        elif in_old_arrays:
+                            # Old arrays: just remove them
+                            pass
+                        elif '\' VLM Arrays - Start' in line:
+                            # Old arrays: just remove them
+                            in_old_arrays = 1
                         else:
-                            new_code += push_pending(pending)
-                            pending = None
                             new_code += line
-                            new_code += "\n"
-                    new_code += push_pending(pending)
+                            new_code += '\n'
+                    if in_old_arrays < 2:
+                        new_code += '\n' + get_script_arrays(result_col)
                     wr = biff_io.BIFF_writer()
                     wr.write_string(new_code)
                     br.insert_data(wr.get_data())
@@ -840,6 +781,7 @@ def export_vpx(op, context):
                 else:
                     br.skip_tag()
 
+
     hash_size = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHSIZE)
     file_hash = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHVAL)
     data_hash.CryptDestroyHash()
@@ -849,197 +791,6 @@ def export_vpx(op, context):
     dst_storage.Commit(storagecon.STGC_DEFAULT)
     src_storage.close()
 
-    # Create the script helper file
-    code = ''
-    code += "' ===============================================================\n"
-    code += "' ZVLM       Virtual Pinball X Light Mapper generated code\n"
-    code += "'\n"
-    code += "' This file provide default implementation and template to add bakemap\n"
-    code += "' & lightmap synchronization for position and lighting.\n"
-    code += "'\n"
-    code += "' Lines ending with a comment starting with \"' VLM.\" are meant to\n"
-    code += "' be copy/pasted ONLY ONCE, since the toolkit will take care of\n"
-    code += "' updating them directly in your table script, each time an\n"
-    code += "' export is made.\n"
-
-    code += "\n"
-    code += "\n"
-    code += "' ===============================================================\n"
-    code += "' The following code can be copy/pasted to have premade array for\n"
-    code += "' movable objects:\n"
-    code += "' - _LM suffixed arrays contains the lightmaps\n"
-    code += "' - _BM suffixed arrays contains the bakemap\n"
-    code += "' - _BL suffixed arrays contains both the bakemap & the lightmaps"
-    code += "\n"
-    all_sync_trans = sorted(list({obj.vlmSettings.bake_sync_trans for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''}))
-    for sync_trans in all_sync_trans:
-        code += push_map_array(export_name(sync_trans), 'LM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
-        code += push_map_array(export_name(sync_trans), 'BM', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans and obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
-        code += push_map_array(export_name(sync_trans), 'BL', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
-    code += push_map_array('World', 'BM', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light))
-
-    code += "\n"
-    code += "\n"
-    code += "' ===============================================================\n"
-    code += "' The following code can be copy/pasted to have premade array for\n"
-    code += "' VLM Visuals Room Brightness:\n"
-    code += "\n"
-    code += "Dim BM_Room : BM_Room = Array("
-    code += ', '.join(f'{obj}' for obj in bm_room_meshes)
-    code += f') \' VLM.Array;BM_Room\n'
-
-    code += "\n"
-    code += "\n"
-    code += "' ===============================================================\n"
-    code += "' The following code can be copy/pasted if using Lampz fading system\n"
-    code += "' It links each Lampz lamp/flasher to the corresponding light and lightmap\n"
-    code += "\n"
-    code += "Sub UpdateLightMap(lightmap, intensity, ByVal aLvl)\n"
-    code += "   if Lampz.UseFunction then aLvl = Lampz.FilterOut(aLvl)	'Callbacks don't get this filter automatically\n"
-    code += "   lightmap.Opacity = aLvl * intensity\n"
-    code += "End Sub\n"
-    code += "\n"
-    code += 'Sub LampzHelper\n'
-    lightmaps = sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.vlmSettings.bake_sync_light)
-    light_processed = []
-    for obj in lightmaps:
-        vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
-        if vpx_name is None:
-            print(f'. ERROR: {obj.name} has no vpx object defined')
-            continue
-        lampz_id = '0'
-        vpx_name = vpx_name.strip()
-        # try to identify lights and flashers with the pattern 'l11' or 'f11'
-        if vpx_name:
-            id = re.fullmatch(r'[lfLF](\d+)\w?', vpx_name)
-            if id:
-                lampz_id = f'1{id[1].zfill(2)}' if vpx_name.startswith('f') else id[1]
-                if lampz_id not in light_processed:
-                    if vpx_name.lower() not in table_lights and vpx_name.upper() not in table_lights:
-                        print(f'. light "{vpx_name}" is missing from the VPX file')
-                        code += f'	\' Lampz.MassAssign({lampz_id}) = {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
-                    else:
-                        code += f'	Lampz.MassAssign({lampz_id}) = {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
-                    light_processed.append(lampz_id)
-            else:
-                if vpx_name not in light_processed:
-                    code += f'	\' Sync on {vpx_name} \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
-                    light_processed.append(vpx_name)
-        code += f'	Lampz.Callback({lampz_id}) = "UpdateLightMap {elem_ref(export_name(obj.name))}, 100.0, " \' VLM.Lampz;{obj.vlmSettings.bake_lighting}\n'
-    code += 'End Sub\n'
-
-    code += "\n"
-    code += "\n"
-    code += "' ===============================================================\n"
-    code += "' The following code can be copy/pasted to adjust all the lightmaps\n"
-    code += "' attached to a given light\n"
-    code += "\n"
-    code += 'Sub LightHelper\n'
-    for li in light_processed:
-        code += f'	Dim l{li}_LM: l{li}_LM=Array('
-        first = True
-        for obj in lightmaps:
-            vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
-            lampz_id = '0'
-            if vpx_name:
-                id = re.fullmatch(r'[lfLF](\d+)\w?', vpx_name)
-                if id:
-                    lampz_id = f'1{id[1].zfill(2)}' if vpx_name.startswith('f') else id[1]
-                    if lampz_id == li:
-                        if not first: code += f', '
-                        code += f'{export_name(obj.name)}'
-                        first = False
-        code += f')\n'
-                    
-    code += 'End Sub\n'
-
-    code += "\n"
-    code += "\n"
-    code += "' ===============================================================\n"
-    code += "' The following code can serve as a base for movable position synchronization.\n"
-    code += "' You will need to adapt the part of the transform you want to synchronize\n"
-    code += "' and the source on which you want it to be synchronized.\n"
-    code += "\n"
-    code += 'Sub MovableHelper\n'
-    for sync_trans in all_sync_trans:
-        sync = bpy.data.objects.get(sync_trans)
-        if sync and sync.vlmSettings.movable_script != '':
-            lines = sync.vlmSettings.movable_script.split(';')
-            for index in range(len(lines)):
-                code += push_map_move([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap' and obj.vlmSettings.bake_sync_trans == sync_trans], index+1)
-                code += push_map_move([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap' and obj.vlmSettings.bake_sync_trans == sync_trans], index+1)
-        
-    # movables = sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''])
-    # for obj in movables:
-        # sync = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
-        # if sync and sync.vlmSettings.movable_script != '':
-            # for index, line in enumerate(sync.vlmSettings.movable_script.split(';'),start=1):
-                # code += f'	{elem_ref(export_name(obj.name))}{line} \' VLM.Props;{"LM" if obj.vlmSettings.bake_type=="lightmap" else "BM"};{index};{obj.vlmSettings.bake_sync_trans}\n'
-    code += 'End Sub\n'
-
-    code += "\n"
-    code += "\n"
-    code += "' ===============================================================\n"
-    code += "' The following code can be copy/pasted to disable baked lights\n"
-    code += "' Lights are not removed on export since they are needed for ball\n"
-    code += "' reflections and may be used for lightmap synchronisation.\n"
-    code += "\n"
-    code += 'Sub HideLightHelper\n'
-    for light in sorted(baked_vpx_lights):
-        if len(light) > 0: code += f'	{light}.Visible = False\n'
-    code += 'End Sub\n'
-
-    code += "\n"
-    code += "\n"
-    code += "' ===============================================================\n"
-    code += "' The following provides a basic synchronization mechanism were\n"
-    code += "' lightmaps are synchronized to corresponding VPX light or flasher,\n"
-    code += "' using a simple realtime timer called VLMTimer. This works great\n"
-    code += "' as a starting point but Lampz direct lightmap fading shoudl be prefered.\n"
-    code += "\n"
-    code += "Sub VLMTimer_Timer\n"
-    for obj in lightmaps:
-        vpx_name, sync_color = get_vpx_sync_light(obj, context, light_col)
-        obj_ref = elem_ref(export_name(obj.name))
-        if not vpx_name:
-            code += f"	{obj_ref}.Visible = False\n"
-        elif vpx_name in table_lights:
-            code += f'	UpdateLightMapFromLight {elem_ref(vpx_name)}, {obj_ref}, 100.0, {"True" if sync_color else "False"}\n'
-        elif vpx_name in table_flashers:
-            code += f'	UpdateLightMapFromFlasher {elem_ref(vpx_name)}, {obj_ref}, 100.0, {"True" if sync_color else "False"}\n'
-        else:
-            code += f"	{obj_ref}.Visible = False\n"
-    code += "End Sub\n"
-    code += "\n"
-    code += "Function LightFade(light, is_on, percent)\n"
-    code += "	If is_on Then\n"
-    code += "		LightFade = percent*percent*(3 - 2*percent) ' Smoothstep\n"
-    code += "	Else\n"
-    code += "		LightFade = 1 - Sqr(1 - percent*percent) ' \n"
-    code += "	End If\n"
-    code += "End Function\n"
-    code += "\n"
-    code += "Sub UpdateLightMapFromFlasher(flasher, lightmap, intensity_scale, sync_color)\n"
-    code += "	If flasher.Visible Then\n"
-    code += "		If sync_color Then lightmap.Color = flasher.Color\n"
-    code += "		lightmap.Opacity = intensity_scale * flasher.IntensityScale * flasher.Opacity / 1000.0\n"
-    code += "	Else\n"
-    code += "		lightmap.Opacity = 0\n"
-    code += "	End If\n"
-    code += "End Sub\n"
-    code += "\n"
-    code += "Sub UpdateLightMapFromLight(light, lightmap, intensity_scale, sync_color)\n"
-    code += "	light.FadeSpeedUp = light.Intensity / 50 '100\n"
-    code += "	light.FadeSpeedDown = light.Intensity / 200\n"
-    code += "	If sync_color Then lightmap.Color = light.Colorfull\n"
-    code += "	Dim t: t = LightFade(light, light.GetInPlayStateBool(), light.GetInPlayIntensity() / (light.Intensity * light.IntensityScale))\n"
-    code += "	lightmap.Opacity = intensity_scale * light.IntensityScale * t\n"
-    code += "End Sub\n"
-
-    with open(bpy.path.abspath('//VLM Script Helper.vbs'), 'w') as f:
-        f.write(code)
-    print(f'Helper script was saved to {bpy.path.abspath("//VLM Script Helper.vbs")}.')
-    
     print(f". {n_images} images exported in table files")
     print(". Images marked as used:", list(used_images.keys()))
     print(". Images marked as deletable:", list(removed_images.keys()))
