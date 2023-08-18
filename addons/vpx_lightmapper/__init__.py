@@ -236,6 +236,8 @@ class VLM_Collection_props(PropertyGroup):
         default='group'
     )
     is_opaque: BoolProperty(name="Opaque", description="Wether this collection only contains opaque objects which do not require blending.", default = True)
+    refraction_probe: StringProperty(name="Refraction Probe", description="Identifier of the refraction probe to be used on export", default = '')
+    reflection_probe: StringProperty(name="Reflection Probe", description="Identifier of the reflection probe to be used on export", default = '')
     depth_bias: IntProperty(name="Depth Bias", description="Depth Bias applied to the layer when exported to VPX. Set to 0 for playfield, Negative for layer above playfield, positive for layers under playfield.", default = 0)
     light_mode: EnumProperty(
         items=[
@@ -276,7 +278,7 @@ class VLM_Object_props(PropertyGroup):
     use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot instead of Rot when exporting", default = False)
     # Bake result properties (for object inside the bake result collection)
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
-    bake_objects: StringProperty(name="Bake", description="Bake collections included in this bake/lightmap", default="")
+    bake_collections: StringProperty(name="Bake", description="Bake collections included in this bake/lightmap", default="")
     bake_sync_light: StringProperty(name="Sync Light", description="Object to sync light state on", default="")
     bake_sync_trans: StringProperty(name="Sync Trans", description="Object to sync transform on", default="")
     bake_type: EnumProperty(
@@ -894,6 +896,10 @@ class VLM_PT_Col_Props(bpy.types.Panel):
             layout.prop(col.vlmSettings, 'bake_mode', expand=True)
             layout.prop(col.vlmSettings, 'depth_bias', expand=True)
             layout.prop(col.vlmSettings, 'is_opaque', expand=True)
+            sub = layout.column()
+            sub.enabled = not col.vlmSettings.is_opaque
+            sub.prop(col.vlmSettings, 'refraction_probe', expand=True)
+            layout.prop(col.vlmSettings, 'reflection_probe', expand=True)
         elif col.name in light_col.children:
             layout.prop(col.vlmSettings, 'light_mode', expand=True)
             layout.prop(col.vlmSettings, 'world', expand=True)

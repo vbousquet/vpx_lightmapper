@@ -360,18 +360,28 @@ def export_vpx(op, context):
         is_active = obj.vlmSettings.bake_type == 'active'
         is_static = obj.vlmSettings.bake_type == 'static'
         is_movable = obj.vlmSettings.bake_sync_trans != ''
-        is_playfield = playfield_col != '' and not is_lightmap and obj.vlmSettings.bake_objects == playfield_col.name
+        is_playfield = playfield_col != '' and not is_lightmap and obj.vlmSettings.bake_collections == playfield_col.name
         has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None) is not None
         depth_bias = None
-        for col_name in obj.vlmSettings.bake_objects.split(';'):
+        reflection_probe = None
+        refraction_probe = None
+        for col_name in obj.vlmSettings.bake_collections.split(';'):
             col = vlm_collections.get_collection(bake_col, col_name, create=False)
             if col:
                 if depth_bias != None and depth_bias != col.vlmSettings.depth_bias:
-                    print(f'ERROR: {obj.name} merges multiple bake collections with different depth bias settings {obj.vlmSettings.bake_objects}')
+                    print(f'ERROR: {obj.name} merges multiple bake collections with different depth bias settings {obj.vlmSettings.bake_collections}')
                 depth_bias = col.vlmSettings.depth_bias
+                if reflection_probe != None and reflection_probe != col.vlmSettings.reflection_probe:
+                    print(f'ERROR: {obj.name} merges multiple bake collections with different reflection_probe settings {obj.vlmSettings.bake_collections}')
+                reflection_probe = col.vlmSettings.reflection_probe
+                if refraction_probe != None and refraction_probe != col.vlmSettings.refraction_probe:
+                    print(f'ERROR: {obj.name} merges multiple bake collections with different refraction_probe settings {obj.vlmSettings.bake_collections}')
+                refraction_probe = col.vlmSettings.refraction_probe
             elif obj != pfobj:
                 print(f'ERROR: {obj.name} contains object of missing bake collection {col}')
         if not depth_bias: depth_bias = 0
+        if not reflection_probe: reflection_probe = ''
+        if not refraction_probe: refraction_probe = ''
         if is_lightmap: depth_bias = depth_bias - 10
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
@@ -494,6 +504,8 @@ def export_vpx(op, context):
             writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
         elif obj != pfobj:
             bm_room_meshes.append(export_name(obj.name))
+        writer.write_tagged_string(b'REFL', reflection_probe)
+        writer.write_tagged_string(b'REFR', refraction_probe)
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())

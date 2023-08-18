@@ -418,7 +418,7 @@ def create_bake_meshes(op, context):
                 bake_instance.matrix_world.identity()
             adapt_materials(bake_instance.data, light_name, is_lightmap)
             bake_instance.vlmSettings.bake_lighting = light_name
-            bake_instance.vlmSettings.bake_objects = bake_col.name
+            bake_instance.vlmSettings.bake_collections = bake_col.name
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
             bake_instance.vlmSettings.bake_hdr_range = bake_hdr_range[light_name]
@@ -475,7 +475,7 @@ def create_bake_meshes(op, context):
         if not is_lightmap: continue
         influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
         print(f'\nProcessing lightmaps for {light_name} [{i+1}/{len(light_scenarios)}]')
-        for (bake_col, bake_name, bake_mesh, sync_obj), lightmap_vmap in zip(merged_bake_meshes, vmaps):
+        for (merged_bake_cols, bake_name, bake_mesh, sync_obj), lightmap_vmap in zip(merged_bake_meshes, vmaps):
             obj_name = f'{bake_name}.LM.{light_name}'
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             # Remove face shading (lightmap are not made to be shaded and the pruning process breaks the shading)
@@ -503,7 +503,7 @@ def create_bake_meshes(op, context):
                     bake_instance.matrix_world.identity()
                 bake_instance.vlmSettings.bake_type = 'lightmap'
                 bake_instance.vlmSettings.bake_lighting = light_name
-                bake_instance.vlmSettings.bake_objects = bake_col
+                bake_instance.vlmSettings.bake_collections = merged_bake_cols
                 bake_instance.vlmSettings.bake_hdr_range = hdr_range
                 bake_instance.vlmSettings.bake_sync_light = ';'.join([l.name for l in lights]) if lights else ''
                 bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
