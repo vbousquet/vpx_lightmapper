@@ -194,7 +194,6 @@ class VLM_Scene_props(PropertyGroup):
         default='256'
     )
     # Exporter options
-    enable_vpx_reflection: BoolProperty(name="Enable VPX reflection", description="Enable VPX playfield reflection for exported models and lightmaps. Note that this will usually leads to 'double' reflections since indirect light is already baked", default = False)
     export_mode: EnumProperty(
         items=[
             ('default', 'Default', 'Add bakes and lightmap to the table', '', 0),
@@ -205,7 +204,6 @@ class VLM_Scene_props(PropertyGroup):
         name='Export mode',
         default='remove_all'
     )
-    playfield_col: PointerProperty(name="Playfield", type=bpy.types.Collection, description="Bake collection used for VPX playfield (object rendered with table reflections)")
     # Active table informations
     table_file: StringProperty(name="Table", description="Table filename", default="")
     playfield_size: FloatVectorProperty(name="Playfield size:", description="Size of the playfield in VP unit", default=(0, 0, 0, 0), size=4)
@@ -800,8 +798,6 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         layout.separator()
         # Export properties
         layout.prop(vlmProps, "export_mode")
-        layout.prop(vlmProps, "playfield_col")
-        layout.prop(vlmProps, "enable_vpx_reflection")
         layout.separator()
         # Actions buttons
         row = layout.row()

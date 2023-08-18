@@ -1937,7 +1937,6 @@ def read_vpx(op, context, filepath):
         playfield_col = vlm_collections.get_collection(bakes, 'Playfield')
         vlm_collections.unlink(playfield_obj)
         playfield_col.objects.link(playfield_obj)
-        context.scene.vlmSettings.playfield_col = playfield_col
         light_col = vlm_collections.get_collection(context.scene.collection, LIGHTS_COL, create=False)
         if light_col:
             context.scene.collection.children.unlink(light_col)

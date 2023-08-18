@@ -123,7 +123,6 @@ def export_vpx(op, context):
 
     bakepath = vlm_utils.get_bakepath(context)
     vlm_utils.mkpath(f"{bakepath}Export/")
-    playfield_col = context.scene.vlmSettings.playfield_col
     export_mode = context.scene.vlmSettings.export_mode
     light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
     global_scale = vlm_utils.get_global_scale(context)
@@ -362,7 +361,6 @@ def export_vpx(op, context):
         is_active = obj.vlmSettings.bake_type == 'active'
         is_static = obj.vlmSettings.bake_type == 'static'
         is_movable = obj.vlmSettings.bake_sync_trans != ''
-        is_playfield = playfield_col != '' and not is_lightmap and obj.vlmSettings.bake_collections == playfield_col.name
         has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None) is not None
         depth_bias = None
         reflection_probe = None
@@ -442,7 +440,7 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'STRE', False)
         writer.write_tagged_u32(b'DILI', 255) # 255 is 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
-        writer.write_tagged_bool(b'REEN', not is_playfield and context.scene.vlmSettings.enable_vpx_reflection)
+        writer.write_tagged_bool(b'REEN', False)
         writer.write_tagged_bool(b'EBFC', False)
         writer.write_tagged_string(b'MAPH', '')
         writer.write_tagged_bool(b'OVPH', True if obj == pfobj else False)
