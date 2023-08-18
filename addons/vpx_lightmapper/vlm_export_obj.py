@@ -19,7 +19,7 @@ from . import vlm_nest
 
 
 def export_obj(op, context):
-    camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    camera = context.scene.camera
     if not camera:
         op.report({'ERROR'}, 'Bake camera is missing')
         return {'CANCELLED'}

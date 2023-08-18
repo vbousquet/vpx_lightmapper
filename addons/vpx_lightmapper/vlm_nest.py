@@ -993,16 +993,16 @@ def perform_nesting(islands, uv_nest_name, tex_w, tex_h, padding, only_one_page=
                 if place[0] > y + span[0]:
                     y = place[0] - span[0]
             if x == x_start:
-                if y == y_start:
+                if y == y_start: # Placed at selected location
                     n_succeeded = n_succeeded + 1
                     if n_succeeded >= w:
                         break
-                else:
+                else: # Failed to place at selected location, but found a position upper to test
                     n_succeeded = 0
-            else:
+            else: # Failed to place using the selected row, moving right
                 n_succeeded = 0
                 y = 0
-                if x + w >= tex_w:
+                if x + w >= tex_w: # Fully failed, test with next rotation, or, if all rotations tested, go to next page (if not running in single page mode)
                     x = 0
                     col_index = 0
                     rot_index = rot_index + 1

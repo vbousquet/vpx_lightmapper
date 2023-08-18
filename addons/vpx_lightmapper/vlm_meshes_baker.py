@@ -84,7 +84,7 @@ def create_bake_meshes(op, context):
         op.report({'ERROR'}, "No 'VLM.Lights' collection to process")
         return {'CANCELLED'}
 
-    camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    camera = context.scene.camera
     if not camera:
         op.report({'ERROR'}, 'Bake camera is missing')
         return {'CANCELLED'}

@@ -59,7 +59,7 @@ def get_render_size(context):
     render_size = (int(opt_render_height * render_aspect_ratio), opt_render_height)
     if context.scene.vlmSettings.layback_mode == 'fit_pf' and context.scene.vlmSettings.playfield_col:
         # render height apply to projected playfield, so upscale accordingly
-        camera = get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+        camera = context.scene.camera
         if camera:
             winx = render_size[0] * context.scene.render.pixel_aspect_x
             winy = render_size[1] * context.scene.render.pixel_aspect_y

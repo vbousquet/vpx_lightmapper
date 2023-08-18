@@ -259,7 +259,7 @@ def render_all_groups(op, context):
         op.report({'ERROR'}, "No 'VLM.Lights' collection to process")
         return {'CANCELLED'}
 
-    camera_object = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    camera_object = context.scene.camera
     if not camera_object:
         op.report({'ERROR'}, 'Bake camera is missing')
         return {'CANCELLED'}

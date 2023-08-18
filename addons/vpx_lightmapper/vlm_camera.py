@@ -41,7 +41,7 @@ def camera_inclination_update(op, context):
     and overscale image on the y axis (for bake texture density) corresponding to what it would have been
     if we have deformed the geometry (like in VPX)
     """
-    camera_object = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    camera_object = context.scene.camera
     bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
     playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
     if not camera_object or not bake_col:

@@ -382,7 +382,7 @@ class VLM_OT_compute_render_groups(Operator):
     def poll(cls, context):
         if context.blend_data.filepath == '': return False
         if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
-        if not vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True): return False
+        if not context.scene.camera: return False
         return True
         
     def execute(self, context):
@@ -400,7 +400,7 @@ class VLM_OT_render_all_groups(Operator):
         if context.blend_data.filepath == '': return False
         if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
         if not vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False): return False
-        if not vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True): return False
+        if not context.scene.camera: return False
         return True
         
     def execute(self, context):
@@ -418,7 +418,7 @@ class VLM_OT_create_bake_meshes(Operator):
         if context.blend_data.filepath == '': return False
         if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
         if not vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False): return False
-        if not vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True): return False
+        if not context.scene.camera: return False
         return True
         
     def execute(self, context):
@@ -689,14 +689,12 @@ class VLM_OT_apply_aoi(Operator):
     
     @classmethod
     def poll(cls, context):
-        camera_object = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
-        return camera_object is not None and context.selected_objects
+        return context.scene.camera and context.selected_objects
 
     def execute(self, context):
-        camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
         influence = None
         for light in context.selected_objects:
-            light_influence = vlm_render_baker.get_light_influence(context.scene, context.view_layer.depsgraph, camera, light, None)
+            light_influence = vlm_render_baker.get_light_influence(context.scene, context.view_layer.depsgraph, context.scene.camera, light, None)
             if light_influence:
                 if influence:
                     min_x, max_x, min_y, max_y = influence
@@ -980,17 +978,13 @@ class VLM_OT_calc_bake_size(Operator):
     
     @classmethod
     def poll(cls, context):
-        if context.object.mode != 'OBJECT':
-            return False
-        camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
-        if not camera:
-            return False
-        if 'UVMap' not in context.active_object.data.uv_layers:
-            return False
+        if context.object.mode != 'OBJECT': return False
+        if not context.scene.camera: return False
+        if 'UVMap' not in context.active_object.data.uv_layers: return False
         return True
 
     def execute(self, context):
-        camera = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+        camera = context.scene.camera
         uv_unwrapped_layer = context.active_object.data.uv_layers['UVMap']
         uv_projected_layer = context.active_object.data.uv_layers.new()
         proj_ar = vlm_utils.get_render_proj_ar(context)
