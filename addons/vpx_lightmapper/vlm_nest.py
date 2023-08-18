@@ -30,6 +30,8 @@ from gpu_extras.batch import batch_for_shader
 from . import vlm_utils
 from PIL import Image # External dependency
 
+logger = vlm_utils.logger
+
 
 ## Code taken from Blender's core Magic UV add-on
 
@@ -172,7 +174,7 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
         elif r == 'SUCCESS':
             islands_to_pack.append(v)
         elif r == 'EMPTY':
-            print(f'>> WARNING: Object {obj.name} is empty. It doesn\'t have any faces to nest.\n')
+            logger.info(f'>> WARNING: Object {obj.name} is empty. It doesn\'t have any faces to nest.\n')
     prepare_length = time.time() - tick_time
 
     # Nest groups of islands into nestmaps
@@ -209,7 +211,7 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                 pixcount += block.pix_count
                 selected_islands.extend(block.islands)
             selection_names = [block.obj.name for block in selection]
-            print(f'\nTrying to nest in a single texture the {len(selected_islands)} islands ({pixcount/float(tex_w*tex_h):6.2%} fill with {pixcount} px / {tex_w*tex_h} content)\n. Source objects: {selection_names}')
+            logger.info(f'\nTrying to nest in a single texture the {len(selected_islands)} islands ({pixcount/float(tex_w*tex_h):6.2%} fill with {pixcount} px / {tex_w*tex_h} content)\n. Source objects: {selection_names}')
 
             # Save UV for undoing nesting if needed
             uv_undo = []
@@ -222,7 +224,7 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
 
             nestmap = perform_nesting(selected_islands, uv_nest_name, tex_w, tex_h, padding, only_one_page=(len(selection) > 1))
             if len(nestmap.targets) == 1:
-                print(f'. Nesting succeeded.')
+                logger.info(f'. Nesting succeeded.')
                 # Success: store result for later nestmap render
                 tick_time = time.time()
                 render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
@@ -270,7 +272,7 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                                 pixcount += block.pix_count
                                 added_pixcount += block.pix_count
                                 n_added += 1
-                    print(f'. Nesting overflowed. Replacing {overflow_block.obj.name} ({overflow_block.pix_count}px) from nesting group (smallest incompatible nest block) with {n_added} smaller blocks ({added_pixcount}px)')
+                    logger.info(f'. Nesting overflowed. Replacing {overflow_block.obj.name} ({overflow_block.pix_count}px) from nesting group (smallest incompatible nest block) with {n_added} smaller blocks ({added_pixcount}px)')
                     
                     # reset uv
                     index = 0
@@ -288,7 +290,7 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                     islands_to_pack.remove(block)
                     obj, bm, block_islands, block_pix_count = block
                     padding, islands, targets, target_heights = nestmap
-                    print(f'. Object {obj.name} did not fit on a single page. Splitting it.')
+                    logger.info(f'. Object {obj.name} did not fit on a single page. Splitting it.')
                     
                     # Gather faces that did not fit on the first page
                     remaining_faces = [] # The indices of faces that did not fit on the first page
@@ -351,12 +353,12 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                     # Prepare nesting of the remaining islands
                     r, v = prepare_nesting(context, dup, padding, uv_bake_name, render_sizes, tex_w, tex_h)
                     if r == 'SUCCESS':
-                        print(f'. {len(remaining_islands)} islands were splitted, and still need to be nested.')
+                        logger.info(f'. {len(remaining_islands)} islands were splitted, and still need to be nested.')
                         islands_to_pack.append(v)
                     elif r == 'EMPTY':
-                        print(f'>> WARNING: Object {dup.name} is empty. It doesn\'t have any faces to nest.\n')
+                        logger.info(f'>> WARNING: Object {dup.name} is empty. It doesn\'t have any faces to nest.\n')
                     else:
-                        print(f'. nesting the remaining island failed.')
+                        logger.info(f'. nesting the remaining island failed.')
 
                     # Create object with the nested faces
                     bmesh.ops.delete(bm, geom=[bm.faces[i] for i in remaining_faces], context='FACES')
@@ -368,14 +370,14 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                     render_nestmap(context, [NestBlock(obj, None, processed_islands, processed_pix_count)], uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
                     render_length = time.time() - tick_time
                     nestmap_index = nestmap_index + 1
-                    print(f'. {len(processed_islands)} islands were nested on the first page and kept.')
+                    logger.info(f'. {len(processed_islands)} islands were nested on the first page and kept.')
                     break
 
     # Free unprocessed data if any
     for block in islands_to_pack:
         block.bm.free()
     total_length = time.time() - start_time
-    print(f'. Nestmapping finished ({n_failed} overflow were handled for {nestmap_index} generated nestmaps) in {str(datetime.timedelta(seconds=total_length))} (prepare={str(datetime.timedelta(seconds=prepare_length))}, nest={str(datetime.timedelta(seconds=total_length-prepare_length-render_length))}, render={str(datetime.timedelta(seconds=render_length))}).')
+    logger.info(f'. Nestmapping finished ({n_failed} overflow were handled for {nestmap_index} generated nestmaps) in {str(datetime.timedelta(seconds=total_length))} (prepare={str(datetime.timedelta(seconds=prepare_length))}, nest={str(datetime.timedelta(seconds=total_length-prepare_length-render_length))}, render={str(datetime.timedelta(seconds=render_length))}).')
         
     return (nestmap_index, splitted_objects)
 
@@ -536,7 +538,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
     with_normalmap = False
     for obj_name in sorted(list({obj.name for (obj, _, _, _) in selection}), key=lambda x:bpy.data.objects[x].vlmSettings.bake_lighting):
         obj = bpy.data.objects[obj_name]
-        print(f'. Copying renders (HDR range={obj.vlmSettings.bake_hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
+        logger.info(f'. Copying renders (HDR range={obj.vlmSettings.bake_hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
 
         # Render to the packed nest map
         for island in islands:
@@ -552,7 +554,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                 continue
             if obj.vlmSettings.bake_nestmap != nestmap_index:
                 if obj.vlmSettings.bake_nestmap != -1:
-                    print(f'ERROR: object {obj.name} was not splitted but has parts on multiple nestmaps')
+                    logger.info(f'ERROR: object {obj.name} was not splitted but has parts on multiple nestmaps')
                 obj.vlmSettings.bake_nestmap = nestmap_index
             
             # Loaded the bake and mask if not already loaded and cached
@@ -561,7 +563,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
             island_render = cache_get(image_cache, vlm_utils.get_packmap_bakepath(context, mat))
             island_normalmap = cache_get(image_cache, vlm_utils.get_packmap_normalmappath(context, mat)) if has_normalmap else None
             if island_render is None and island_normalmap is None:
-                print('. No render (likely uninfluenced lightmap), skipping island')
+                logger.info('. No render (likely uninfluenced lightmap), skipping island')
                 continue
             #FIXME for traditional bake, use the solid bake alpha channel ?
             render_id = island_obj.data.materials[island['mat_index']].get('VLM.Render')
@@ -710,7 +712,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
             for span in target[x]:
                 if span[0] < target_h:
                     filled += min(target_h - 1, span[1]) - span[0] + 1
-        print(f'. Texture #{i} has a size of {target_w}x{target_h} for a fill rate of {1.0 - (filled/(target_w*target_h)):>6.2%} (alpha: {has_alpha[i]})')
+        logger.info(f'. Texture #{i} has a size of {target_w}x{target_h} for a fill rate of {1.0 - (filled/(target_w*target_h)):>6.2%} (alpha: {has_alpha[i]})')
     
     # Save the normalmap nestmaps
     if with_normalmap:
@@ -745,7 +747,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
             Image.open(path_png).save(path_webp, format = "WebP", lossless = True)
     
     bpy.data.scenes.remove(scene)
-    print(f'. Nest map generated and saved to {base_filepath}')
+    logger.info(f'. Nest map generated and saved to {base_filepath}')
 
 
 def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, tex_h):
@@ -829,7 +831,7 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
                 max_uv = sel_max_uv.copy()
                 min_uv = sel_min_uv.copy()
             if selected_faces:
-                print(f'. Object {obj.name} has parts that do not fit in the target texture. It has been splitted according to the texture settings.')
+                logger.info(f'. Object {obj.name} has parts that do not fit in the target texture. It has been splitted according to the texture settings.')
                 bm2 = bm.copy()
                 bm2.faces.ensure_lookup_table()
                 
@@ -846,7 +848,7 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
                 return ('SPLITTED', (obj, dup))
             else:
                 # We did not find a face that fits in the texture. No splitting is possible, just fail
-                print(f'. Object {obj} has a face that do not fit in the target texture. Nestmapping can not be achieved.')
+                logger.info(f'. Object {obj} has a face that do not fit in the target texture. Nestmapping can not be achieved.')
                 return ('FAILED', None)
         
         # Render the island and create a discrete tuple model (vertical opaque spans) and a list of its column order
@@ -934,7 +936,7 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
     if offscreen is not None:
         offscreen.free()
 
-    print(f'. Nesting prepared ({len(islands):>3} islands, {total_pix_count:>7}px, {src_w}x{src_h} renders) for {obj.name}')
+    logger.info(f'. Nesting prepared ({len(islands):>3} islands, {total_pix_count:>7}px, {src_w}x{src_h} renders) for {obj.name}')
     return ('SUCCESS', NestBlock(obj, bm, islands, total_pix_count))
 
 
@@ -965,7 +967,7 @@ def perform_nesting(islands, uv_nest_name, tex_w, tex_h, padding, only_one_page=
         island_h = len(island_masks[1]) # height is number of column of 90 rotated island
         if island_w > tex_w or island_h > tex_h:
             # FIXME this needs to be handled gracefully (here it skips, but it will likely crash afterward)
-            print(f'. Island #{index:>3}/{len(islands)} size is {island_w}x{island_h} and cannot be placed in a {tex_w}x{tex_h} texture, skipping island')
+            logger.info(f'. Island #{index:>3}/{len(islands)} size is {island_w}x{island_h} and cannot be placed in a {tex_w}x{tex_h} texture, skipping island')
             continue
         x = y = n = 0
         n_succeeded = 0
@@ -1011,10 +1013,10 @@ def perform_nesting(islands, uv_nest_name, tex_w, tex_h, padding, only_one_page=
                         n = n + 1
                         if only_one_page: # Fast Fail if packing to a single page
                             island['place'] = (n, x, y, rot) # mark it to identify the first offender
-                            print(f'. Island #{index:>3}/{len(islands)} could not be placed (single page mode) pixcount:{island["pixcount"]:>7}px  from {island["source"][0].name}')
+                            logger.info(f'. Island #{index:>3}/{len(islands)} could not be placed (single page mode) pixcount:{island["pixcount"]:>7}px  from {island["source"][0].name}')
                             return NestMap(padding, islands, [], [])
         island['place'] = (n, x, y, rot)
-        # print(f'. Island #{index:>3}/{len(islands)} placed on nestmap #{n} at {x:>4}, {y:>4} o:{rot} pixcount:{island["pixcount"]:>7}px  from {island["source"][0].name}')
+        # logger.info(f'. Island #{index:>3}/{len(islands)} placed on nestmap #{n} at {x:>4}, {y:>4} o:{rot} pixcount:{island["pixcount"]:>7}px  from {island["source"][0].name}')
         
         # Update target mask
         target_mask = targets[n]

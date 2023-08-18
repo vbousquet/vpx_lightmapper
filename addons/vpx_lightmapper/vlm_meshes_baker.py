@@ -31,6 +31,7 @@ from . import vlm_utils
 from . import vlm_collections
 from PIL import Image # External dependency
 
+logger = vlm_utils.logger
 
 def get_material(light_name, is_lightmap, is_group, has_normalmap, render_id):
     ''' Find or create the material for the given lighting scenario, for the given object id (either render group number or bake object name)
@@ -89,7 +90,7 @@ def create_bake_meshes(op, context):
         op.report({'ERROR'}, 'Bake camera is missing')
         return {'CANCELLED'}
 
-    print("\nCreating all bake meshes")
+    logger.info("\nCreating all bake meshes")
     start_time = time.time()
     global_scale = vlm_utils.get_global_scale(context)
     n_render_groups = vlm_utils.get_n_render_groups(context)
@@ -169,7 +170,7 @@ def create_bake_meshes(op, context):
                 obj = bpy.data.objects[obj_name]
                 if obj.vlmSettings.is_movable:
                     if sync_obj != None:
-                        print(f'. ERROR: Bake collection {bake_col.name} bakes to a group but more than one object is marked as movable.')
+                        logger.info(f'. ERROR: Bake collection {bake_col.name} bakes to a group but more than one object is marked as movable.')
                     sync_obj = obj_name
             to_bake.append((bake_col.name, bake_col, object_names, sync_obj, not bake_col.vlmSettings.is_opaque))
         
@@ -177,7 +178,7 @@ def create_bake_meshes(op, context):
     bake_meshes = []
     for bake_name, bake_col, bake_col_object_set, sync_obj, is_translucent in to_bake:
         # Join all objects to build baked objects (converting to mesh, and preserving split normals)
-        print(f"\nBuilding solid bake target model for '{bake_name}'")
+        logger.info(f"\nBuilding solid bake target model for '{bake_name}'")
         poly_start = 0
         objects_to_join = []
         last_obj = None
@@ -204,7 +205,7 @@ def create_bake_meshes(op, context):
                     try:
                         bpy.ops.object.modifier_apply(modifier=modifier.name)
                     except:
-                        print(f'. ERROR {obj_name} has an invalid modifier which was not applied')
+                        logger.info(f'. ERROR {obj_name} has an invalid modifier which was not applied')
                 dup.modifiers.clear()
 
             # Remove custom normals since they will be lost during mesh optimization
@@ -234,7 +235,7 @@ def create_bake_meshes(op, context):
             # Create base UV projected layer
             if is_bake:
                 if not dup.data.uv_layers.get('UVMap'):
-                    print(f'. ERROR {obj_name} is using traditional bake and is missing its UVMap')
+                    logger.info(f'. ERROR {obj_name} is using traditional bake and is missing its UVMap')
                 projected_uv = dup.data.uv_layers.new()
                 projected_uv.active = True 
                 vlm_utils.project_uv(camera, dup, proj_ar, projected_uv)
@@ -280,9 +281,9 @@ def create_bake_meshes(op, context):
                         bpy.ops.object.mode_set(mode = 'EDIT')
                         bpy.ops.mesh.decimate(ratio=ratio)
                         bpy.ops.object.mode_set(mode = 'OBJECT')
-                    print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was decimated using a ratio of {ratio:.2%} from {len(areas)} to {len(dup.data.polygons)} faces')
+                    logger.info(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was decimated using a ratio of {ratio:.2%} from {len(areas)} to {len(dup.data.polygons)} faces')
                 else:
-                    print(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added (no LOD since max face size is {max_size:>8}px² with a threshold of {opt_lod_threshold}px²)')
+                    logger.info(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added (no LOD since max face size is {max_size:>8}px² with a threshold of {opt_lod_threshold}px²)')
             
             # Reveal any hidden part
             with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -321,7 +322,7 @@ def create_bake_meshes(op, context):
                 bmesh.ops.delete(bm, geom=faces, context='FACES')
                 bmesh.update_edit_mesh(dup.data)
                 bpy.ops.object.mode_set(mode = 'OBJECT') 
-                #print(f". {n_faces - len(bake_target.data.polygons)} backfacing faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
+                #logger.info(f". {n_faces - len(bake_target.data.polygons)} backfacing faces removed (model has {len(bake_target.data.vertices)} vertices and {len(bake_target.data.polygons)} faces)")
 
             # Triangulate (in the end, VPX only deals with triangles, and this simplify the lightmap pruning process)
             bpy.ops.object.mode_set(mode='EDIT')
@@ -362,7 +363,7 @@ def create_bake_meshes(op, context):
                 dup.data.update()
                 if not is_bake:
                     vlm_utils.project_uv(camera, dup, proj_ar)
-                print(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
+                logger.info(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
             
             if is_bake:
                 dup.data.uv_layers.remove(dup.data.uv_layers[projected_uv])
@@ -373,7 +374,7 @@ def create_bake_meshes(op, context):
         
         # Create merged mesh
         if len(objects_to_join) > 1:
-            print(f". {len(objects_to_join)} Objects merged") # {[obj.name for obj in objects_to_join]}")
+            logger.info(f". {len(objects_to_join)} Objects merged") # {[obj.name for obj in objects_to_join]}")
             with context.temp_override(active_object=objects_to_join[0], selected_editable_objects=objects_to_join):
                 bpy.ops.object.join()
         bake_target = objects_to_join[0]
@@ -398,7 +399,7 @@ def create_bake_meshes(op, context):
         if not bake_mesh.vertex_colors:
             bake_mesh.vertex_colors.new()
         
-        print(f'. Base solid mesh has {len(bake_mesh.polygons)} tris and {len(bake_mesh.vertices)} vertices')
+        logger.info(f'. Base solid mesh has {len(bake_mesh.polygons)} tris and {len(bake_mesh.vertices)} vertices')
         bake_meshes.append((bake_col, bake_name, bake_mesh, sync_obj))
         result_col.objects.unlink(bake_target)
 
@@ -437,7 +438,7 @@ def create_bake_meshes(op, context):
             if opaque_bake_mesh:
                 merged_bake_meshes.remove(opaque_bake_mesh)
                 ex_bake_col, ex_bake_name, ex_bake_mesh, ex_sync_obj = opaque_bake_mesh
-                print(f'\nMerging lightmaps for {ex_bake_col} and {bake_col.name}')
+                logger.info(f'\nMerging lightmaps for {ex_bake_col} and {bake_col.name}')
                 obj1 = bpy.data.objects.new(f"OBJ1", bake_mesh)
                 obj2 = bpy.data.objects.new(f"OBJ2", ex_bake_mesh)
                 result_col.objects.link(obj1)
@@ -457,9 +458,9 @@ def create_bake_meshes(op, context):
     
     # Build all the visibility maps
     vmaps = []
-    print(f'\nPreparing all lightmap visibility masks (prune map size={prunemap_width}x{prunemap_height})')
+    logger.info(f'\nPreparing all lightmap visibility masks (prune map size={prunemap_width}x{prunemap_height})')
     for bake_col, bake_name, bake_mesh, sync_obj in merged_bake_meshes:
-        print(f'. Preparing visibility mask for {bake_name}')
+        logger.info(f'. Preparing visibility mask for {bake_name}')
         obj = bpy.data.objects.new(f"LightMesh", bake_mesh)
         result_col.objects.link(obj)
         bpy.ops.object.select_all(action='DESELECT')
@@ -474,7 +475,7 @@ def create_bake_meshes(op, context):
         light_name, is_lightmap, _, lights = light_scenario
         if not is_lightmap: continue
         influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
-        print(f'\nProcessing lightmaps for {light_name} [{i+1}/{len(light_scenarios)}]')
+        logger.info(f'\nProcessing lightmaps for {light_name} [{i+1}/{len(light_scenarios)}]')
         for (merged_bake_cols, bake_name, bake_mesh, sync_obj), lightmap_vmap in zip(merged_bake_meshes, vmaps):
             obj_name = f'{bake_name}.LM.{light_name}'
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
@@ -492,9 +493,9 @@ def create_bake_meshes(op, context):
             hdr_range = prune_lightmap_by_visibility_map(bake_instance.data, bake_name, light_name, lightmap_vmap, influence, prunemap_width, prunemap_height)
             if not bake_instance.data.polygons or hdr_range <= 2 * lm_threshold:
                 result_col.objects.unlink(bake_instance)
-                #print(f". Mesh {bake_name} has no more faces after optimization for {light_name} lighting")
+                #logger.info(f". Mesh {bake_name} has no more faces after optimization for {light_name} lighting")
             else:
-                print(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.2f}) for {bake_col if sync_obj is None else bake_name}')
+                logger.info(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.2f}) for {bake_col if sync_obj is None else bake_name}')
                 if sync_obj:
                     dup = bpy.data.objects[sync_obj]
                     bake_instance.data.transform(Matrix(dup.matrix_world).inverted())
@@ -515,14 +516,13 @@ def create_bake_meshes(op, context):
             if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False: has_nm = True
             if mat.get('VLM.HasNormalMap') != True and mat['VLM.IsLightmap'] == False: has_no_nm = True
         if has_nm and has_no_nm:
-            print(f'\nERROR: {obj.name} has parts with normal maps and others without. The normal map will not be usable (it would break the shading of subparts with no normal map).\n')
+            logger.info(f'\nERROR: {obj.name} has parts with normal maps and others without. The normal map will not be usable (it would break the shading of subparts with no normal map).\n')
 
     # Purge unlinked datas and clean up
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
-    print(f'\nbake meshes created in {str(datetime.timedelta(seconds=time.time() - start_time))}')
+    logger.info(f'\nbake meshes created in {str(datetime.timedelta(seconds=time.time() - start_time))}')
 
     context.scene.cursor.location = cursor_loc
-    context.scene.vlmSettings.last_bake_step = 'meshes'
     return {'FINISHED'}
 
 
@@ -591,7 +591,7 @@ def build_visibility_map(bake_name, bake_instance_mesh, n_render_groups, width, 
             vmaps[min_x + min_y * width].append(face.index)
     bm.free()
     if False: # For debug purpose, save generated visibility map
-        print(f'. Saving visibility map {bake_name}')
+        logger.info(f'. Saving visibility map {bake_name}')
         pixels = [1.0 for i in range(width*height*4)]
         for xy in range(width*height):
             pixels[xy*4] = len(vmaps[xy])
@@ -698,7 +698,7 @@ def build_influence_map(render_path, name, w, h):
     for layer in layers:
         layer.free()
     if False: # For debug purpose, save generated influence map
-        print(f'. Saving light influence map to {render_path}{name} - Influence Map.exr')
+        logger.info(f'. Saving light influence map to {render_path}{name} - Influence Map.exr')
         image = bpy.data.images.new("debug", w, h, alpha=False, float_buffer=True)
         image.pixels = [v for v in imaps['Global']]
         image.filepath_raw = f'{render_path}{name} - Influence Map.exr'

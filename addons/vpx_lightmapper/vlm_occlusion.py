@@ -18,6 +18,8 @@ import time
 from . import vlm_collections
 from . import vlm_utils
 
+logger = vlm_utils.logger
+
 
 def select_occluded(op, context):
     """
@@ -29,7 +31,7 @@ def select_occluded(op, context):
     - Select untagged objects
     - Restore initial pass id
     """
-    print("\nStarting occlusion selection")
+    logger.info("\nStarting occlusion selection")
 
     bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
     if not bake_col:
@@ -85,10 +87,10 @@ def select_occluded(op, context):
         o.pass_index = i
         o.tag = True
 
-    print(". Rendering scene")
+    logger.info(". Rendering scene")
     bpy.ops.render.render(scene=scene.name)
     
-    print(". Evaluating occluded objects")
+    logger.info(". Evaluating occluded objects")
     pixels = bpy.data.images['Viewer Node'].pixels
     arr = [int(i) for i in pixels[::]]
     for i in arr[::4]:
@@ -102,7 +104,7 @@ def select_occluded(op, context):
         scene.collection.objects.unlink(o)
         o.pass_index = pass_id
     
-    print(f'Occlusion selection performed in {int(time.time() - start_time)}s.')
+    logger.info(f'Occlusion selection performed in {int(time.time() - start_time)}s.')
     bpy.data.scenes.remove(scene)
     return {'FINISHED'}
     

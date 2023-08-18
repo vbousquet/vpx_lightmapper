@@ -21,6 +21,8 @@ from . import vlm_utils
 from . import vlm_collections
 from PIL import Image # External dependency
 
+logger = vlm_utils.logger
+
 
 def render_nestmaps(op, context):
     result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
@@ -65,19 +67,19 @@ def render_nestmaps(op, context):
     n_nestmaps = 0
     max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size))
     if len(to_nest_ldr) > 0:
-        print('\nNesting all LDR parts')
+        logger.info('\nNesting all LDR parts')
         n_ldr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps)
         n_nestmaps += n_ldr_nestmaps
     if len(to_nest_hdr) > 0:
-        print('\nNesting all HDR parts')
+        logger.info('\nNesting all HDR parts')
         n_hdr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_hdr, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps)
         n_nestmaps += n_hdr_nestmaps
     if len(to_nest_ldr_nm) > 0:
-        print('\nNesting all LDR parts with normal maps')
+        logger.info('\nNesting all LDR parts with normal maps')
         n_ldr_nm_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr_nm, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps)
         n_nestmaps += n_ldr_nm_nestmaps
     if len(to_nest_hdr_nm) > 0:
-        print('\nNesting all HDR parts with normal maps')
+        logger.info('\nNesting all HDR parts with normal maps')
         n_hdr_nm_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_hdr_nm, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps)
         n_nestmaps += n_hdr_nm_nestmaps
 
@@ -86,6 +88,5 @@ def render_nestmaps(op, context):
     for obj in selected_objects:
         obj.select_set(True)
         context.view_layer.objects.active = obj
-    context.scene.vlmSettings.last_bake_step = 'nestmaps'
-    print(f'\nNestmap generation finished ({n_nestmaps} nestmaps generated for {len(to_nest)} objects) in {str(datetime.timedelta(seconds=time.time() - start_time))}.')
+    logger.info(f'\nNestmap generation finished ({n_nestmaps} nestmaps generated for {len(to_nest)} objects) in {str(datetime.timedelta(seconds=time.time() - start_time))}.')
     return {'FINISHED'}

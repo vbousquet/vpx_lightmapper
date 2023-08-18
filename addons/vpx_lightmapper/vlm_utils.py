@@ -25,12 +25,15 @@ import functools
 import datetime
 import string
 import unicodedata
+import logging
 from mathutils import Vector
 from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
 from . import vlm_collections
 from . import biff_io
 
+logger = logging.getLogger('vlm')
+logger.setLevel(logging.DEBUG)
 
 def get_global_scale(context):
     if context.scene.vlmSettings.units_mode == 'vpx':
@@ -104,6 +107,23 @@ def get_render_size(context):
 def get_render_proj_ar(context):
     render_size = get_render_size(context)
     return int(render_size[0] * context.scene.render.pixel_aspect_x) / float(int(render_size[1] * context.scene.render.pixel_aspect_y))
+
+
+def run_with_logger(op):
+    log_handler = logging.FileHandler(bpy.path.abspath("//vlm.log"))
+    #log_handler = logging.handlers.RotatingFileHandler(bpy.path.abspath("//vlm.log"), maxBytes=(1048576*5), backupCount=7)
+    try:
+        while logger.hasHandlers():
+            logger.removeHandler(logger.handlers[0])
+        logger.addHandler(log_handler)
+        logger.addHandler(logging.StreamHandler())
+        return op()
+    except Exception as e:
+        logger.error(e)
+        return {'CANCELLED'}
+    finally:
+        logger.removeHandler(log_handler)
+        logger.removeHandler(logging.StreamHandler())
     
 
 # 3D tri area ABC is half the length of AB cross product AC 

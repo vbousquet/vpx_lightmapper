@@ -39,7 +39,6 @@ from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty,
 from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, Collection)
 from rna_prop_ui import PropertyPanel
 
-
 # Use import.reload for all submodule to allow iterative development using bpy.ops.script.reload()
 if "vlm_dependencies" in locals():
     importlib.reload(vlm_dependencies)
@@ -170,18 +169,8 @@ class VLM_Scene_props(PropertyGroup):
         update=vlm_camera.camera_inclination_update
     )
     # Baker options
-    last_bake_step: EnumProperty(
-        items=[
-            ('unstarted', 'Unstarted', '', '', 0),
-            ('groups', 'Groups', '', '', 1),
-            ('renders', 'Rendered', '', '', 2),
-            ('meshes', 'Meshes', '', '', 3),
-            ('nestmaps', 'Nestmaps', '', '', 4),
-        ],
-        name='Last Bake Step',
-        default='unstarted'
-    )
     batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
+    batch_shutdown: BoolProperty(name="Shutdown", description="Shutdown computer after batch", default = False)
     render_height: IntProperty(
         name="Render Height", description="Render height used for projective baking (a margin and the padding is applied to this)", 
         default = 256, min = 256, max=8192, update=vlm_camera.camera_inclination_update
@@ -308,9 +297,8 @@ class VLM_OT_new_from_vpx(Operator, ImportHelper):
         context.scene.render.film_transparent = True
         context.scene.cycles.film_transparent_glass = True
         context.scene.vlmSettings.table_file = ""
-        context.scene.vlmSettings.last_bake_step = "unstarted"
         unit_update(self, context)
-        return vlm_import.read_vpx(self, context, self.filepath)
+        return vlm_utils.run_with_logger(lambda : vlm_import.read_vpx(self, context, self.filepath))
 
 
 class VLM_OT_update(Operator):
@@ -325,7 +313,7 @@ class VLM_OT_update(Operator):
 
     def execute(self, context):
         unit_update(self, context)
-        return vlm_import.read_vpx(self, context, bpy.path.abspath(context.scene.vlmSettings.table_file))
+        return vlm_utils.run_with_logger(lambda : vlm_import.read_vpx(self, context, bpy.path.abspath(context.scene.vlmSettings.table_file)))
 
 
 class VLM_OT_select_occluded(Operator):
@@ -339,7 +327,7 @@ class VLM_OT_select_occluded(Operator):
         return context.mode == 'OBJECT'
 
     def execute(self, context):
-        return vlm_occlusion.select_occluded(self, context)
+        return vlm_utils.run_with_logger(lambda : vlm_occlusion.select_occluded(self, context))
 
 
 class VLM_OT_select_indirect(Operator):
@@ -388,7 +376,7 @@ class VLM_OT_compute_render_groups(Operator):
         return True
         
     def execute(self, context):
-        return vlm_group_baker.compute_render_groups(self, context)
+        return vlm_utils.run_with_logger(lambda : vlm_group_baker.compute_render_groups(self, context))
 
 
 class VLM_OT_render_all_groups(Operator):
@@ -406,7 +394,7 @@ class VLM_OT_render_all_groups(Operator):
         return True
         
     def execute(self, context):
-        return vlm_render_baker.render_all_groups(self, context)
+        return vlm_utils.run_with_logger(lambda : vlm_render_baker.render_all_groups(self, context))
 
 
 class VLM_OT_create_bake_meshes(Operator):
@@ -424,7 +412,7 @@ class VLM_OT_create_bake_meshes(Operator):
         return True
         
     def execute(self, context):
-        return vlm_meshes_baker.create_bake_meshes(self, context)
+        return vlm_utils.run_with_logger(lambda : vlm_meshes_baker.create_bake_meshes(self, context))
 
 
 class VLM_OT_render_nestmaps(Operator):
@@ -439,7 +427,7 @@ class VLM_OT_render_nestmaps(Operator):
         return result_col is not None and len(result_col.all_objects) > 0
 
     def execute(self, context):
-        return vlm_nestmap_baker.render_nestmaps(self, context)
+        return vlm_utils.run_with_logger(lambda : vlm_nestmap_baker.render_nestmaps(self, context))
 
 
 class VLM_OT_batch_bake(Operator):
@@ -447,28 +435,33 @@ class VLM_OT_batch_bake(Operator):
     bl_label = "Batch All"
     bl_description = "Performs all the bake steps in a batch, then export an updated VPX table (lengthy operation)"
     bl_options = {"REGISTER", "UNDO"}
+
+    def do_shutdown(result):
+        if context.scene.vlmSettings.batch_shutdown:
+            os.system("shutdown /s /t 1")
+        return result
     
     def execute(self, context):
         start_time = time.time()
         print(f"\nStarting complete bake batch...")
         if context.scene.vlmSettings.batch_inc_group:
-            result = vlm_group_baker.compute_render_groups(self, context)
-            if 'FINISHED' not in result: return result
+            result = vlm_utils.run_with_logger(lambda : vlm_group_baker.compute_render_groups(self, context))
+            if 'FINISHED' not in result: return do_shutdown(result)
             bpy.ops.wm.save_mainfile()
-        result = vlm_render_baker.render_all_groups(self, context)
-        if 'FINISHED' not in result: return result
+        result = vlm_utils.run_with_logger(lambda : vlm_render_baker.render_all_groups(self, context))
+        if 'FINISHED' not in result: return do_shutdown(result)
         bpy.ops.wm.save_mainfile()
-        result = vlm_meshes_baker.create_bake_meshes(self, context)
-        if 'FINISHED' not in result: return result
+        result = vlm_utils.run_with_logger(lambda : vlm_meshes_baker.create_bake_meshes(self, context))
+        if 'FINISHED' not in result: return do_shutdown(result)
         bpy.ops.wm.save_mainfile()
-        result = vlm_nestmap_baker.render_nestmaps(self, context)
-        if 'FINISHED' not in result: return result
+        result = vlm_utils.run_with_logger(lambda : vlm_nestmap_baker.render_nestmaps(self, context))
+        if 'FINISHED' not in result: return do_shutdown(result)
         bpy.ops.wm.save_mainfile()
-        result = vlm_export.export_vpx(self, context)
-        if 'FINISHED' not in result: return result
+        result = vlm_utils.run_with_logger(lambda : vlm_export.export_vpx(self, context))
+        if 'FINISHED' not in result: return do_shutdown(result)
         bpy.ops.wm.save_mainfile()
         print(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}")
-        return {'FINISHED'}
+        return do_shutdown(result)
 
 
 class VLM_OT_export_vpx(Operator):
@@ -486,7 +479,7 @@ class VLM_OT_export_vpx(Operator):
         return True
 
     def execute(self, context):
-        return vlm_export.export_vpx(self, context)
+        return vlm_utils.run_with_logger(lambda : vlm_export.export_vpx(self, context))
 
 
 class VLM_OT_export_obj(Operator):
@@ -502,48 +495,6 @@ class VLM_OT_export_obj(Operator):
 
     def execute(self, context):
         return vlm_export_obj.export_obj(self, context)
-
-
-class VLM_OT_export_pov(Operator):
-    bl_idname = "vlm.export_pov_operator"
-    bl_label = "Export POV"
-    bl_description = "Export a POV file for easy VPX/Blender comparison. Needs manual adjustment in VPX from console informations."
-    bl_options = {"REGISTER"}
-    
-    @classmethod
-    def poll(cls, context):
-        return len(context.selected_objects) == 1 and context.selected_objects[0].type == 'CAMERA'
-
-    def execute(self, context):
-        camera_object = context.selected_objects[0]
-        path = bpy.path.abspath(f'{vlm_utils.get_bakepath(context, type="EXPORT")}{camera_object.name}.pov')
-        sections = ['desktop', 'fullscreen', 'fullsinglescreen']
-        with open(path, 'w') as f:
-            f.write('<?xml version="1.0" encoding="utf-8"?>\n')
-            f.write('<POV>\n')
-            for section in sections:
-                f.write(f'\t<{section}>\n')
-                f.write(f'\t\t<inclination>{math.degrees(camera_object.rotation_euler[0])}</inclination>\n')
-                f.write(f'\t\t<fov>{math.degrees(camera_object.data.angle)}</fov>\n')
-                f.write(f'\t\t<layback>0.000000</layback>\n')
-                f.write(f'\t\t<rotation>270.000000</rotation>\n')
-                #f.write(f'\t\t<rotation>0.000000</rotation>\n')
-                f.write(f'\t\t<xscale>1.000000</xscale>\n')
-                f.write(f'\t\t<yscale>1.000000</yscale>\n')
-                f.write(f'\t\t<zscale>1.000000</zscale>\n')
-                f.write(f'\t\t<xoffset>0.000000</xoffset>\n')
-                f.write(f'\t\t<yoffset>0.000000</yoffset>\n')
-                f.write(f'\t\t<zoffset>0.000000</zoffset>\n')
-                f.write(f'\t</{section}>\n')
-            f.write('</POV>\n')
-        scale = 1.0 / vlm_utils.get_global_scale(context)
-        print(f"\nCamera POV exported to '{path}'")
-        if camera_object.data.shift_x != 0 or camera_object.data.shift_y != 0:
-            print(f"WARNING: Blender's camera is shifted by {camera_object.data.shift_x}, {camera_object.data.shift_y}")
-        if context.scene.render.pixel_aspect_x != 1 or context.scene.render.pixel_aspect_y != 1:
-            print(f"WARNING: Blender's pixel aspect is not squared: {context.scene.render.pixel_aspect_x}, {context.scene.render.pixel_aspect_y}")
-        print(f"Use VPX 'F6' mode to move camera to ({round(-scale*camera_object.location[1])}, {round(scale*camera_object.location[0])}, {round(scale*camera_object.location[2])})\n")
-        return {'FINISHED'}
 
 
 class VLM_OT_state_indirect_only(Operator):
@@ -774,11 +725,6 @@ class VLM_OT_select_table_file(Operator, ImportHelper):
 
     def execute(self, context):
         context.scene.vlmSettings.table_file = bpy.path.relpath(self.filepath)
-        filename, extension = os.path.splitext(self.filepath)
-        print('Selected file:', self.filepath)
-        print('Relative file:', bpy.path.relpath(self.filepath))
-        print('File name:', filename)
-        print('File extension:', extension)
         return {'FINISHED'} 
 
 
@@ -839,11 +785,6 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
         vlmProps = context.scene.vlmSettings
-        step = 0
-        if vlmProps.last_bake_step == 'groups': step = 1
-        if vlmProps.last_bake_step == 'renders': step = 2
-        if vlmProps.last_bake_step == 'meshes': step = 3
-        if vlmProps.last_bake_step == 'nestmaps': step = 4
         # Render properties
         layout.prop(vlmProps, "render_height")
         layout.prop(vlmProps, "render_ratio")
@@ -866,14 +807,19 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         row = layout.row()
         row.scale_y = 1.5
         row.operator(VLM_OT_compute_render_groups.bl_idname, icon='GROUP_VERTEX', text='Groups')
-        row.operator(VLM_OT_render_all_groups.bl_idname, icon='RENDER_RESULT', text='Renders', emboss=step>0)
-        row.operator(VLM_OT_create_bake_meshes.bl_idname, icon='MESH_MONKEY', text='Meshes', emboss=step>1)
+        row.operator(VLM_OT_render_all_groups.bl_idname, icon='RENDER_RESULT', text='Renders')
+        row.operator(VLM_OT_create_bake_meshes.bl_idname, icon='MESH_MONKEY', text='Meshes')
         row = layout.row()
         row.scale_y = 1.5
-        row.operator(VLM_OT_render_nestmaps.bl_idname, icon='TEXTURE_DATA', text='Nestmaps', emboss=step>2)
-        row.operator(VLM_OT_export_vpx.bl_idname, icon='EXPORT', text='Export', emboss=step>3)
+        row.operator(VLM_OT_render_nestmaps.bl_idname, icon='TEXTURE_DATA', text='Nestmaps')
+        row.operator(VLM_OT_export_vpx.bl_idname, icon='EXPORT', text='Export')
         row.operator(VLM_OT_batch_bake.bl_idname)
-        layout.prop(vlmProps, "batch_inc_group", expand=True)
+        row = layout.row()
+        row.use_property_split = False
+        row.alignment = 'CENTER'
+        row.label(text='Batch:')
+        row.prop(vlmProps, "batch_inc_group", expand=True)
+        row.prop(vlmProps, "batch_shutdown", expand=True)
         #layout.separator()
         #layout.prop(vlmProps, "active_scale")
         #layout.prop(vlmProps, "playfield_size")
@@ -1312,7 +1258,6 @@ classes = (
     VLM_OT_load_render_images,
     VLM_OT_export_obj,
     VLM_OT_export_vpx,
-    VLM_OT_export_pov,
     VLM_OT_select_table_file,
     VLM_OT_calc_bake_size
     )

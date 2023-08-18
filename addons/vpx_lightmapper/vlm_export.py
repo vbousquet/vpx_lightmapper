@@ -24,6 +24,8 @@ from . import biff_io
 from . import vlm_utils
 from . import vlm_collections
 
+logger = vlm_utils.logger
+
 # Dependencies which need a custom install (not included in the Blender install)
 import olefile
 import pythoncom
@@ -126,7 +128,7 @@ def export_vpx(op, context):
     light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
     global_scale = vlm_utils.get_global_scale(context)
     output_path = bpy.path.abspath(f"//{os.path.splitext(bpy.path.basename(input_path))[0]} - VLM.vpx")
-    print(f'\nExporting bake results to {bpy.path.basename(output_path)}')
+    logger.info(f'\nExporting bake results to {bpy.path.basename(output_path)}')
 
     src_storage = olefile.OleFileIO(input_path)
     version = biff_io.BIFF_reader(src_storage.openstream('GameStg/Version').read()).get_32()
@@ -184,7 +186,7 @@ def export_vpx(op, context):
         item_data = biff_io.BIFF_reader(data)
         item_type = item_data.get_32()
         if item_type < 0 or item_type >= len(prefix):
-            print(f'Unsupported item #{n_read_item} type #{item_type}')
+            logger.info(f'Unsupported item #{n_read_item} type #{item_type}')
             dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
             dst_stream.Write(data)
             n_game_items += 1
@@ -295,7 +297,7 @@ def export_vpx(op, context):
             # Baked lights are only usefull for synchronization and reflection on ball
             #if is_baked_light and item_type == 7 and (not is_bulb or not is_reflect_on_ball): remove = True
         if remove:
-            print(f'. Item {name:>21s} was removed from export table')
+            logger.info(f'. Item {name:>21s} was removed from export table')
         else:
             dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
             dst_stream.Write(data)
@@ -322,7 +324,7 @@ def export_vpx(op, context):
     pfobj = None
     pf_friction = pf_elasticity = pf_falloff = pf_scatter = 0
     if needs_playfield_physics:
-        print('. Adding a default playfield mesh')
+        logger.info('. Adding a default playfield mesh')
         playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
         playfield_right = playfield_width + playfield_left
         playfield_bottom = playfield_height + playfield_top
@@ -354,7 +356,7 @@ def export_vpx(op, context):
         obj.data.calc_normals_split() # compute loop normal (would be 0,0,0 otherwise)
         uv_layer_nested = obj.data.uv_layers.get("UVMap Nested")
         if not uv_layer_nested:
-            print(f'. Missing nested uv map for {obj.name}')
+            logger.info(f'. Missing nested uv map for {obj.name}')
             continue
         is_lightmap = obj.vlmSettings.bake_type == 'lightmap'
         is_active = obj.vlmSettings.bake_type == 'active'
@@ -369,16 +371,16 @@ def export_vpx(op, context):
             col = vlm_collections.get_collection(bake_col, col_name, create=False)
             if col:
                 if depth_bias != None and depth_bias != col.vlmSettings.depth_bias:
-                    print(f'ERROR: {obj.name} merges multiple bake collections with different depth bias settings {obj.vlmSettings.bake_collections}')
+                    logger.error(f'ERROR: {obj.name} merges multiple bake collections with different depth bias settings {obj.vlmSettings.bake_collections}')
                 depth_bias = col.vlmSettings.depth_bias
                 if reflection_probe != None and reflection_probe != col.vlmSettings.reflection_probe:
-                    print(f'ERROR: {obj.name} merges multiple bake collections with different reflection_probe settings {obj.vlmSettings.bake_collections}')
+                    logger.error(f'ERROR: {obj.name} merges multiple bake collections with different reflection_probe settings {obj.vlmSettings.bake_collections}')
                 reflection_probe = col.vlmSettings.reflection_probe
                 if refraction_probe != None and refraction_probe != col.vlmSettings.refraction_probe:
-                    print(f'ERROR: {obj.name} merges multiple bake collections with different refraction_probe settings {obj.vlmSettings.bake_collections}')
+                    logger.error(f'ERROR: {obj.name} merges multiple bake collections with different refraction_probe settings {obj.vlmSettings.bake_collections}')
                 refraction_probe = col.vlmSettings.refraction_probe
             elif obj != pfobj:
-                print(f'ERROR: {obj.name} contains object of missing bake collection {col}')
+                logger.error(f'ERROR: {obj.name} contains object of missing bake collection {col}')
         if not depth_bias: depth_bias = 0
         if not reflection_probe: reflection_probe = ''
         if not refraction_probe: refraction_probe = ''
@@ -470,7 +472,7 @@ def export_vpx(op, context):
                     indices.append(existing_index)
         n_indices = len(indices)
         compressed = True
-        print(f'. Adding {n_vertices:>6} vertices, {int(n_indices/3):>6} faces for {obj.name}')
+        logger.info(f'. Adding {n_vertices:>6} vertices, {int(n_indices/3):>6} faces for {obj.name}')
         writer.write_tagged_u32(b'M3VN', n_vertices)
         if not compressed:
             writer.write_tagged_data(b'M3DX', struct.pack(f'<{len(vertices)}f', *vertices))
@@ -527,9 +529,9 @@ def export_vpx(op, context):
         remove = name.startswith('VLM.Nestmap')
         remove = remove or (export_mode=='remove_all' and name not in used_images and name in removed_images)
         if remove:
-            print(f'. Image {name:>20s} was removed from export table')
+            logger.info(f'. Image {name:>20s} was removed from export table')
         else:
-            print(f'. Image {name:>20s} was kept (known users: {used_images.get(name)})')
+            logger.info(f'. Image {name:>20s} was kept (known users: {used_images.get(name)})')
             dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
             dst_stream.Write(data)
             n_images += 1
@@ -545,6 +547,7 @@ def export_vpx(op, context):
         base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}')
         nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.webp'
         if not os.path.exists(nestmap_path):
+            logger.error(f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
             op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
             return {'CANCELLED'}
         img_writer = biff_io.BIFF_writer()
@@ -571,7 +574,7 @@ def export_vpx(op, context):
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
-        print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
+        logger.info(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
         n_images += 1
         nestmap_index += 1
 
@@ -589,6 +592,7 @@ def export_vpx(op, context):
             base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index} - NM')
             nestmap_path = f'{base_path}.webp'
             if not os.path.exists(nestmap_path):
+                logger.error(f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
                 op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
                 return {'CANCELLED'}
             img_writer = biff_io.BIFF_writer()
@@ -615,7 +619,7 @@ def export_vpx(op, context):
             writer.close()
             dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
             dst_stream.Write(writer.get_data())
-            print(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
+            logger.info(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
             n_images += 1
         nestmap_index += 1
 
@@ -749,7 +753,7 @@ def export_vpx(op, context):
                 pr.write_float(0.0)
                 pr.write_float(0.0)
                 pr.write_float(0.0)
-            print(f'. Adding {n_material_to_add} materials')
+            logger.info(f'. Adding {n_material_to_add} materials')
             br.pos = masi_pos
             br.put_u32(n_materials + n_material_to_add)
             br.pos = mate_pos - 8
@@ -784,7 +788,7 @@ def export_vpx(op, context):
                 br.next()
                 if br.tag == "CUST":
                     cust_name = br.get_string()
-                    print(f'Hashing custom information block {cust_name}')
+                    logger.info(f'Hashing custom information block {cust_name}')
                     if src_storage.exists(f'TableInfo/f{cust_name}'):
                         data = src_storage.openstream(f'TableInfo/f{cust_name}').read()
                         data_hash.CryptHashData(data)
@@ -803,10 +807,10 @@ def export_vpx(op, context):
     dst_storage.Commit(storagecon.STGC_DEFAULT)
     src_storage.close()
 
-    print(f". {n_images} images exported in table files")
-    print(". Images marked as used:", list(used_images.keys()))
-    print(". Images marked as deletable:", list(removed_images.keys()))
+    logger.info(f'. {n_images} images exported in table files')
+    logger.info(f'. Images marked as used: {list(used_images.keys())}')
+    logger.info(f'. Images marked as deletable: {list(removed_images.keys())}')
 
-    print(f'\nExport finished.')
+    logger.info(f'\nExport finished.')
     return {"FINISHED"}
     

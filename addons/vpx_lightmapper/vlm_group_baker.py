@@ -23,6 +23,8 @@ from . import vlm_camera
 from . import vlm_collections
 from PIL import Image # External dependency
 
+logger = vlm_utils.logger
+
 def projected_bounds_area(mvp_matrix, obj):
     max_x = max_y = -10000000
     min_x = min_y = 10000000
@@ -61,7 +63,7 @@ def compute_render_groups(op, context):
         return {'CANCELLED'}
 
     start_time = time.time()
-    print(f"\nEvaluating render groups")
+    logger.info(f"\nEvaluating render groups")
     opt_mask_size = 1024 # Height used for the object masks
     opt_force_render = False # Force rendering even if cache is available
 
@@ -116,11 +118,11 @@ def compute_render_groups(op, context):
             scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(obj.vlmSettings.bake_to.name)}.png"
             obj_group = [o for _, o in all_objects if o.vlmSettings.bake_to == obj.vlmSettings.bake_to]
             obj_group.append(obj.vlmSettings.bake_to)
-            print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for bake target '{obj.vlmSettings.bake_to.name}' ({[o.name for o in obj_group]} with a total projected area of {area})")
+            logger.info(f". Evaluating object mask #{i:>3}/{len(all_objects)} for bake target '{obj.vlmSettings.bake_to.name}' ({[o.name for o in obj_group]} with a total projected area of {area})")
         else:
             scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(obj.name)}.png"
             obj_group = [obj]
-            print(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}' (projected area of {area})")
+            logger.info(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}' (projected area of {area})")
         need_render = opt_force_render or not os.path.exists(bpy.path.abspath(scene.render.filepath))
         if not need_render:
             im = Image.open(bpy.path.abspath(scene.render.filepath))
@@ -156,13 +158,12 @@ def compute_render_groups(op, context):
         im.save(bpy.path.abspath(f'{bakepath}Mask - Group {i} (Padded LD).png'))
 
 
-    print(f"\n{len(object_masks)} render groups defined in {vlm_utils.format_time(time.time() - start_time)}.")
+    logger.info(f"\n{len(object_masks)} render groups defined in {vlm_utils.format_time(time.time() - start_time)}.")
     bpy.data.scenes.remove(scene)
 
     # render hi-res mask for later nestmap rendering
     render_group_masks(op, context)
 
-    context.scene.vlmSettings.last_bake_step = 'groups'
     return {'FINISHED'}
     
 
@@ -222,7 +223,7 @@ def render_group_masks(op, context):
     links.new(emit.outputs[0], node_output.inputs[0])
     scene.view_layers[0].material_override = mask_mat
 
-    print(f'\nEvaluating {n_render_groups} render group masks')
+    logger.info(f'\nEvaluating {n_render_groups} render group masks')
     bakepath = vlm_utils.get_bakepath(context, type='MASKS')
     for group_index in range(n_render_groups):
         linked_objects = []
@@ -236,7 +237,7 @@ def render_group_masks(op, context):
                 if obj not in linked_objects:
                     scene.collection.objects.link(obj)
                     linked_objects.append(obj)
-        print(f'\n. Rendering group #{group_index+1}/{n_render_groups} ({len(linked_objects)} objects)')
+        logger.info(f'\n. Rendering group #{group_index+1}/{n_render_groups} ({len(linked_objects)} objects)')
         
         scene.render.filepath = f'{bakepath}Mask - Group {group_index}.png'
         scene.render.image_settings.file_format = 'PNG'
@@ -250,5 +251,5 @@ def render_group_masks(op, context):
     bpy.data.materials.remove(mask_mat)
     bpy.data.scenes.remove(scene)
     length = time.time() - start_time
-    print(f'\nRendering group masks finished in a total time of {vlm_utils.format_time(length)}')
+    logger.info(f'\nRendering group masks finished in a total time of {vlm_utils.format_time(length)}')
     return {'FINISHED'}

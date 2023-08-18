@@ -30,6 +30,8 @@ from . import vlm_utils
 from . import vlm_collections
 from PIL import Image # External dependency
 
+logger = vlm_utils.logger
+
 
 def project_point(proj, p):
     p1 = proj @ Vector((p.x, p.y, p.z, 1)) # projected coordinates (range [-1, 1]x[-1, 1])
@@ -74,7 +76,7 @@ def get_light_influence_radius(light):
                 else:
                     r = 0.10
                 aoi_radius = (1-a)*light_aois[r][i] + a*light_aois[r][i+1]
-                #print(f'L {light.name:>20} {radius} {r} {i} {a} => {aoi_radius}')
+                #logger.info(f'L {light.name:>20} {radius} {r} {i} {a} => {aoi_radius}')
                 return (light.matrix_world @ mathutils.Vector((0,0,0)), aoi_radius)
     elif light.type == 'MESH' or light.type == 'CURVE':
         mesh_aois = {
@@ -107,7 +109,7 @@ def get_light_influence_radius(light):
                 else:
                     r = 0.10
                 aoi_radius = (1-a)*mesh_aois[r][i] + a*mesh_aois[r][i+1]
-                #print(f'M {light.name:>20} {radius} {r} {i} {a} => {aoi_radius}')
+                #logger.info(f'M {light.name:>20} {radius} {r} {i} {a} => {aoi_radius}')
                 return (center, aoi_radius)
     return (None, None)
 
@@ -211,9 +213,9 @@ def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_
             scene.render.border_max_x = max_x
             scene.render.border_min_y = 1 - max_y
             scene.render.border_max_y = 1 - min_y
-            print(f". light scenario '{name}' influence area computed to: {influence}")
+            logger.info(f". light scenario '{name}' influence area computed to: {influence}")
             if not check_min_render_size(scene):
-                print(f". light scenario '{name}' has no render region, skipping (influence area: {influence})")
+                logger.info(f". light scenario '{name}' has no render region, skipping (influence area: {influence})")
                 return None, None
         if vlm_utils.is_rgb_led(lights):
             colored_lights = [o for o in lights if o.type=='LIGHT']
@@ -327,7 +329,7 @@ def render_all_groups(op, context):
     n_bake_objects = len([obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake])
     n_bake_normalmaps = len([obj for obj in bake_col.all_objects if obj.vlmSettings.bake_normalmap])
     n_total_render = (n_render_groups + n_bake_objects) * n_lighting_situations + n_bake_normalmaps
-    print(f'\nEvaluating {n_total_render} renders ({n_render_groups} render groups and {n_bake_objects} bakes for {n_lighting_situations} lighting situations)')
+    logger.info(f'\nEvaluating {n_total_render} renders ({n_render_groups} render groups and {n_bake_objects} bakes for {n_lighting_situations} lighting situations)')
     
     # Perform the actual rendering of all the passes
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 1.0
@@ -346,8 +348,10 @@ def render_all_groups(op, context):
         #
         # In Blender 3.2, we can render multiple lights at once and save there data separately using light groups for way faster rendering.
         # This needs to use the compositor to performs denoising and save to split file outputs.
-        print(f'\n. Processing batch render for group #{group_index+1}/{n_render_groups}')
+        logger.info(f'\n. Processing batch render for group #{group_index+1}/{n_render_groups}')
         scenarios_to_process = [scenario for scenario in light_scenarios]
+        if max_scenarios_in_batch <= 1: # do not use batch rendering is doing a single scenario since it would be less efficient due to the compositor denoising
+            scenarios_to_process = None
         while scenarios_to_process:
             prev_world = scene.world
             render_world = None
@@ -387,7 +391,7 @@ def render_all_groups(op, context):
                 # Do not re-render existing cached renders
                 render_path = f'{bakepath}{name} - Group {group_index}.exr'
                 if not opt_force_render and os.path.exists(bpy.path.abspath(render_path)):
-                    print(f'. Skipping scenario {name} for group {group_index} since it is already rendered and cached')
+                    logger.info(f'. Skipping scenario {name} for group {group_index} since it is already rendered and cached')
                     n_existing += 1
                     continue
                 # Only render if the scenario influence the objects in the group
@@ -405,7 +409,7 @@ def render_all_groups(op, context):
                             else:
                                 scenario_influence = light_influence
                 if not scenario_influence:
-                    print(f'. Skipping scenario {name} since it is not influencing group {group_index}')
+                    logger.info(f'. Skipping scenario {name} since it is not influencing group {group_index}')
                     n_skipped += 1
                     continue
 
@@ -471,8 +475,8 @@ def render_all_groups(op, context):
                 elapsed_per_render = elapsed / n_render_performed
                 remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
                 msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
-            print(msg)
-            print(f'. Scenarios: {",".join(s[0][0] for s in batch)}')
+            logger.info(msg)
+            logger.info(f'. Scenarios: {",".join(s[0][0] for s in batch)}')
 
             # Setup AOI
             if influence != (0, 1, 0, 1):
@@ -531,7 +535,7 @@ def render_all_groups(op, context):
                     remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
                     msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
                 if state:
-                    print(msg)
+                    logger.info(msg)
                     scene.render.filepath = render_path
                     scene.render.image_settings.file_format = 'OPEN_EXR'
                     scene.render.image_settings.color_mode = 'RGB' if is_lightmap else 'RGBA'
@@ -539,10 +543,10 @@ def render_all_groups(op, context):
                     scene.render.image_settings.color_depth = '16'
                     bpy.ops.render.render(write_still=True, scene=scene.name)
                     restore_func(state)
-                    print('\n')
+                    logger.info('\n')
                     n_render_performed += 1
                 else:
-                    print(f'{msg} - Skipped (no influence)')
+                    logger.info(f'{msg} - Skipped (no influence)')
                     n_skipped += 1
 
         for obj in objects:
@@ -630,7 +634,7 @@ def render_all_groups(op, context):
                     remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
                     msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
                 if state:
-                    print(msg)
+                    logger.info(msg)
                     scene.render.filepath = render_path
                     scene.render.image_settings.file_format = 'OPEN_EXR'
                     scene.render.image_settings.color_mode = 'RGB' if is_lightmap else 'RGBA'
@@ -671,13 +675,13 @@ def render_all_groups(op, context):
                     mask_scene.collection.objects.unlink(dup)
                     mask_scene.render.image_settings.file_format = "PNG"
                     bpy.data.materials.remove(mat)
-                    print('\n')
+                    logger.info('\n')
                     n_render_performed += 1
                 else:
-                    print(f'{msg} - Skipped (no influence)')
+                    logger.info(f'{msg} - Skipped (no influence)')
                     n_skipped += 1
             else:
-                print(f'{msg} - Skipped since it is already rendered and cached')
+                logger.info(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
         if obj.vlmSettings.bake_normalmap:
             render_path = f'{bakepath}NormalMap - Bake - {obj.name}.exr'
@@ -688,7 +692,7 @@ def render_all_groups(op, context):
                     elapsed_per_render = elapsed / n_render_performed
                     remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
                     msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
-                print(msg)
+                logger.info(msg)
                 scene.render.filepath = render_path
                 scene.render.image_settings.file_format = 'OPEN_EXR'
                 scene.render.image_settings.color_mode = 'RGB'
@@ -698,10 +702,10 @@ def render_all_groups(op, context):
                 with context.temp_override(scene=scene, active_object=obj, selected_objects=[obj]):
                     bpy.ops.object.bake(type='NORMAL', normal_space='OBJECT', normal_r='POS_X', normal_g='POS_Y', normal_b='POS_Z', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
                     bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
-                print('\n')
+                logger.info('\n')
                 n_render_performed += 1
             else:
-                print(f'{msg} - Skipped since it is already rendered and cached')
+                logger.info(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
         for mat, ti in zip(obj.data.materials, img_nodes):
             mat.node_tree.nodes.remove(ti)
@@ -716,10 +720,9 @@ def render_all_groups(op, context):
     bpy.data.scenes.remove(scene)
     bpy.data.scenes.remove(mask_scene)
     length = time.time() - start_time
-    print(f"\nRendering finished in a total time of {vlm_utils.format_time(length)}")
-    if n_existing > 0: print(f". {n_existing:>3} renders were skipped since they were already existing")
-    if n_skipped > 0: print(f". {n_skipped:>3} renders were skipped since objects were outside of lights influence")
-    if n_render_performed > 0: print(f". {n_render_performed:>3} renders were computed ({vlm_utils.format_time(length/n_render_performed)} per render)")
+    logger.info(f"\nRendering finished in a total time of {vlm_utils.format_time(length)}")
+    if n_existing > 0: logger.info(f". {n_existing:>3} renders were skipped since they were already existing")
+    if n_skipped > 0: logger.info(f". {n_skipped:>3} renders were skipped since objects were outside of lights influence")
+    if n_render_performed > 0: logger.info(f". {n_render_performed:>3} renders were computed ({vlm_utils.format_time(length/n_render_performed)} per render)")
 
-    context.scene.vlmSettings.last_bake_step = 'renders'
     return {'FINISHED'}

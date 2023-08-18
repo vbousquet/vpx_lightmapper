@@ -34,6 +34,8 @@ from . import vlm_collections
 from PIL import Image
 import olefile
 
+logger = vlm_utils.logger
+
 
 # Name of import collections
 HIDDEN_COL = 'VPX.Import.Hidden' # Hidden and replaced objects
@@ -142,14 +144,14 @@ def update_material(mesh, slot, materials, mat_name, image, translucency=-1):
             use_image = 1
         else:
             if image != "VPX.Tex.":
-                print(f"Missing texture {image}")
+                logger.info(f"Missing texture {image}")
             node_tex.image = None
     if f"VPX.Mat" in mat.node_tree.nodes:
         group = mat.node_tree.nodes[f"VPX.Mat"]
         if mat_name in materials:
             materials[mat_name].apply(group)
         elif mat_name != "":
-            print(f"Missing material {mat_name}")
+            logger.info(f"Missing material {mat_name}")
         if translucency >= 0.0:
             if mat_name in materials and materials[mat_name].is_metal:
                 group.inputs[14].default_value = 0
@@ -181,16 +183,16 @@ def get_update(context, vpx_name):
 def needs_update(context, vpx_name, created_objects, x, y, z):
     update_mode = get_update(context, vpx_name)
     if update_mode == 0: # No update
-        print(f'. Skipping {vpx_name} which is already imported and marked as not to be updated')
+        logger.info(f'. Skipping {vpx_name} which is already imported and marked as not to be updated')
         existings = [o for o in context.scene.objects if vpx_name in o.vlmSettings.vpx_object.split(';')]
         created_objects.extend([o.name for o in existings])
     elif update_mode == 1: # Transform update
-        print(f'. Updating position of {vpx_name}')
+        logger.info(f'. Updating position of {vpx_name}')
         existing = next((o for o in context.scene.objects if vpx_name in o.vlmSettings.vpx_object.split(';')), None)
         update_location(existing, x, y, z)
         created_objects.append(existing.name)
     else:
-        print(f'. {["Skipping","Updating","Updating","Updating","Creating"][update_mode]} {vpx_name}')
+        logger.info(f'. {["Skipping","Updating","Updating","Updating","Creating"][update_mode]} {vpx_name}')
     return update_mode
     
 
@@ -216,13 +218,13 @@ def update_object(context, vpx_name, vpx_subpart, data, col_name):
             existing.data = data
             return False, existing
         else:
-            print(f'. WARNING: incompatible data type between existing {obj_name} and created one, renaming/hding the old one and recreating (existing={type(existing.data)} new={type(data)})')
+            logger.info(f'. WARNING: incompatible data type between existing {obj_name} and created one, renaming/hding the old one and recreating (existing={type(existing.data)} new={type(data)})')
             if obj_name == existing.name: existing.name = f'{existing.name}.Old'
             vlm_collections.move_to_col(existing, vlm_collections.get_collection(context.scene.collection, HIDDEN_COL))
     obj = bpy.data.objects.new(obj_name, data)
     obj.vlmSettings.vpx_object = vpx_name
     obj.vlmSettings.vpx_subpart = vpx_subpart
-    print(f". Creating VPX object: '{obj_name}', subpart: '{vpx_subpart}' (Blender object name: '{obj.name}')")
+    logger.info(f". Creating VPX object: '{obj_name}', subpart: '{vpx_subpart}' (Blender object name: '{obj.name}')")
     col = vlm_collections.get_collection(context.scene.collection, col_name)
     col.objects.link(obj)
     lc = vlm_collections.find_layer_collection(context.view_layer.layer_collection, col)
@@ -326,7 +328,7 @@ def create_curve(curve_name, points, cyclic, flat, global_scale, curve_resolutio
 
 
 def read_vpx(op, context, filepath):
-    print("reading ", filepath)
+    logger.info("reading ", filepath)
 
     if not os.path.isfile(filepath):
         op.report({'WARNING'},f"{filepath} does not exist")
@@ -357,7 +359,7 @@ def read_vpx(op, context, filepath):
         version = biff_io.BIFF_reader(ole.openstream('GameStg/Version').read()).get_32()
         if version <= 30:
             return {"FAILED"}
-        print(f"VPX file version: {version/100}")
+        logger.info(f"VPX file version: {version/100}")
 
         # Read the table informations
         game_data = biff_io.BIFF_reader(ole.openstream('GameStg/GameData').read())
@@ -456,7 +458,7 @@ def read_vpx(op, context, filepath):
                 game_data.pos = code_pos
                 game_data.skip(code_size)
                 movables = {match[0] for match in re.compile(r'([a-zA-Z][[a-zA-Z0-9_]+)\.(rotx-zz|rotandtra0-9|transx-z|objrotx-z|size_x-z)').findall(code.lower())}
-                print(f'. Following objects were identified as movable by the script: {movables}')
+                logger.info(f'. Following objects were identified as movable by the script: {movables}')
             else:
                 game_data.skip_tag()
         playfield_width = playfield_right - playfield_left
@@ -486,7 +488,7 @@ def read_vpx(op, context, filepath):
                 elif image_data.tag == 'ALTV':
                     image_data.skip_tag()
                 elif image_data.tag == 'BITS':
-                    print(f"GameStg/Image{index} {vpx_name}: Unsupported bmp image file")
+                    logger.info(f"GameStg/Image{index} {vpx_name}: Unsupported bmp image file")
                     #uncompressed = zlib.decompress(image_data.data[image_data.pos:]) #, wbits=9)
                     data = None
                     break
@@ -532,11 +534,11 @@ def read_vpx(op, context, filepath):
                         image.alpha_mode = 'STRAIGHT' 
                         alpha_images.append(vpx_name)
                 except OSError:
-                    print(f"cannot load {vpx_name} initially imported from {path}")
+                    logger.info(f"cannot load {vpx_name} initially imported from {path}")
                 image.pack(data=data, data_len=size)
             image.source = 'FILE'
-        print(f'. Following images are fully opaque: {opaque_images}')
-        print(f'. Following images have transparent pixels: {alpha_images}')
+        logger.info(f'. Following images are fully opaque: {opaque_images}')
+        logger.info(f'. Following images have transparent pixels: {alpha_images}')
         
         # Setup environment lighting
         env_image = f"VPX.Tex.{env_image.casefold()}" 
@@ -948,7 +950,7 @@ def read_vpx(op, context, filepath):
 
                 update_mode = get_update(context, name)
                 if update_mode == 0: # No update
-                    print(f'. Skipping {name} which is already imported and marked as not to be updated')
+                    logger.info(f'. Skipping {name} which is already imported and marked as not to be updated')
                     existings = [o.name for o in context.scene.objects if name in o.vlmSettings.vpx_object.split(';')]
                     created_objects.extend(existings)
 
@@ -1061,7 +1063,7 @@ def read_vpx(op, context, filepath):
                             use_image = 1
                         else:
                             if image != "VPX.Tex.":
-                                print(f"Missing texture {image}")
+                                logger.info(f"Missing texture {image}")
                             node_tex.image = None
                     if f"{mat_name}.Mat" in mat.node_tree.nodes:
                         group = mat.node_tree.nodes[f"{mat_name}.Mat"]
@@ -1723,7 +1725,7 @@ def read_vpx(op, context, filepath):
                         use_imageA = 1
                     else:
                         if image_a != "VPX.Tex.":
-                            print(f"Missing texture {image_a}")
+                            logger.info(f"Missing texture {image_a}")
                         node_texA.image = None
                 use_imageB = 0
                 if f"{mat_name}.TexB" in mat.node_tree.nodes:
@@ -1733,7 +1735,7 @@ def read_vpx(op, context, filepath):
                         use_imageB = 1
                     else:
                         if image_b != "VPX.Tex.":
-                            print(f"Missing texture {image_b}")
+                            logger.info(f"Missing texture {image_b}")
                         node_texB.image = None
                 if f"{mat_name}.Mat" in mat.node_tree.nodes:
                     group = mat.node_tree.nodes[f"{mat_name}.Mat"]
@@ -1857,7 +1859,7 @@ def read_vpx(op, context, filepath):
                 obj = add_core_mesh(created_objects, name, '', meshes[type], target_col if visible else HIDDEN_COL, materials, material, image, x, y, z, x_size, y_size, z_size, rot_z, global_scale)
 
             else:
-                print(f"GameStg/GameItem{index}: unsupported type #{item_type}")
+                logger.info(f"GameStg/GameItem{index}: unsupported type #{item_type}")
     
     # Shift object that are positionned on a surface
     for obj, surface in shifted_objects:
@@ -1879,7 +1881,7 @@ def read_vpx(op, context, filepath):
     update_material(pfmesh, 0, materials, playfield_material, playfield_image, 0)
     created_objects.append(playfield_obj.name)
     if pfmesh.materials[0].name.startswith('VPX.Mat.'):
-        print('Creating playfield material')
+        logger.info('Creating playfield material')
         mat = pfmesh.materials[0].copy()
         mat.name = 'VPX.Playfield'
         pfmesh.materials[0] = mat
@@ -1896,7 +1898,7 @@ def read_vpx(op, context, filepath):
             mat.node_tree.links.new(node_tex.outputs[1], node_math.inputs[0])
             mat.node_tree.links.new(node_math.outputs[0], mat.node_tree.nodes[group_name].inputs[14])
         else:
-            print(f"Missing group '{group_name}' in playfield material")
+            logger.info(f"Missing group '{group_name}' in playfield material")
 
     # Create a translucency map for the playfield (translucent for inserts, diffuse otherwise)
     if len(pfmesh.materials) > 0 and pfmesh.materials[0] is not None and 'TranslucencyMap' in pfmesh.materials[0].node_tree.nodes:
@@ -1908,7 +1910,7 @@ def read_vpx(op, context, filepath):
         mat = pfmesh.materials[0]
         mat.node_tree.nodes["TranslucencyMap"].image = translucency_image
         if opt_use_pf_translucency_map: # Render the translucency map (which can be entirely empty if there is no inserts cups)
-            print(f"Computing translucency map for the playfield inserts.")
+            logger.info(f"Computing translucency map for the playfield inserts.")
             mat.node_tree.nodes.active = mat.node_tree.nodes["TranslucencyMap"]
             col_initial_state = vlm_collections.push_state(scene_col)
             tmp_col = vlm_collections.get_collection(context.scene.collection, TMP_COL)
@@ -1985,14 +1987,14 @@ def read_vpx(op, context, filepath):
     for obj in [obj for obj in scene_col.all_objects if obj.vlmSettings.vpx_object != '' and obj.name not in created_objects]:
         vlm_collections.unlink(obj)
         vlm_collections.get_collection(context.scene.collection, HIDDEN_COL).objects.link(obj)
-        print(f". Hiding '{obj.name}' since it was not found in the VPX table file (source VPX object '{obj.vlmSettings.vpx_object}', subpart '{obj.vlmSettings.vpx_subpart}')")
+        logger.info(f". Hiding '{obj.name}' since it was not found in the VPX table file (source VPX object '{obj.vlmSettings.vpx_object}', subpart '{obj.vlmSettings.vpx_subpart}')")
         
     # Output warnings for split normals
     for obj_name in created_objects:
         if obj_name in bpy.data.objects:
             obj = bpy.data.objects[obj_name]
             if obj.type == 'MESH' and not obj.data.has_custom_normals:
-                print(f". Warning '{obj.name}' does not have split normals. This will break normals on the final bake mesh.")
+                logger.info(f". Warning '{obj.name}' does not have split normals. This will break normals on the final bake mesh.")
 
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -2004,5 +2006,5 @@ def read_vpx(op, context, filepath):
     
     context.scene.vlmSettings.playfield_size = (playfield_left, playfield_top, playfield_width, playfield_height)
     vlm_camera.camera_inclination_update(None, context)
-    print(f"\nImport finished.")
+    logger.info(f"\nImport finished.")
     return {"FINISHED"}
