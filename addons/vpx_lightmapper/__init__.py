@@ -1088,7 +1088,7 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
             col = layout.column()
             col.enabled = False
             col.prop(props, 'bake_lighting')
-            col.prop(props, 'bake_objects')
+            col.prop(props, 'bake_collections')
             col.prop(props, 'bake_sync_light')
             col.prop(props, 'bake_sync_trans')
             col.prop(props, 'bake_type')

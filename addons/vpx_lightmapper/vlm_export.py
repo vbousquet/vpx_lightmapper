@@ -99,8 +99,6 @@ def export_vpx(op, context):
     . Add all nestmaps as texture with 'VLM.' prefixed name
     . Add base materials with 'VLM.' prefixed name
     . Add all bakes as primitives in the 'VLM.Visuals' layer
-    . Create a helper script file with the light/lightmap and movable sync code
-    . Hide playfield_mesh if it exists, otherwise creates it
     """
     if context.blend_data.filepath == '':
         op.report({'ERROR'}, 'You must save your project before exporting')
@@ -349,7 +347,6 @@ def export_vpx(op, context):
             elif br.tag == "PFSC":
                 pf_scatter = br.get_float()
             br.skip_tag()
-    bm_room_meshes = []
     for obj in meshes_to_export:
         obj.data.validate()
         obj.data.calc_normals_split() # compute loop normal (would be 0,0,0 otherwise)
@@ -502,8 +499,6 @@ def export_vpx(op, context):
         if is_lightmap:
             sync_light, _ = get_vpx_sync_light(obj, context, light_col)
             writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
-        elif obj != pfobj:
-            bm_room_meshes.append(export_name(obj.name))
         writer.write_tagged_string(b'REFL', reflection_probe)
         writer.write_tagged_string(b'REFR', refraction_probe)
         writer.close()
