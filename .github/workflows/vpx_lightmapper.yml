@@ -1,0 +1,47 @@
+name: vpx_lightmapper
+on:
+  push:
+
+env:
+  VERSION_START_SHA: 890b280d3d2de9b5ae9d7e92d75ff71497323a47
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      revision: ${{ steps.version.outputs.revision }}
+      sha7: ${{ steps.version.outputs.sha7 }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - id: version
+        run: |
+          REVISION=$(git rev-list ${{ env.VERSION_START_SHA }}..HEAD --count)
+          SHA7="${GITHUB_SHA::7}"
+          TAG="${REVISION}-${SHA7}"
+          echo "revision=${REVISION}" >> $GITHUB_OUTPUT
+          echo "sha7=${SHA7}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build VPX Light Mapper
+    runs-on: windows-2019
+    needs: [ version ]
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v3
+      - run: |
+          mkdir tmp
+          cp -r addons tmp
+      - uses: actions/upload-artifact@v3
+        with:
+          name: vpx_lightmapper-${{ needs.version.outputs.tag }}
+          path: tmp
