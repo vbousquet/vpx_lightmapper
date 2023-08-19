@@ -386,9 +386,12 @@ class VLM_OT_render_all_groups(Operator):
     @classmethod
     def poll(cls, context):
         if context.blend_data.filepath == '': return False
-        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
         if not vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False): return False
         if not context.scene.camera: return False
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+        if not bake_col: return False
+        for obj in bake_col.all_objects:
+            if not obj.vlmSettings.indirect_only and not obj.vlmSettings.use_bake and obj.vlmSettings.render_group < 0: return False
         return True
         
     def execute(self, context):
@@ -473,7 +476,10 @@ class VLM_OT_export_vpx(Operator):
         if context.blend_data.filepath == '': return False
         if not os.path.isfile(bpy.path.abspath(context.scene.vlmSettings.table_file)): return False
         if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
-        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False): return False
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        if not result_col: return False
+        for obj in result_col.all_objects:
+            if obj.vlmSettings.bake_nestmap < 0: return False
         return True
 
     def execute(self, context):
