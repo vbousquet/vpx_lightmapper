@@ -401,12 +401,12 @@ def export_vpx(op, context):
             # ObjRotX / ObjRotY / ObjRotZ
             writer.write_tagged_float(b'RTV6', math.degrees(obj.rotation_euler[0]))
             writer.write_tagged_float(b'RTV7', math.degrees(obj.rotation_euler[1]))
-            writer.write_tagged_float(b'RTV8', -math.degrees(obj.rotation_euler[2]) - 180)
+            writer.write_tagged_float(b'RTV8', -math.degrees(obj.rotation_euler[2]))
         else:
             # RotX / RotY / RotZ
             writer.write_tagged_float(b'RTV0', math.degrees(obj.rotation_euler[0]))
             writer.write_tagged_float(b'RTV1', math.degrees(obj.rotation_euler[1]))
-            writer.write_tagged_float(b'RTV2', -math.degrees(obj.rotation_euler[2]) - 180)
+            writer.write_tagged_float(b'RTV2', -math.degrees(obj.rotation_euler[2]))
             # TransX / TransY / TransZ
             writer.write_tagged_float(b'RTV3', 0)
             writer.write_tagged_float(b'RTV4', 0)
@@ -450,13 +450,14 @@ def export_vpx(op, context):
         n_vertices = 0
         for poly in obj.data.polygons:
             if len(poly.loop_indices) != 3:
+                logger.error(f'ERROR: invalid polygon encountered in part {obj.name}, it is not triangulated ({len(poly.loop_indices)} edges)')
                 continue
             for loop_index in reversed(poly.loop_indices):
                 loop = obj.data.loops[loop_index]
                 x, y, z = obj.data.vertices[loop.vertex_index].co
                 nx, ny, nz = loop.normal
                 u, v = uv_layer_nested.data[loop_index].uv
-                vertex = (-x / global_scale, y / global_scale, z / global_scale, -nx, ny, nz, u, 1.0 - v)
+                vertex = (x / global_scale, -y / global_scale, z / global_scale, nx, -ny, nz, u, 1.0 - v)
                 existing_index = vert_dict.get(vertex, None)
                 if existing_index is None:
                     vert_dict[vertex] = n_vertices

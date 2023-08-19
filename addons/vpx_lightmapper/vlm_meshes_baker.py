@@ -181,11 +181,14 @@ def create_bake_meshes(op, context):
         logger.info(f"\nBuilding solid bake target model for '{bake_name}'")
         poly_start = 0
         objects_to_join = []
+        base_instances = []
         last_obj = None
         
         for i, obj_name in enumerate(bake_col_object_set):
             dup = bpy.data.objects[obj_name].copy()
             dup.data = dup.data.copy()
+            base_instances.append(bpy.data.objects[obj_name])
+            objects_to_join.append(dup)
             result_col.objects.link(dup)
             bpy.ops.object.select_all(action='DESELECT')
             dup.select_set(True)
@@ -368,10 +371,8 @@ def create_bake_meshes(op, context):
             if is_bake:
                 dup.data.uv_layers.remove(dup.data.uv_layers[projected_uv])
 
-            objects_to_join.append(dup)
-        
         if len(objects_to_join) == 0: continue
-        
+
         # Create merged mesh
         if len(objects_to_join) > 1:
             logger.info(f". {len(objects_to_join)} Objects merged") # {[obj.name for obj in objects_to_join]}")
@@ -384,6 +385,15 @@ def create_bake_meshes(op, context):
         bpy.ops.object.select_all(action='DESELECT')
         bake_target.select_set(True)
         context.view_layer.objects.active = bake_target
+        
+        # Evaluate bake mesh transform
+        if sync_obj and bpy.data.objects[sync_obj]:
+            transform = Matrix(bpy.data.objects[sync_obj].matrix_world)
+        elif len(objects_to_join) == 1:
+            transform = Matrix(base_instances[0].matrix_world)
+        else:
+            centre = sum((Vector(b) for b in bake_target.bound_box), Vector()) / 8
+            transform = Matrix.Translation(centre)
         
         # if bake_name == 'Parts':
             # return {'FINISHED'}
@@ -408,21 +418,18 @@ def create_bake_meshes(op, context):
             light_name, is_lightmap, _, lights = light_scenario
             if is_lightmap: continue
             obj_name = f'{bake_name}.BM.{light_name}' # if sync_obj else f'Table.BM.{light_name}.{bake_name}'
+            print(f'{obj_name} => {transform}')
             bake_mesh = bake_mesh.copy()
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
             result_col.objects.link(bake_instance)
-            if sync_obj:
-                dup = bpy.data.objects[sync_obj]
-                bake_mesh.transform(Matrix(dup.matrix_world).inverted())
-                bake_instance.matrix_world = dup.matrix_world
-            else:
-                bake_instance.matrix_world.identity()
             adapt_materials(bake_instance.data, light_name, is_lightmap)
             bake_instance.vlmSettings.bake_lighting = light_name
             bake_instance.vlmSettings.bake_collections = bake_col.name
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
             bake_instance.vlmSettings.bake_hdr_range = bake_hdr_range[light_name]
+            bake_mesh.transform(transform.inverted())
+            bake_instance.matrix_world = transform
             if is_translucent:
                 bake_instance.vlmSettings.bake_type = 'active'
             elif sync_obj is None:
