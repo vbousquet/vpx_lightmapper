@@ -61,6 +61,8 @@ if "vlm_camera" in locals():
 else:
     from . import vlm_camera
 
+logger = vlm_utils.logger
+
 # Only load submodules that have external dependencies if they are satisfied
 dependencies = (
     # OLE lib: https://olefile.readthedocs.io/en/latest/Howto.html
@@ -255,13 +257,13 @@ class VLM_Object_props(PropertyGroup):
     layback_offset: FloatProperty(name="Layback offset", description="Y offset caused by current layback", default = 0.0)
     bake_normalmap: BoolProperty(name="Normal Map", description="Bake a normal map", default = False)
     bake_orm: BoolProperty(name="O.R.M.", description="Bake an ORM map (Occlusion/Roughness/Metallic)", default = False)
-    use_bake: BoolProperty(name="Use Bake", description="Use UV unwrapped baking instead of using UV projected and renders. The object needs to be UV unwrapped. The process will be much slower but will produce better results", default = False)
+    use_bake: BoolProperty(name="Use Bake", description="Use UV unwrapped camera baking instead of using camera renders with UV projected from camera. The object needs to be UV unwrapped. The process will be much slower but will produce better results", default = False)
     bake_width: IntProperty(name="Bake width:", description="Width of bake texture", default = 256, min = 2, max=8192)
     bake_height: IntProperty(name="Bake height:", description="Height of bake texture", default = 256, min = 2, max=8192)
     no_mesh_optimization: BoolProperty(name="No Optimization", description="Disable mesh optimization (for example to preserve normals or unwrapped UV)", default = False)
     # Both bake object and bake result
     #movable_script: StringProperty(name="Sync", description="VBS script for movable/mod scynchronization", default = '')
-    is_movable: BoolProperty(name="Movable", description="Movable part for which the bake/light meshes may only be merged with parts linked to the same VPX object", default = False)
+    is_movable: BoolProperty(name="No Merge", description="Part for which the bake/light meshes may only be merged with parts linked to the same VPX object", default = False)
     use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot instead of Rot when exporting", default = False)
     # Bake result properties (for object inside the bake result collection)
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
@@ -439,12 +441,13 @@ class VLM_OT_batch_bake(Operator):
 
     def do_shutdown(result):
         if context.scene.vlmSettings.batch_shutdown:
+            vlm_utils.run_with_logger(lambda : logger.info('\n>> Shutting down'))
             os.system("shutdown /s /t 1")
         return result
     
     def execute(self, context):
         start_time = time.time()
-        print(f"\nStarting complete bake batch...")
+        vlm_utils.run_with_logger(lambda : logger.info(f"\nStarting complete bake batch..."))
         if context.scene.vlmSettings.batch_inc_group:
             result = vlm_utils.run_with_logger(lambda : vlm_group_baker.compute_render_groups(self, context))
             if 'FINISHED' not in result: return do_shutdown(result)
@@ -461,7 +464,7 @@ class VLM_OT_batch_bake(Operator):
         result = vlm_utils.run_with_logger(lambda : vlm_export.export_vpx(self, context))
         if 'FINISHED' not in result: return do_shutdown(result)
         bpy.ops.wm.save_mainfile()
-        print(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}")
+        vlm_utils.run_with_logger(lambda : logger.info(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}"))
         return do_shutdown(result)
 
 
@@ -1020,12 +1023,12 @@ class VLM_PT_3D_Bake_Options(bpy.types.Panel):
                 layout.prop(context.active_object.vlmSettings, 'hide_from_others', text='Hide from others')
                 layout.prop(context.active_object.vlmSettings, 'bake_mask', text='Mask')
                 layout.separator()
-                layout.prop(context.active_object.vlmSettings, 'is_movable', text='Movable')
+                layout.prop(context.active_object.vlmSettings, 'is_movable')
                 col = layout.column()
                 col.enabled = context.active_object.vlmSettings.is_movable
                 col.prop(context.active_object.vlmSettings, 'use_obj_pos')
                 layout.separator()
-                layout.prop(context.active_object.vlmSettings, 'use_bake', toggle=1, text='Unwrapped UV Bake' if context.active_object.vlmSettings.use_bake else 'Projected UV Bake')
+                layout.prop(context.active_object.vlmSettings, 'use_bake', toggle=1, text='Unwrapped Bake' if context.active_object.vlmSettings.use_bake else 'Camera Render')
                 if context.active_object.vlmSettings.use_bake:
                     layout.prop(context.active_object.vlmSettings, 'bake_width', text='Width')
                     layout.prop(context.active_object.vlmSettings, 'bake_height', text='Height')
