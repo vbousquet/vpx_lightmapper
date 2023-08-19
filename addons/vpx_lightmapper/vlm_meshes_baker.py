@@ -351,8 +351,8 @@ def create_bake_meshes(op, context):
                     ua, va = edge.verts[0].link_loops[0][uv_layer].uv
                     ub, vb = edge.verts[1].link_loops[0][uv_layer].uv
                     l = math.sqrt((ub-ua)*(ub-ua)*opt_ar*opt_ar+(vb-va)*(vb-va))
-                    longest_edge = max(longest_edge, l)
-                    if l >= opt_cut_threshold:
+                    if l > opt_cut_threshold:
+                        longest_edge = max(longest_edge, l)
                         long_edges.append(edge)
                 if not long_edges:
                     bme.to_mesh(dup.data)
@@ -386,15 +386,6 @@ def create_bake_meshes(op, context):
         bake_target.select_set(True)
         context.view_layer.objects.active = bake_target
         
-        # Evaluate bake mesh transform
-        if sync_obj and bpy.data.objects[sync_obj]:
-            transform = Matrix(bpy.data.objects[sync_obj].matrix_world)
-        elif len(objects_to_join) == 1:
-            transform = Matrix(base_instances[0].matrix_world)
-        else:
-            centre = sum((Vector(b) for b in bake_target.bound_box), Vector()) / 8
-            transform = Matrix.Translation(centre)
-        
         # if bake_name == 'Parts':
             # return {'FINISHED'}
 
@@ -418,7 +409,6 @@ def create_bake_meshes(op, context):
             light_name, is_lightmap, _, lights = light_scenario
             if is_lightmap: continue
             obj_name = f'{bake_name}.BM.{light_name}' # if sync_obj else f'Table.BM.{light_name}.{bake_name}'
-            print(f'{obj_name} => {transform}')
             bake_mesh = bake_mesh.copy()
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
             result_col.objects.link(bake_instance)
@@ -428,8 +418,10 @@ def create_bake_meshes(op, context):
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
             bake_instance.vlmSettings.bake_hdr_range = bake_hdr_range[light_name]
-            bake_mesh.transform(transform.inverted())
-            bake_instance.matrix_world = transform
+            if sync_obj and bpy.data.objects[sync_obj]:
+                transform = Matrix(bpy.data.objects[sync_obj].matrix_world)
+                bake_mesh.transform(transform.inverted())
+                bake_instance.matrix_world = transform
             if is_translucent:
                 bake_instance.vlmSettings.bake_type = 'active'
             elif sync_obj is None:
