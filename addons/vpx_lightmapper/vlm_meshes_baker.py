@@ -166,12 +166,14 @@ def create_bake_meshes(op, context):
                 to_bake.append((obj_name, bake_col, [obj_name], obj_name, not bake_col.vlmSettings.is_opaque))
         else:
             sync_obj = None
+            sync_transform = None
             for obj_name in object_names:
                 obj = bpy.data.objects[obj_name]
                 if obj.vlmSettings.is_movable:
-                    if sync_obj != None:
-                        logger.info(f'. ERROR: Bake collection {bake_col.name} bakes to a group but more than one object is marked as movable.')
+                    if sync_obj and sync_transform != obj.matrix_world:
+                        logger.info(f'. ERROR: Bake collection {bake_col.name} bakes to a group multiple objects are marked as movable with different transforms. Only check the one you want to define the origin of the group.')
                     sync_obj = obj_name
+                    sync_transform = obj.matrix_world
             to_bake.append((bake_col.name, bake_col, object_names, sync_obj, not bake_col.vlmSettings.is_opaque))
         
     # Create all solid bake meshes
@@ -497,7 +499,7 @@ def create_bake_meshes(op, context):
                 result_col.objects.unlink(bake_instance)
                 #logger.info(f". Mesh {bake_name} has no more faces after optimization for {light_name} lighting")
             else:
-                logger.info(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.2f}) for {bake_col if sync_obj is None else bake_name}')
+                logger.info(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.2f}) for {obj_name}')
                 if sync_obj and bpy.data.objects[sync_obj]:
                     bake_instance.matrix_world = bpy.data.objects[sync_obj].matrix_world
                 bake_instance.vlmSettings.bake_type = 'lightmap'
