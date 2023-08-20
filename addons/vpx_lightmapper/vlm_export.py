@@ -372,7 +372,6 @@ def export_vpx(op, context):
         is_lightmap = obj.vlmSettings.bake_type == 'lightmap'
         is_active = obj.vlmSettings.bake_type == 'active'
         is_static = obj.vlmSettings.bake_type == 'static'
-        is_movable = obj.vlmSettings.bake_sync_trans != ''
         has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None) is not None
         depth_bias = None
         reflection_probe = None

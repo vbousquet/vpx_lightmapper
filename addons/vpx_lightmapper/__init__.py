@@ -217,22 +217,23 @@ class VLM_Scene_props(PropertyGroup):
 class VLM_Collection_props(PropertyGroup):
     bake_mode: EnumProperty(
         items=[
-            ('group', 'Group', 'Bake all objects to a single mesh', '', 0),
-            ('split', 'Split', 'Bake each object to a splitted mesh', '', 1),
+            ('group', 'Group', 'Merge all objects to a single mesh', '', 0),
+            ('split', 'Split', 'Bake each object to its own mesh', '', 1),
         ],
-        name='Bake Mode',
-        description='Bake mode for the selected collection',
+        name='Merge Mode',
+        description='Define how objects in the bake collection are processed (individually or merged together).',
         default='group'
     )
-    is_opaque: BoolProperty(name="Opaque", description="Wether this collection only contains opaque objects which do not require blending.", default = True)
+    is_opaque: BoolProperty(name="Opaque", description="Wether this collection only contains opaque objects which do not require blending", default = True)
+    merge_lightmaps: BoolProperty(name="Merge Lightmaps", description="Merge lightmaps from this bake collection with lightmaps produced by others", default = True)
     refraction_probe: StringProperty(name="Refraction Probe", description="Identifier of the refraction probe to be used on export", default = '')
     reflection_probe: StringProperty(name="Reflection Probe", description="Identifier of the reflection probe to be used on export", default = '')
     depth_bias: IntProperty(name="Depth Bias", description="Depth Bias applied to the layer when exported to VPX. Set to 0 for playfield, Negative for layer above playfield, positive for layers under playfield.", default = 0)
     light_mode: EnumProperty(
         items=[
-            ('solid', 'Solid', 'Base solid bake', '', 0),
-            ('group', 'Group', 'Bake all lights as a single lightmap group', '', 1),
-            ('split', 'Split', 'Bake each light as a separate lightmap', '', 2)
+            ('solid', 'Solid', 'Base lighting scenario on which others are applied', '', 0),
+            ('group', 'Group', 'Bake all lights in this collection as a single lighting scenario', '', 1),
+            ('split', 'Split', 'Bake each light as a separate lighting scenario', '', 2)
         ],
         name='Light Mode',
         description='Light mode for the selected collection',
@@ -262,8 +263,7 @@ class VLM_Object_props(PropertyGroup):
     bake_height: IntProperty(name="Bake height:", description="Height of bake texture", default = 256, min = 2, max=8192)
     no_mesh_optimization: BoolProperty(name="No Optimization", description="Disable mesh optimization (for example to preserve normals or unwrapped UV)", default = False)
     # Both bake object and bake result
-    #movable_script: StringProperty(name="Sync", description="VBS script for movable/mod scynchronization", default = '')
-    is_movable: BoolProperty(name="No Merge", description="Part for which the bake/light meshes may only be merged with parts linked to the same VPX object", default = False)
+    is_movable: BoolProperty(name="Use as pivot", description="Use this part origin as the origin of the produced mesh", default = False)
     use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot instead of Rot when exporting", default = False)
     # Bake result properties (for object inside the bake result collection)
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
@@ -848,6 +848,9 @@ class VLM_PT_Col_Props(bpy.types.Panel):
             layout.prop(col.vlmSettings, 'depth_bias', expand=True)
             layout.prop(col.vlmSettings, 'is_opaque', expand=True)
             sub = layout.column()
+            sub.enabled = col.vlmSettings.is_opaque
+            sub.prop(col.vlmSettings, 'merge_lightmaps', expand=True)
+            sub = layout.column()
             sub.enabled = not col.vlmSettings.is_opaque
             sub.prop(col.vlmSettings, 'refraction_probe', expand=True)
             layout.prop(col.vlmSettings, 'reflection_probe', expand=True)
@@ -1023,9 +1026,16 @@ class VLM_PT_3D_Bake_Options(bpy.types.Panel):
                 layout.prop(context.active_object.vlmSettings, 'hide_from_others', text='Hide from others')
                 layout.prop(context.active_object.vlmSettings, 'bake_mask', text='Mask')
                 layout.separator()
-                layout.prop(context.active_object.vlmSettings, 'is_movable')
+                no_merge = False
+                for col in bake_col.children:
+                    if context.active_object.name in col.all_objects:
+                        no_merge = not (col.vlmSettings.is_opaque and col.vlmSettings.merge_lightmaps)
+                        break
                 col = layout.column()
-                col.enabled = context.active_object.vlmSettings.is_movable
+                col.enabled = no_merge
+                col.prop(context.active_object.vlmSettings, 'is_movable')
+                col = layout.column()
+                col.enabled = context.active_object.vlmSettings.is_movable and no_merge
                 col.prop(context.active_object.vlmSettings, 'use_obj_pos')
                 layout.separator()
                 layout.prop(context.active_object.vlmSettings, 'use_bake', toggle=1, text='Unwrapped Bake' if context.active_object.vlmSettings.use_bake else 'Camera Render')

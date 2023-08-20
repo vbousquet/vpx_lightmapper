@@ -166,14 +166,15 @@ def create_bake_meshes(op, context):
                 to_bake.append((obj_name, bake_col, [obj_name], obj_name, not bake_col.vlmSettings.is_opaque))
         else:
             sync_obj = None
-            sync_transform = None
-            for obj_name in object_names:
-                obj = bpy.data.objects[obj_name]
-                if obj.vlmSettings.is_movable:
-                    if sync_obj and sync_transform != obj.matrix_world:
-                        logger.info(f'. ERROR: Bake collection {bake_col.name} bakes to a group multiple objects are marked as movable with different transforms. Only check the one you want to define the origin of the group.')
-                    sync_obj = obj_name
-                    sync_transform = obj.matrix_world
+            if not (bake_col.vlmSettings.is_opaque and bake_col.vlmSettings.merge_lightmaps):
+                sync_transform = None
+                for obj_name in object_names:
+                    obj = bpy.data.objects[obj_name]
+                    if obj.vlmSettings.is_movable:
+                        if sync_obj and sync_transform != obj.matrix_world:
+                            logger.info(f'. ERROR: Bake collection {bake_col.name} bakes to a group multiple objects are marked as movable with different transforms. Only check the one you want to define the origin of the group.')
+                        sync_obj = obj_name
+                        sync_transform = obj.matrix_world
             to_bake.append((bake_col.name, bake_col, object_names, sync_obj, not bake_col.vlmSettings.is_opaque))
         
     # Create all solid bake meshes
@@ -438,7 +439,7 @@ def create_bake_meshes(op, context):
     merged_bake_meshes = []
     opaque_bake_mesh = None
     for bake_col, bake_name, bake_mesh, sync_obj in bake_meshes:
-        if bake_col.vlmSettings.is_opaque and sync_obj is None:
+        if bake_col.vlmSettings.is_opaque and bake_col.vlmSettings.merge_lightmaps:
             if opaque_bake_mesh:
                 merged_bake_meshes.remove(opaque_bake_mesh)
                 ex_bake_col, ex_bake_name, ex_bake_mesh, ex_sync_obj = opaque_bake_mesh
