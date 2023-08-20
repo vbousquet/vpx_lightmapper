@@ -73,11 +73,11 @@ def push_map_array(prefix, name, parts):
     line_start = 0
     for i, obj in enumerate(parts):
         if i>0: code += ', '
-        name = elem_ref(export_name(obj.name))
-        if len(code) + len(name) - line_start >= 1024: # VBS maximum line length is 2048
+        part_name = elem_ref(export_name(obj.name))
+        if len(code) + len(part_name) - line_start >= 1024: # VBS maximum line length is 2048
             code += "_\n\t"
             line_start = len(code)
-        code += name
+        code += part_name
     code += ')\n'
     return code
 
