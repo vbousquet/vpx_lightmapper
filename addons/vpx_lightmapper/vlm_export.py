@@ -69,7 +69,17 @@ def get_vpx_sync_light(obj, context, light_col):
 
 
 def push_map_array(prefix, name, parts):
-    return f'Dim {prefix}_{name}: {prefix}_{name}=Array(' + ', '.join([f'{elem_ref(export_name(obj.name))}' for obj in parts]) + ')\n'
+    code = f'Dim {prefix}_{name}: {prefix}_{name}=Array('
+    line_start = 0
+    for i, obj in enumerate(parts):
+        if i>0: code += ', '
+        name = elem_ref(export_name(obj.name))
+        if len(code) + len(name) - line_start >= 1024: # VBS maximum line length is 2048
+            code += "_\n\t"
+            line_start = len(code)
+        code += name
+    code += ')\n'
+    return code
 
 
 def get_script_arrays(result_col):

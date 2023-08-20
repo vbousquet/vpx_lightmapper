@@ -843,7 +843,7 @@ class VLM_PT_Col_Props(bpy.types.Panel):
         col = context.collection
         bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
         light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
-        if col.name in bake_col.children:
+        if bake_col and col.name in bake_col.children:
             layout.prop(col.vlmSettings, 'bake_mode', expand=True)
             layout.prop(col.vlmSettings, 'depth_bias', expand=True)
             layout.prop(col.vlmSettings, 'is_opaque', expand=True)
@@ -851,7 +851,7 @@ class VLM_PT_Col_Props(bpy.types.Panel):
             sub.enabled = not col.vlmSettings.is_opaque
             sub.prop(col.vlmSettings, 'refraction_probe', expand=True)
             layout.prop(col.vlmSettings, 'reflection_probe', expand=True)
-        elif col.name in light_col.children:
+        elif light_col and col.name in light_col.children:
             layout.prop(col.vlmSettings, 'light_mode', expand=True)
             layout.prop(col.vlmSettings, 'world', expand=True)
         else:
