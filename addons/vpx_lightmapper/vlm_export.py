@@ -434,7 +434,7 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'CLDR', obj == pfobj)
         writer.write_tagged_bool(b'ISTO', obj != pfobj)
         writer.write_tagged_bool(b'U3DM', True)
-        writer.write_tagged_bool(b'STRE', False)
+        writer.write_tagged_bool(b'STRE', is_static)
         writer.write_tagged_u32(b'DILI', 255) # 255 is 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
         writer.write_tagged_bool(b'REEN', False)
