@@ -329,7 +329,7 @@ def render_all_groups(op, context):
     n_bake_objects = len([obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake])
     n_bake_normalmaps = len([obj for obj in bake_col.all_objects if obj.vlmSettings.bake_normalmap])
     n_total_render = (n_render_groups + n_bake_objects) * n_lighting_situations + n_bake_normalmaps
-    logger.info(f'\nEvaluating {n_total_render} renders ({n_render_groups} render groups and {n_bake_objects} bakes for {n_lighting_situations} lighting situations)')
+    logger.info(f'\nEvaluating {n_total_render} renders ({n_render_groups} render groups and {n_bake_objects} bakes for {n_lighting_situations} lighting situations, {n_bake_normalmaps} normal maps)')
     
     # Perform the actual rendering of all the passes
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 1.0

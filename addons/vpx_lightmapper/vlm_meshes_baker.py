@@ -385,7 +385,11 @@ def create_bake_meshes(op, context):
         bpy.ops.object.select_all(action='DESELECT')
         bake_target.select_set(True)
         context.view_layer.objects.active = bake_target
-        
+
+        # Reapply transform to unmerged bake/light maps
+        if sync_obj and bpy.data.objects[sync_obj]:
+            bake_mesh.transform(Matrix(bpy.data.objects[sync_obj].matrix_world).inverted())
+
         # if bake_name == 'Parts':
             # return {'FINISHED'}
 
@@ -412,16 +416,14 @@ def create_bake_meshes(op, context):
             bake_mesh = bake_mesh.copy()
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
             result_col.objects.link(bake_instance)
+            if sync_obj and bpy.data.objects[sync_obj]:
+                bake_instance.matrix_world = bpy.data.objects[sync_obj].matrix_world
             adapt_materials(bake_instance.data, light_name, is_lightmap)
             bake_instance.vlmSettings.bake_lighting = light_name
             bake_instance.vlmSettings.bake_collections = bake_col.name
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
             bake_instance.vlmSettings.bake_hdr_range = bake_hdr_range[light_name]
-            if sync_obj and bpy.data.objects[sync_obj]:
-                transform = Matrix(bpy.data.objects[sync_obj].matrix_world)
-                bake_mesh.transform(transform.inverted())
-                bake_instance.matrix_world = transform
             if is_translucent:
                 bake_instance.vlmSettings.bake_type = 'active'
             elif sync_obj is None:
@@ -495,12 +497,8 @@ def create_bake_meshes(op, context):
                 #logger.info(f". Mesh {bake_name} has no more faces after optimization for {light_name} lighting")
             else:
                 logger.info(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.2f}) for {bake_col if sync_obj is None else bake_name}')
-                if sync_obj:
-                    dup = bpy.data.objects[sync_obj]
-                    bake_instance.data.transform(Matrix(dup.matrix_world).inverted())
-                    bake_instance.matrix_world = dup.matrix_world
-                else:
-                    bake_instance.matrix_world.identity()
+                if sync_obj and bpy.data.objects[sync_obj]:
+                    bake_instance.matrix_world = bpy.data.objects[sync_obj].matrix_world
                 bake_instance.vlmSettings.bake_type = 'lightmap'
                 bake_instance.vlmSettings.bake_lighting = light_name
                 bake_instance.vlmSettings.bake_collections = merged_bake_cols
