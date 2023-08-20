@@ -409,10 +409,11 @@ def create_bake_meshes(op, context):
         result_col.objects.unlink(bake_target)
 
         # Save solid bake to the result collection
+        n_solid_scenario = len([sc for sc in light_scenarios if not sc[1]])
         for light_scenario in light_scenarios:
             light_name, is_lightmap, _, lights = light_scenario
             if is_lightmap: continue
-            obj_name = f'{bake_name}.BM.{light_name}' # if sync_obj else f'Table.BM.{light_name}.{bake_name}'
+            obj_name = f'BM.{bake_name}.{light_name}' if n_solid_scenario > 1 else f'BM.{bake_name}'
             bake_mesh = bake_mesh.copy()
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
             result_col.objects.link(bake_instance)
@@ -478,7 +479,7 @@ def create_bake_meshes(op, context):
         influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
         logger.info(f'\nProcessing lightmaps for {light_name} [{i+1}/{len(light_scenarios)}]')
         for (merged_bake_cols, bake_name, bake_mesh, sync_obj), lightmap_vmap in zip(merged_bake_meshes, vmaps):
-            obj_name = f'{bake_name}.LM.{light_name}'
+            obj_name = f'LM.{light_name}.{bake_name}'
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             # Remove face shading (lightmap are not made to be shaded and the pruning process breaks the shading)
             bake_instance.data.free_normals_split()
