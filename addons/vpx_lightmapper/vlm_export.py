@@ -84,18 +84,20 @@ def push_map_array(prefix, name, parts):
 
 def get_script_arrays(result_col):
     code = '\' VLM Arrays - Start\n'
-    # One array for each lighting scenario with all corresponding parts
-    code = '\' Lightmaps (per light scenario)\n'
-    all_sync_light = sorted(list({obj.vlmSettings.bake_sync_light for obj in result_col.all_objects if obj.vlmSettings.bake_sync_light != ''}))
-    for sync_light in all_sync_light:
-        code += push_map_array('BL_', export_name(sync_light), sorted([obj for obj in result_col.all_objects if sync_light == obj.vlmSettings.bake_sync_light], key=lambda x: x.name))
-    # One array for each movable object with all corresponding parts (solid bake and lightmaps)
-    code = '\' Unmerged parts (per sync part)\n'
+    # Array for each lighting scenario
+    code += '\' Lightmaps (per light scenario)\n'
+    all_lightmaps = sorted(list({obj.vlmSettings.bake_lighting for obj in result_col.all_objects if obj.vlmSettings.bake_lighting != ''}))
+    for lightmap in all_lightmaps:
+        code += push_map_array('BL_', export_name(lightmap), sorted([obj for obj in result_col.all_objects if lightmap == obj.vlmSettings.bake_lighting], key=lambda x: x.name))
+    # Array for each parts using 'no lightmap merge' (solid bake and lightmaps)
+    code += '\' Parts with \'No lightmap merge\' option (per part)\n'
     all_sync_trans = sorted(list({obj.vlmSettings.bake_sync_trans for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''}))
     for sync_trans in all_sync_trans:
-        code += push_map_array('BP_', export_name(sync_trans), sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
+        sync_obj = bpy.data.objects.get(sync_trans)
+        if sync_obj:
+            code += push_map_array('BP_', export_name(sync_obj.vlmSettings.vpx_object), sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
     # Globals arrays per bake type
-    code = '\' Global arrays\n'
+    code += '\' Global arrays\n'
     code += push_map_array('BG_', 'Default', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'default'], key=lambda x: x.name))
     code += push_map_array('BG_', 'Static', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'static'], key=lambda x: x.name))
     code += push_map_array('BG_', 'Active', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'active'], key=lambda x: x.name))
