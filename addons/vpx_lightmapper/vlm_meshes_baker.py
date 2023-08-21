@@ -166,15 +166,15 @@ def create_bake_meshes(op, context):
                 to_bake.append((obj_name, bake_col, [obj_name], obj_name, not bake_col.vlmSettings.is_opaque))
         else:
             sync_obj = None
-            if not (bake_col.vlmSettings.is_opaque and bake_col.vlmSettings.merge_lightmaps):
-                sync_transform = None
-                for obj_name in object_names:
-                    obj = bpy.data.objects[obj_name]
-                    if obj.vlmSettings.is_movable:
-                        if sync_obj and sync_transform != obj.matrix_world:
-                            logger.info(f'. ERROR: Bake collection {bake_col.name} bakes to a group multiple objects are marked as movable with different transforms. Only check the one you want to define the origin of the group.')
-                        sync_obj = obj_name
-                        sync_transform = obj.matrix_world
+            #No more lightmap merging if not (bake_col.vlmSettings.is_opaque and bake_col.vlmSettings.merge_lightmaps):
+            sync_transform = None
+            for obj_name in object_names:
+                obj = bpy.data.objects[obj_name]
+                if obj.vlmSettings.is_movable:
+                    if sync_obj and sync_transform != obj.matrix_world:
+                        logger.info(f'. ERROR: Bake collection {bake_col.name} bakes to a group with multiple objects marked as pivot point with different transforms. Only check the one you want to define the origin of the group.')
+                    sync_obj = obj_name
+                    sync_transform = obj.matrix_world
             to_bake.append((bake_col.name, bake_col, object_names, sync_obj, not bake_col.vlmSettings.is_opaque))
         
     # Create all solid bake meshes
@@ -381,13 +381,16 @@ def create_bake_meshes(op, context):
         bake_target.select_set(True)
         context.view_layer.objects.active = bake_target
 
-        # Reapply transform to unmerged bake/light maps
+        # Evaluate transform for the merged mesh
         if sync_obj and bpy.data.objects[sync_obj]:
-            bake_mesh.transform(Matrix(bpy.data.objects[sync_obj].matrix_world).inverted())
-
-        # if bake_name == 'Parts':
-            # return {'FINISHED'}
-
+            transform = bpy.data.objects[sync_obj].matrix_world
+        elif len(objects_to_join) == 1:
+            transform = base_instances[0].matrix_world
+        else:
+            centre = sum((Vector(b) for b in bake_target.bound_box), Vector()) / 8
+            transform = Matrix.Translation(centre)
+        bake_mesh.transform(Matrix(transform).inverted())
+            
         # Sort front to back faces if opaque, back to front for translucent
         with context.temp_override(active_object=bake_target, selected_objects=[bake_target]):
             bpy.ops.object.mode_set(mode='EDIT')
@@ -400,7 +403,7 @@ def create_bake_meshes(op, context):
             bake_mesh.vertex_colors.new()
         
         logger.info(f'. Base solid mesh has {len(bake_mesh.polygons)} tris and {len(bake_mesh.vertices)} vertices')
-        bake_meshes.append((bake_col, bake_name, bake_mesh, sync_obj))
+        bake_meshes.append((bake_col, bake_name, bake_mesh, transform, sync_obj))
         result_col.objects.unlink(bake_target)
 
         # Save solid bake to the result collection
@@ -412,8 +415,7 @@ def create_bake_meshes(op, context):
             bake_mesh = bake_mesh.copy()
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
             result_col.objects.link(bake_instance)
-            if sync_obj and bpy.data.objects[sync_obj]:
-                bake_instance.matrix_world = bpy.data.objects[sync_obj].matrix_world
+            bake_instance.matrix_world = transform
             adapt_materials(bake_instance.data, light_name, is_lightmap)
             bake_instance.vlmSettings.bake_lighting = light_name
             bake_instance.vlmSettings.bake_collections = bake_col.name
@@ -430,8 +432,8 @@ def create_bake_meshes(op, context):
     # Merge lightmaps of opaque unmovable meshes
     merged_bake_meshes = []
     opaque_bake_mesh = None
-    for bake_col, bake_name, bake_mesh, sync_obj in bake_meshes:
-        if bake_col.vlmSettings.is_opaque and bake_col.vlmSettings.merge_lightmaps:
+    for bake_col, bake_name, bake_mesh, transform, sync_obj in bake_meshes:
+        if False: # No more lightmap merging bake_col.vlmSettings.is_opaque and bake_col.vlmSettings.merge_lightmaps:
             if opaque_bake_mesh:
                 merged_bake_meshes.remove(opaque_bake_mesh)
                 ex_bake_col, ex_bake_name, ex_bake_mesh, ex_sync_obj = opaque_bake_mesh
@@ -451,12 +453,12 @@ def create_bake_meshes(op, context):
                 opaque_bake_mesh = (bake_col.name, bake_name, bake_mesh, None)
                 merged_bake_meshes.append(opaque_bake_mesh)
         else:
-            merged_bake_meshes.append( (bake_col.name, bake_name, bake_mesh, sync_obj) )
+            merged_bake_meshes.append( (bake_col.name, bake_name, bake_mesh, transform, sync_obj) )
     
     # Build all the visibility maps
     vmaps = []
     logger.info(f'\nPreparing all lightmap visibility masks (prune map size={prunemap_width}x{prunemap_height})')
-    for bake_col, bake_name, bake_mesh, sync_obj in merged_bake_meshes:
+    for bake_col, bake_name, bake_mesh, transform, sync_obj in merged_bake_meshes:
         logger.info(f'. Preparing visibility mask for {bake_name}')
         obj = bpy.data.objects.new(f"LightMesh", bake_mesh)
         result_col.objects.link(obj)
@@ -473,7 +475,7 @@ def create_bake_meshes(op, context):
         if not is_lightmap: continue
         influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
         logger.info(f'\nProcessing lightmaps for {light_name} [{i+1}/{len(light_scenarios)}]')
-        for (merged_bake_cols, bake_name, bake_mesh, sync_obj), lightmap_vmap in zip(merged_bake_meshes, vmaps):
+        for (merged_bake_cols, bake_name, bake_mesh, transform, sync_obj), lightmap_vmap in zip(merged_bake_meshes, vmaps):
             obj_name = f'LM.{light_name}.{bake_name}'
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             # Remove face shading (lightmap are not made to be shaded and the pruning process breaks the shading)
@@ -493,8 +495,7 @@ def create_bake_meshes(op, context):
                 #logger.info(f". Mesh {bake_name} has no more faces after optimization for {light_name} lighting")
             else:
                 logger.info(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.2f}) for {obj_name}')
-                if sync_obj and bpy.data.objects[sync_obj]:
-                    bake_instance.matrix_world = bpy.data.objects[sync_obj].matrix_world
+                bake_instance.matrix_world = transform
                 bake_instance.vlmSettings.bake_type = 'lightmap'
                 bake_instance.vlmSettings.bake_lighting = light_name
                 bake_instance.vlmSettings.bake_collections = merged_bake_cols
