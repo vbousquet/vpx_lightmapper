@@ -551,7 +551,7 @@ def export_vpx(op, context):
         objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap == nestmap_index]
         if not objects:
             break
-        is_hdr = next( (o for o in objects if o.vlmSettings.bake_hdr_range > 1.0), None) is not None
+        is_hdr = next( (o for o in objects if o.vlmSettings.bake_type == 'lightmap' and o.vlmSettings.bake_hdr_range > 1.0), None) is not None
         base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}')
         nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.webp'
         if not os.path.exists(nestmap_path):
