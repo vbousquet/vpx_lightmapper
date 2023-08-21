@@ -68,8 +68,8 @@ def get_vpx_sync_light(obj, context, light_col):
     return (vpx_name, sync_color)
 
 
-def push_map_array(prefix, name, parts):
-    code = f'Dim {prefix}{name}: {prefix}{name}=Array('
+def push_map_array(name, parts):
+    code = f'Dim {name}: {name}=Array('
     line_start = 0
     for i, obj in enumerate(parts):
         if i>0: code += ', '
@@ -84,25 +84,28 @@ def push_map_array(prefix, name, parts):
 
 def get_script_arrays(result_col):
     code = '\' VLM Arrays - Start\n'
-    # Array for each lighting scenario
-    code += '\' Lightmaps (per light scenario)\n'
+    # Per Parts
+    code += '\' Arrays per baked part with a pivot point defined\n'
+    all_sync_trans = sorted(list({obj.vlmSettings.bake_sync_trans for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != '' and bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)}))
+    for sync_trans in all_sync_trans:
+        code += push_map_array(f'BP_{export_name(bpy.data.objects[sync_trans].name)}', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
+    code += '\' Arrays per baked part without a pivot point defined\n'
+    all_bake_cols = sorted(list({obj.vlmSettings.bake_collections for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans == ''}))
+    for bake_col in all_bake_cols:
+        code += push_map_array(f'BP_{export_name(bake_col)}', sorted([obj for obj in result_col.all_objects if bake_col == obj.vlmSettings.bake_collections and obj.vlmSettings.bake_sync_trans == ''], key=lambda x: x.vlmSettings.bake_sync_light))
+    # Per Lightmaps
+    code += '\' Arrays per lighting scenario\n'
     all_lightmaps = sorted(list({obj.vlmSettings.bake_lighting for obj in result_col.all_objects if obj.vlmSettings.bake_lighting != ''}))
     for lightmap in all_lightmaps:
-        code += push_map_array('BL_', export_name(lightmap), sorted([obj for obj in result_col.all_objects if lightmap == obj.vlmSettings.bake_lighting], key=lambda x: x.name))
-    # Array for each parts using 'no lightmap merge' (solid bake and lightmaps)
-    code += '\' Parts with \'No lightmap merge\' option (per part)\n'
-    all_sync_trans = sorted(list({obj.vlmSettings.bake_sync_trans for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != ''}))
-    for sync_trans in all_sync_trans:
-        sync_obj = bpy.data.objects.get(sync_trans)
-        if sync_obj:
-            code += push_map_array('BP_', export_name(sync_obj.vlmSettings.vpx_object), sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
+        code += push_map_array(f'BL_{export_name(lightmap)}', sorted([obj for obj in result_col.all_objects if lightmap == obj.vlmSettings.bake_lighting], key=lambda x: x.name))
     # Globals arrays per bake type
     code += '\' Global arrays\n'
-    code += push_map_array('BG_', 'Default', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'default'], key=lambda x: x.name))
-    code += push_map_array('BG_', 'Static', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'static'], key=lambda x: x.name))
-    code += push_map_array('BG_', 'Active', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'active'], key=lambda x: x.name))
-    code += push_map_array('BG_', 'Lightmap', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.name))
-    code += push_map_array('BG_', 'All', sorted([obj for obj in result_col.all_objects], key=lambda x: x.name))
+    code += push_map_array('BG_Bakemap', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.name))
+    code += push_map_array('BG_Default', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'default'], key=lambda x: x.name))
+    code += push_map_array('BG_Static', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'static'], key=lambda x: x.name))
+    code += push_map_array('BG_Active', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'active'], key=lambda x: x.name))
+    code += push_map_array('BG_Lightmap', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.name))
+    code += push_map_array('BG_All', sorted([obj for obj in result_col.all_objects], key=lambda x: x.name))
     code += '\' VLM Arrays - End\n'
     return code
 
