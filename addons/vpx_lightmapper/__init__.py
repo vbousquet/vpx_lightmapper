@@ -845,13 +845,13 @@ class VLM_PT_Col_Props(bpy.types.Panel):
         light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
         if bake_col and col.name in bake_col.children:
             layout.prop(col.vlmSettings, 'bake_mode', expand=True)
-            layout.prop(col.vlmSettings, 'depth_bias', expand=True)
             layout.prop(col.vlmSettings, 'is_opaque', expand=True)
             sub = layout.column()
             sub.enabled = col.vlmSettings.is_opaque
             sub.prop(col.vlmSettings, 'merge_lightmaps', expand=True)
             sub = layout.column()
             sub.enabled = not col.vlmSettings.is_opaque
+            sub.prop(col.vlmSettings, 'depth_bias', expand=True)
             sub.prop(col.vlmSettings, 'refraction_probe', expand=True)
             layout.prop(col.vlmSettings, 'reflection_probe', expand=True)
         elif light_col and col.name in light_col.children:
@@ -1021,8 +1021,9 @@ class VLM_PT_3D_Bake_Options(bpy.types.Panel):
                 col.enabled = context.active_object.vlmSettings.use_bake
                 col.prop(context.active_object.vlmSettings, 'bake_normalmap', text='Bake Normal Map')
                 col = layout.column()
-                col.enabled = False
-                col.prop(context.active_object.vlmSettings, 'bake_orm', text = 'Bake ORM Map')
+                #col.enabled = False
+                #col.prop(context.active_object.vlmSettings, 'bake_albedo', text = 'Bake Albedo Map')
+                #col.prop(context.active_object.vlmSettings, 'bake_orm', text = 'Bake ORM Map')
                 layout.prop(context.active_object.vlmSettings, 'hide_from_others', text='Hide from others')
                 layout.prop(context.active_object.vlmSettings, 'bake_mask', text='Mask')
                 layout.separator()
@@ -1106,12 +1107,14 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
             props = result_objects[0].vlmSettings
             col = layout.column()
             col.enabled = False
-            col.prop(props, 'bake_lighting')
             col.prop(props, 'bake_collections')
-            col.prop(props, 'bake_sync_light')
             col.prop(props, 'bake_sync_trans')
             col.prop(props, 'bake_type')
+            col.separator()
+            col.prop(props, 'bake_lighting')
+            col.prop(props, 'bake_sync_light')
             col.prop(props, 'bake_hdr_range')
+            col.separator()
             col.prop(props, 'bake_nestmap')
             layout.operator(VLM_OT_select_nestmap_group.bl_idname)
         has_loaded = False
