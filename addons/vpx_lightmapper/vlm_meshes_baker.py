@@ -238,20 +238,15 @@ def create_bake_meshes(op, context):
                     use_normalmap = use_normalmap or obj.vlmSettings.bake_normalmap
             dup.data.materials.append(get_material('Default', False, not is_bake, use_normalmap, obj_name if is_bake else dup.vlmSettings.render_group))
             
-            # Create base UV projected layer
-            if is_bake:
-                if not dup.data.uv_layers.get('UVMap'):
-                    logger.info(f'. ERROR {obj_name} is using traditional bake and is missing its UVMap')
-                projected_uv = dup.data.uv_layers.new()
-                projected_uv.active = True 
-                vlm_utils.project_uv(camera, dup, proj_ar, projected_uv)
-                projected_uv = projected_uv.name
-            else:
-                for uv in dup.data.uv_layers:
-                    dup.data.uv_layers.remove(dup.data.uv_layers[0])
-                projected_uv = dup.data.uv_layers.new(name='UVMap')
-                vlm_utils.project_uv(camera, dup, proj_ar, projected_uv)
-                projected_uv = projected_uv.name
+            # Create UV layers: 'UVMap' is the render projection, 'UVMap Projected' is the camera projection (identical for camera render)
+            for uv in [uv.name for uv in dup.data.uv_layers if not (is_bake and uv.name == 'UVMap')]:
+                dup.data.uv_layers.remove(dup.data.uv_layers[uv])
+            if not is_bake:
+                vlm_utils.project_uv(camera, dup, proj_ar, dup.data.uv_layers.new(name='UVMap'))
+            elif len(dup.data.uv_layers) == 0:
+                logger.info(f'. ERROR {obj_name} is using traditional bake and is missing its UVMap. Object discarded')
+                continue
+            vlm_utils.project_uv(camera, dup, proj_ar, dup.data.uv_layers.new(name='UVMap Projected'))
             
             # Apply base transform
             dup.data.transform(dup.matrix_world)
@@ -274,7 +269,7 @@ def create_bake_meshes(op, context):
                 bm = bmesh.new()
                 bm.from_mesh(dup.data)
                 bm.faces.ensure_lookup_table()
-                uv_loop = bm.loops.layers.uv['UVMap']
+                uv_loop = bm.loops.layers.uv['UVMap Projected']
                 triangle_loops = bm.calc_loop_triangles()
                 areas = {face: 0.0 for face in bm.faces} 
                 for loop in triangle_loops:
@@ -347,7 +342,7 @@ def create_bake_meshes(op, context):
                 bme.verts.ensure_lookup_table()
                 long_edges = []
                 longest_edge = 0
-                uv_layer = bme.loops.layers.uv[projected_uv]
+                uv_layer = bme.loops.layers.uv['UVMap Projected']
                 for edge in bme.edges:
                     if len(edge.verts[0].link_loops) < 1 or len(edge.verts[1].link_loops) < 1:
                         continue
@@ -370,9 +365,6 @@ def create_bake_meshes(op, context):
                 if not is_bake:
                     vlm_utils.project_uv(camera, dup, proj_ar)
                 logger.info(f". {len(long_edges):>5} edges subdivided to avoid projection distortion and better lightmap pruning (length threshold: {opt_cut_threshold}, longest edge: {longest_edge:4.2}).")
-            
-            if is_bake:
-                dup.data.uv_layers.remove(dup.data.uv_layers[projected_uv])
 
         if len(objects_to_join) == 0: continue
 
@@ -540,7 +532,7 @@ def build_visibility_map(bake_name, bake_instance_mesh, n_render_groups, width, 
     """
     bm = bmesh.new()
     bm.from_mesh(bake_instance_mesh)
-    uv_layer = bm.loops.layers.uv["UVMap"]
+    uv_layer = bm.loops.layers.uv['UVMap Projected']
     vmaps = [[] for xy in range(width * height)]
     bm.faces.ensure_lookup_table()
     dx = 1.0 / width
