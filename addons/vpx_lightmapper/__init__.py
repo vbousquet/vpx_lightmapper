@@ -439,7 +439,7 @@ class VLM_OT_batch_bake(Operator):
     bl_description = "Performs all the bake steps in a batch, then export an updated VPX table (lengthy operation)"
     bl_options = {"REGISTER", "UNDO"}
 
-    def do_shutdown(result):
+    def do_shutdown(self, result):
         if context.scene.vlmSettings.batch_shutdown:
             vlm_utils.run_with_logger(lambda : logger.info('\n>> Shutting down'))
             os.system("shutdown /s /t 1")
@@ -450,22 +450,22 @@ class VLM_OT_batch_bake(Operator):
         vlm_utils.run_with_logger(lambda : logger.info(f"\nStarting complete bake batch..."))
         if context.scene.vlmSettings.batch_inc_group:
             result = vlm_utils.run_with_logger(lambda : vlm_group_baker.compute_render_groups(self, context))
-            if 'FINISHED' not in result: return do_shutdown(result)
+            if 'FINISHED' not in result: return self.do_shutdown(result)
             bpy.ops.wm.save_mainfile()
         result = vlm_utils.run_with_logger(lambda : vlm_render_baker.render_all_groups(self, context))
-        if 'FINISHED' not in result: return do_shutdown(result)
+        if 'FINISHED' not in result: return self.do_shutdown(result)
         bpy.ops.wm.save_mainfile()
         result = vlm_utils.run_with_logger(lambda : vlm_meshes_baker.create_bake_meshes(self, context))
-        if 'FINISHED' not in result: return do_shutdown(result)
+        if 'FINISHED' not in result: return self.do_shutdown(result)
         bpy.ops.wm.save_mainfile()
         result = vlm_utils.run_with_logger(lambda : vlm_nestmap_baker.render_nestmaps(self, context))
-        if 'FINISHED' not in result: return do_shutdown(result)
+        if 'FINISHED' not in result: return self.do_shutdown(result)
         bpy.ops.wm.save_mainfile()
         result = vlm_utils.run_with_logger(lambda : vlm_export.export_vpx(self, context))
-        if 'FINISHED' not in result: return do_shutdown(result)
+        if 'FINISHED' not in result: return self.do_shutdown(result)
         bpy.ops.wm.save_mainfile()
         vlm_utils.run_with_logger(lambda : logger.info(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}"))
-        return do_shutdown(result)
+        return self.do_shutdown(result)
 
 
 class VLM_OT_export_vpx(Operator):
