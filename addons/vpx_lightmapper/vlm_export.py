@@ -684,7 +684,7 @@ def export_vpx(op, context):
                             # End of old arrays: add new ones
                             new_code += get_script_arrays(result_col)
                             in_old_arrays = 2
-                        elif in_old_arrays:
+                        elif in_old_arrays == 1:
                             # Old arrays: just remove them
                             pass
                         elif '\' VLM Arrays - Start' in line:
