@@ -106,11 +106,11 @@ def get_render_proj_ar(context):
 
 
 def run_with_logger(op):
-    log_handler = logging.FileHandler(bpy.path.abspath("//vlm.log"))
-    #log_handler = logging.handlers.RotatingFileHandler(bpy.path.abspath("//vlm.log"), maxBytes=(1048576*5), backupCount=7)
+    #log_handler = logging.FileHandler(bpy.path.abspath("//vlm.log"))
+    log_handler = logging.handlers.RotatingFileHandler(bpy.path.abspath("//vlm.log"), maxBytes=(1024*1024*4), backupCount=3)
     try:
-        while logger.hasHandlers():
-            logger.removeHandler(logger.handlers[0])
+        #while logger.hasHandlers():
+        #    logger.removeHandler(logger.handlers[0])
         logger.addHandler(log_handler)
         logger.addHandler(logging.StreamHandler())
         return op()
