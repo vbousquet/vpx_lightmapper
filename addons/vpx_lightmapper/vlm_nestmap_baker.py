@@ -49,7 +49,8 @@ def render_nestmaps(op, context):
             op.report({'ERROR'}, f'Object {obj.name} is missing the required unwrapped UV map named \'UVMap\'.')
             return {'CANCELLED'}
         obj.data.uv_layers.active = uvmap
-        obj.data.uv_layers.new(name='UVMap Nested')
+        if not obj.data.uv_layers.get('UVMap Nested'):
+            obj.data.uv_layers.new(name='UVMap Nested')
         obj.data.uv_layers.active = uvmap
         has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None)  is not None
         # VPX only supports opaque HDR therefore we pack all non lightmaps as LDR (luckily base bake is usually LDR, and we don't really need this for lightmaps which are RGB only)
