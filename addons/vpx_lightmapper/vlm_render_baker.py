@@ -572,8 +572,6 @@ def render_all_groups(op, context):
     mask_scene.render.engine = 'BLENDER_EEVEE'
     mask_scene.render.film_transparent = True
     mask_scene.render.pixel_aspect_x = context.scene.render.pixel_aspect_x
-    mask_scene.render.image_settings.file_format = "PNG"
-    mask_scene.render.image_settings.color_mode = 'RGBA'
     mask_scene.render.image_settings.color_depth = '8'
     mask_scene.eevee.taa_render_samples = 1
     mask_scene.view_settings.view_transform = 'Raw'
@@ -595,6 +593,8 @@ def render_all_groups(op, context):
         # Render object mask (or load from cache if available)
         mask_scene.render.resolution_y = opt_mask_size
         mask_scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
+        mask_scene.render.image_settings.file_format = "PNG"
+        mask_scene.render.image_settings.color_mode = 'RGBA'
         mask_scene.render.filepath = f'{mask_path}{vlm_utils.clean_filename(obj.name)}.png'
         need_render = not os.path.exists(bpy.path.abspath(mask_scene.render.filepath))
         if not need_render:
@@ -678,7 +678,7 @@ def render_all_groups(op, context):
                     mask_scene.render.filepath = influence_path
                     mask_scene.collection.objects.link(dup)
                     mask_scene.render.image_settings.file_format = "OPEN_EXR"
-                    #return 'FINISHED'
+                    mask_scene.render.image_settings.color_mode = 'RGB'
                     bpy.ops.render.render(write_still=True, scene=mask_scene.name)
                     mask_scene.collection.objects.unlink(dup)
                     mask_scene.render.image_settings.file_format = "PNG"

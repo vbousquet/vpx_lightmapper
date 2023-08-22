@@ -665,6 +665,14 @@ def build_influence_map(render_path, name, w, h):
         imaps[id] = offscreen3.texture_color.read()
         imaps[id].dimensions = w * h * 4
         bpy.data.images.remove(image)
+        if False: # For debug purpose, save generated influence map
+            logger.info(f'. Saving light influence map for {id} to {render_path}{name} - Influence Map - {id}.exr')
+            image = bpy.data.images.new("debug", w, h, alpha=False, float_buffer=True)
+            image.pixels = [v for v in imaps[id]]
+            image.filepath_raw = f'{render_path}{name} - Influence Map - {id}.exr'
+            image.file_format = 'OPEN_EXR'
+            image.save()
+            bpy.data.images.remove(image)
         layers = (layers[1], layers[0]) # Swap layers
     imaps['Global'] = layers[0].texture_color.read()
     imaps['Global'].dimensions = w * h * 4
