@@ -571,8 +571,6 @@ def render_all_groups(op, context):
     mask_scene.camera = camera_object
     mask_scene.render.engine = 'BLENDER_EEVEE'
     mask_scene.render.film_transparent = True
-    mask_scene.render.resolution_y = opt_mask_size
-    mask_scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
     mask_scene.render.pixel_aspect_x = context.scene.render.pixel_aspect_x
     mask_scene.render.image_settings.file_format = "PNG"
     mask_scene.render.image_settings.color_mode = 'RGBA'
@@ -595,6 +593,8 @@ def render_all_groups(op, context):
         elapsed = time.time() - start_time
         
         # Render object mask (or load from cache if available)
+        mask_scene.render.resolution_y = opt_mask_size
+        mask_scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
         mask_scene.render.filepath = f'{mask_path}{vlm_utils.clean_filename(obj.name)}.png'
         need_render = not os.path.exists(bpy.path.abspath(mask_scene.render.filepath))
         if not need_render:
@@ -616,6 +616,8 @@ def render_all_groups(op, context):
         render_ratio = context.scene.vlmSettings.render_ratio / 100.0
         img_nodes = []
         bake_img = bpy.data.images.new('Bake', int(obj.vlmSettings.bake_width * render_ratio), int(obj.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
+        mask_scene.render.resolution_x = render_size[0]
+        mask_scene.render.resolution_y = render_size[1]
         for mat in obj.data.materials:
             ti = mat.node_tree.nodes.new("ShaderNodeTexImage")
             ti.image = bake_img
@@ -657,20 +659,26 @@ def render_all_groups(op, context):
                     nodes = mat.node_tree.nodes
                     nodes.clear()
                     links = mat.node_tree.links
-                    emission = nodes.new('ShaderNodeEmission')
+                    node_emission = nodes.new('ShaderNodeEmission')
+                    node_transparent = nodes.new('ShaderNodeBsdfTransparent')
+                    node_add = nodes.new('ShaderNodeAddShader')
                     node_output = nodes.new(type='ShaderNodeOutputMaterial')   
                     node_tex = nodes.new(type='ShaderNodeTexImage')
                     node_tex.image = bake_img
                     node_uvmap = nodes.new(type='ShaderNodeUVMap')
                     node_uvmap.uv_map = 'UVMap'
-                    links.new(emission.outputs[0], node_output.inputs[0])
-                    links.new(node_tex.outputs[0], emission.inputs[0])
-                    links.new(node_tex.outputs[1], emission.inputs[1])
                     links.new(node_uvmap.outputs[0], node_tex.inputs[0])
+                    links.new(node_tex.outputs[0], node_emission.inputs[0])
+                    links.new(node_tex.outputs[1], node_emission.inputs[1])
+                    links.new(node_emission.outputs[0], node_add.inputs[0])
+                    links.new(node_transparent.outputs[0], node_add.inputs[1])
+                    links.new(node_add.outputs[0], node_output.inputs[0])
+                    mat.blend_method = 'BLEND'
                     dup.data.materials.append(mat)
                     mask_scene.render.filepath = influence_path
                     mask_scene.collection.objects.link(dup)
                     mask_scene.render.image_settings.file_format = "OPEN_EXR"
+                    #return 'FINISHED'
                     bpy.ops.render.render(write_still=True, scene=mask_scene.name)
                     mask_scene.collection.objects.unlink(dup)
                     mask_scene.render.image_settings.file_format = "PNG"
