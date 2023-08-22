@@ -107,20 +107,19 @@ def get_render_proj_ar(context):
 
 
 def run_with_logger(op):
-    #log_handler = logging.FileHandler(bpy.path.abspath("//vlm.log"))
-    log_handler = logging.handlers.RotatingFileHandler(bpy.path.abspath("//vlm.log"), maxBytes=(1024*1024*4), backupCount=3)
+    #file_handler = logging.FileHandler(bpy.path.abspath("//vlm.log"))
+    file_handler = logging.handlers.RotatingFileHandler(bpy.path.abspath("//vlm.log"), maxBytes=(1024*1024*4), backupCount=3)
+    stream_handler = logging.StreamHandler()
     try:
-        #while logger.hasHandlers():
-        #    logger.removeHandler(logger.handlers[0])
-        logger.addHandler(log_handler)
-        logger.addHandler(logging.StreamHandler())
+        logger.addHandler(file_handler)
+        logger.addHandler(stream_handler)
         return op()
     except Exception as e:
         logger.error(e)
         return {'CANCELLED'}
     finally:
-        logger.removeHandler(log_handler)
-        logger.removeHandler(logging.StreamHandler())
+        logger.removeHandler(file_handler)
+        logger.removeHandler(stream_handler)
     
 
 # 3D tri area ABC is half the length of AB cross product AC 
