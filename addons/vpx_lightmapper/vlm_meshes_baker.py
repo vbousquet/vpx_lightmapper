@@ -412,13 +412,17 @@ def create_bake_meshes(op, context):
             light_name, is_lightmap, _, lights = light_scenario
             if is_lightmap: continue
             obj_name = f'BM.{bake_name}.{light_name}' if n_solid_scenario > 1 else f'BM.{bake_name}'
-            bake_mesh = bake_mesh.copy()
-            bake_instance = bpy.data.objects.new(obj_name, bake_mesh)
+            prev_nestmap = -1
+            if bpy.data.objects.get(obj_name): # Expert mode: if regenerating meshes with previous nestmapping result, just reuse them
+                prev_nestmap = bpy.data.objects[obj_name].vlmSettings.bake_nestmap
+                bpy.data.objects.remove(bpy.data.objects[obj_name], do_unlink=True)
+            bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             result_col.objects.link(bake_instance)
             bake_instance.matrix_world = transform
             adapt_materials(bake_instance.data, light_name, is_lightmap)
             bake_instance.vlmSettings.bake_lighting = light_name
             bake_instance.vlmSettings.bake_collections = bake_col.name
+            bake_instance.vlmSettings.bake_nestmap = prev_nestmap
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
             bake_instance.vlmSettings.bake_hdr_range = bake_hdr_range[light_name]
@@ -433,6 +437,7 @@ def create_bake_meshes(op, context):
     merged_bake_meshes = []
     opaque_bake_mesh = None
     for bake_col, bake_name, bake_mesh, transform, sync_obj in bake_meshes:
+        # FIXME remove
         if False: # No more lightmap merging bake_col.vlmSettings.is_opaque and bake_col.vlmSettings.merge_lightmaps:
             if opaque_bake_mesh:
                 merged_bake_meshes.remove(opaque_bake_mesh)
@@ -477,6 +482,11 @@ def create_bake_meshes(op, context):
         logger.info(f'\nProcessing lightmaps for {light_name} [{i+1}/{len(light_scenarios)}]')
         for (merged_bake_cols, bake_name, bake_mesh, transform, sync_obj), lightmap_vmap in zip(merged_bake_meshes, vmaps):
             obj_name = f'LM.{light_name}.{bake_name}'
+            prev_nestmap = -1
+            if bpy.data.objects.get(obj_name): # Expert mode: if regenerating meshes with previous nestmapping result, just reuse them
+                prev_nestmap = bpy.data.objects[obj_name].vlmSettings.bake_nestmap
+                bpy.data.objects.remove(bpy.data.objects[obj_name], do_unlink=True)
+            prev_nestmap = bpy.data.objects[obj_name].vlmSettings.bake_nestmap if bpy.data.objects.get(obj_name) else -1
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             # Remove face shading (lightmap are not made to be shaded and the pruning process breaks the shading)
             bake_instance.data.free_normals_split()
@@ -499,6 +509,7 @@ def create_bake_meshes(op, context):
                 bake_instance.vlmSettings.bake_type = 'lightmap'
                 bake_instance.vlmSettings.bake_lighting = light_name
                 bake_instance.vlmSettings.bake_collections = merged_bake_cols
+                bake_instance.vlmSettings.bake_nestmap = prev_nestmap
                 bake_instance.vlmSettings.bake_hdr_range = hdr_range
                 bake_instance.vlmSettings.bake_sync_light = ';'.join([l.name for l in lights]) if lights else ''
                 bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
