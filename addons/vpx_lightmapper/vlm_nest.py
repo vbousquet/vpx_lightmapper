@@ -503,6 +503,8 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                     seam = seam / seam_sum;
                     seam.a = step(0.001, seam.a); // binary island mask
                     FragColor = seam * mix(padding_accum / padding_sum, texture(render, uv), inside);
+                    // Clamp to avoid overflows in VPX shaders
+                    FragColor = clamp(FragColor, vec4(0.), vec4(1000., 1000., 1000., 1000.));
                }
             }
         }'''
@@ -668,6 +670,8 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                     render_shader.uniform_sampler("seam_mask", offscreen_seams.texture_color)
                     render_shader.uniform_sampler("render", gpu.texture.from_image(island_normalmap))
                     render_batch.draw(render_shader)
+
+    logger.info(f'. Saving nestmap')
 
     # Cleanup loaded images
     cache_clear(image_cache)
