@@ -426,44 +426,12 @@ def create_bake_meshes(op, context):
             bake_instance.vlmSettings.bake_sync_light = ''
             bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
             bake_instance.vlmSettings.bake_hdr_range = bake_hdr_range[light_name]
-            if is_translucent:
-                bake_instance.vlmSettings.bake_type = 'active'
-            elif sync_obj is None:
-                bake_instance.vlmSettings.bake_type = 'static'
-            else:
-                bake_instance.vlmSettings.bake_type = 'default'
-    
-    # Merge lightmaps of opaque unmovable meshes
-    merged_bake_meshes = []
-    opaque_bake_mesh = None
-    for bake_col, bake_name, bake_mesh, transform, sync_obj in bake_meshes:
-        # FIXME remove
-        if False: # No more lightmap merging bake_col.vlmSettings.is_opaque and bake_col.vlmSettings.merge_lightmaps:
-            if opaque_bake_mesh:
-                merged_bake_meshes.remove(opaque_bake_mesh)
-                ex_bake_col, ex_bake_name, ex_bake_mesh, ex_sync_obj = opaque_bake_mesh
-                logger.info(f'\nMerging lightmaps for {ex_bake_col} and {bake_col.name}')
-                obj1 = bpy.data.objects.new(f"OBJ1", bake_mesh)
-                obj2 = bpy.data.objects.new(f"OBJ2", ex_bake_mesh)
-                result_col.objects.link(obj1)
-                result_col.objects.link(obj2)
-                with context.temp_override(active_object=obj1, selected_editable_objects=[obj1, obj2]):
-                    bpy.ops.object.join()
-                bake_mesh = obj1.data
-                bake_mesh.validate()
-                result_col.objects.unlink(obj1)
-                opaque_bake_mesh = (f'{ex_bake_col};{bake_col.name}', ex_bake_name, bake_mesh, None)
-                merged_bake_meshes.append(opaque_bake_mesh)
-            else:
-                opaque_bake_mesh = (bake_col.name, bake_name, bake_mesh, None)
-                merged_bake_meshes.append(opaque_bake_mesh)
-        else:
-            merged_bake_meshes.append( (bake_col.name, bake_name, bake_mesh, transform, sync_obj) )
+            bake_instance.vlmSettings.is_lightmap = False
     
     # Build all the visibility maps
     vmaps = []
     logger.info(f'\nPreparing all lightmap visibility masks (prune map size={prunemap_width}x{prunemap_height})')
-    for bake_col, bake_name, bake_mesh, transform, sync_obj in merged_bake_meshes:
+    for bake_col, bake_name, bake_mesh, transform, sync_obj in bake_meshes:
         logger.info(f'. Preparing visibility mask for {bake_name}')
         obj = bpy.data.objects.new(f"LightMesh", bake_mesh)
         result_col.objects.link(obj)
@@ -480,7 +448,7 @@ def create_bake_meshes(op, context):
         if not is_lightmap: continue
         influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
         logger.info(f'\nProcessing lightmaps for {light_name} [{i+1}/{len(light_scenarios)}]')
-        for (merged_bake_cols, bake_name, bake_mesh, transform, sync_obj), lightmap_vmap in zip(merged_bake_meshes, vmaps):
+        for (bake_col, bake_name, bake_mesh, transform, sync_obj), lightmap_vmap in zip(bake_meshes, vmaps):
             obj_name = f'LM.{light_name}.{bake_name}'
             prev_nestmap = -1
             if bpy.data.objects.get(obj_name): # Expert mode: if regenerating meshes with previous nestmapping result, just reuse them
@@ -506,10 +474,10 @@ def create_bake_meshes(op, context):
             else:
                 logger.info(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.2f}) for {obj_name}')
                 bake_instance.matrix_world = transform
-                bake_instance.vlmSettings.bake_type = 'lightmap'
+                bake_instance.vlmSettings.is_lightmap = True
                 bake_instance.vlmSettings.bake_lighting = light_name
-                bake_instance.vlmSettings.bake_collections = merged_bake_cols
                 bake_instance.vlmSettings.bake_nestmap = prev_nestmap
+                bake_instance.vlmSettings.bake_collections = bake_col.name
                 bake_instance.vlmSettings.bake_hdr_range = hdr_range
                 bake_instance.vlmSettings.bake_sync_light = ';'.join([l.name for l in lights]) if lights else ''
                 bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''

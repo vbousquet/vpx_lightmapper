@@ -226,9 +226,11 @@ class VLM_Collection_props(PropertyGroup):
         default='group'
     )
     is_opaque: BoolProperty(name="Opaque", description="Wether this collection only contains opaque objects which do not require blending", default = True)
+    use_static_rendering: BoolProperty(name="Static Rendering", description="Mark this baked part to be statically pre-rendered in VPX", default = True)
+    depth_bias: IntProperty(name="Depth Bias", description="Depth Bias applied to the layer when exported to VPX. Set to 0 for playfield, Negative for layer above playfield, positive for layers under playfield.", default = 0)
     refraction_probe: StringProperty(name="Refraction Probe", description="Identifier of the refraction probe to be used on export", default = '')
     reflection_probe: StringProperty(name="Reflection Probe", description="Identifier of the reflection probe to be used on export", default = '')
-    depth_bias: IntProperty(name="Depth Bias", description="Depth Bias applied to the layer when exported to VPX. Set to 0 for playfield, Negative for layer above playfield, positive for layers under playfield.", default = 0)
+    vpx_material: StringProperty(name="VPX Material", description="Name of a material to be used when exporting this collection instead of the default ones", default = '')
     # Light scenario collection
     light_mode: EnumProperty(
         items=[
@@ -269,19 +271,10 @@ class VLM_Object_props(PropertyGroup):
     use_obj_pos: BoolProperty(name="Use Obj Pos", description="Use ObjRot instead of Rot when exporting", default = False)
     # Bake result properties (for object inside the bake result collection)
     bake_lighting: StringProperty(name="Lighting", description="Lighting scenario", default="")
-    bake_collections: StringProperty(name="Bake", description="Bake collections included in this bake/lightmap", default="")
+    bake_collections: StringProperty(name="Bake", description="Bake collection that generated this bake/lightmap", default="")
     bake_sync_light: StringProperty(name="Sync Light", description="Object to sync light state on", default="")
     bake_sync_trans: StringProperty(name="Pivot", description="Pivot point if defined", default="")
-    bake_type: EnumProperty(
-        items=[
-            ('default', 'Default', 'Default opaque bake', '', 0),
-            ('static', 'Static', 'Static opaque bake', '', 1),
-            ('active', 'Transparent', "'Active', i.e. non opaque, non static, transparent bake", '', 2),
-            ('lightmap', 'Lightmap', 'Additive lightmap', '', 3),
-        ],
-        name="Bake Type",
-        default='default'
-    )
+    is_lightmap: BoolProperty(name="Lightmap", description="This baked part is a lightmap (additive bake to be applied over a base mesh)", default = False)
     bake_hdr_range: FloatProperty(name="HDR Range", description="HDR range of this bake", default=-1)
     bake_nestmap: IntProperty(name="Nestmap", description="ID of output nestmap (multiple bakes may share a nestmap)", default = -1)
 
@@ -847,11 +840,13 @@ class VLM_PT_Col_Props(bpy.types.Panel):
         light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
         if bake_col and col.name in bake_col.children:
             layout.prop(col.vlmSettings, 'bake_mode', expand=True)
+            layout.prop(col.vlmSettings, 'vpx_material', expand=True)
             layout.prop(col.vlmSettings, 'is_opaque', expand=True)
-            sub = layout.column()
-            sub.enabled = not col.vlmSettings.is_opaque
-            sub.prop(col.vlmSettings, 'depth_bias', expand=True)
-            sub.prop(col.vlmSettings, 'refraction_probe', expand=True)
+            if col.vlmSettings.is_opaque:
+                layout.prop(col.vlmSettings, 'use_static_rendering', expand=True)
+            else:
+                layout.prop(col.vlmSettings, 'depth_bias', expand=True)
+                layout.prop(col.vlmSettings, 'refraction_probe', expand=True)
             layout.prop(col.vlmSettings, 'reflection_probe', expand=True)
         elif light_col and col.name in light_col.children:
             layout.prop(col.vlmSettings, 'light_mode', expand=True)
@@ -1101,7 +1096,7 @@ class VLM_PT_3D_Bake_Result(bpy.types.Panel):
             col.enabled = False
             col.prop(props, 'bake_collections')
             col.prop(props, 'bake_sync_trans')
-            col.prop(props, 'bake_type')
+            col.prop(props, 'is_lightmap')
             col.separator()
             col.prop(props, 'bake_lighting')
             col.prop(props, 'bake_sync_light')

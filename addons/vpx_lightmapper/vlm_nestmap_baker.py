@@ -53,7 +53,7 @@ def render_nestmaps(op, context):
         obj.data.uv_layers.active = uvmap
         has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None)  is not None
         # VPX only supports opaque HDR therefore we pack all non lightmaps as LDR (luckily base bake is usually LDR, and we don't really need this for lightmaps which are RGB only)
-        if obj.vlmSettings.bake_type != 'lightmap' or obj.vlmSettings.bake_hdr_range <= 1.0:
+        if not obj.vlmSettings.is_lightmap or obj.vlmSettings.bake_hdr_range <= 1.0:
             if has_normalmap:
                 to_nest_ldr_nm.append(obj)
             else:

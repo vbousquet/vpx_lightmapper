@@ -82,29 +82,24 @@ def push_map_array(name, parts):
     return code
 
 
-def get_script_arrays(result_col):
+def get_script_arrays(bake_col, result_col):
     code = '\' VLM Arrays - Start\n'
     # Per Parts
-    code += '\' Arrays per baked part with a pivot point defined\n'
-    all_sync_trans = sorted(list({obj.vlmSettings.bake_sync_trans for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans != '' and bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)}))
-    for sync_trans in all_sync_trans:
-        code += push_map_array(f'BP_{export_name(bpy.data.objects[sync_trans].name)}', sorted([obj for obj in result_col.all_objects if sync_trans == obj.vlmSettings.bake_sync_trans], key=lambda x: x.vlmSettings.bake_sync_light))
-    code += '\' Arrays per baked part without a pivot point defined\n'
-    all_bake_cols = sorted(list({obj.vlmSettings.bake_collections for obj in result_col.all_objects if obj.vlmSettings.bake_sync_trans == ''}))
-    for bake_col in all_bake_cols:
-        code += push_map_array(f'BP_{export_name(bake_col)}', sorted([obj for obj in result_col.all_objects if bake_col == obj.vlmSettings.bake_collections and obj.vlmSettings.bake_sync_trans == ''], key=lambda x: x.vlmSettings.bake_sync_light))
+    code += '\' Arrays per baked part\n'
+    all_parts = sorted(list({(obj.vlmSettings.bake_collections, bpy.data.objects.get(obj.vlmSettings.bake_sync_trans), export_name(obj.vlmSettings.bake_collections if bpy.data.objects.get(obj.vlmSettings.bake_sync_trans) is None or vlm_collections.get_collection(bake_col, obj.vlmSettings.bake_collections, create=False).vlmSettings.bake_mode == 'group' else bpy.data.objects.get(obj.vlmSettings.bake_sync_trans).name)) for obj in result_col.all_objects}), key=lambda x: x[2])
+    for col_name, pivot, name in all_parts:
+        col = vlm_collections.get_collection(bake_col, col_name, create=False)
+        bakes = sorted([obj for obj in result_col.all_objects if col_name == obj.vlmSettings.bake_collections and bpy.data.objects.get(obj.vlmSettings.bake_sync_trans) == pivot], key=lambda x: x.vlmSettings.bake_sync_light)
+        code += push_map_array(f'BP_{name}', bakes)
     # Per Lightmaps
     code += '\' Arrays per lighting scenario\n'
     all_lightmaps = sorted(list({obj.vlmSettings.bake_lighting for obj in result_col.all_objects if obj.vlmSettings.bake_lighting != ''}))
     for lightmap in all_lightmaps:
         code += push_map_array(f'BL_{export_name(lightmap)}', sorted([obj for obj in result_col.all_objects if lightmap == obj.vlmSettings.bake_lighting], key=lambda x: x.name))
-    # Globals arrays per bake type
+    # Globals arrays
     code += '\' Global arrays\n'
-    code += push_map_array('BG_Bakemap', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type != 'lightmap'], key=lambda x: x.name))
-    code += push_map_array('BG_Default', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'default'], key=lambda x: x.name))
-    code += push_map_array('BG_Static', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'static'], key=lambda x: x.name))
-    code += push_map_array('BG_Active', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'active'], key=lambda x: x.name))
-    code += push_map_array('BG_Lightmap', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.bake_type == 'lightmap'], key=lambda x: x.name))
+    code += push_map_array('BG_Bakemap', sorted([obj for obj in result_col.all_objects if not obj.vlmSettings.is_lightmap], key=lambda x: x.name))
+    code += push_map_array('BG_Lightmap', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.is_lightmap], key=lambda x: x.name))
     code += push_map_array('BG_All', sorted([obj for obj in result_col.all_objects], key=lambda x: x.name))
     code += '\' VLM Arrays - End\n'
     return code
@@ -334,7 +329,7 @@ def export_vpx(op, context):
 
 
     # Add new bake models and default playfield collider if needed
-    meshes_to_export = sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.bake_type == "lightmap"}-{x.name}')
+    meshes_to_export = sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.is_lightmap}-{x.name}')
 
     pfobj = None
     pf_friction = pf_elasticity = pf_falloff = pf_scatter = 0
@@ -372,40 +367,15 @@ def export_vpx(op, context):
         if not uv_layer_nested:
             logger.info(f'. Missing nested uv map for {obj.name}')
             continue
-        is_lightmap = obj.vlmSettings.bake_type == 'lightmap'
-        is_active = obj.vlmSettings.bake_type == 'active'
-        is_static = obj.vlmSettings.bake_type == 'static'
+        is_lightmap = obj.vlmSettings.is_lightmap and obj != pfobj
         has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None) is not None
-        depth_bias = None
-        reflection_probe = None
-        refraction_probe = None
-        for col_name in obj.vlmSettings.bake_collections.split(';'):
-            col = vlm_collections.get_collection(bake_col, col_name, create=False)
-            if col:
-                if depth_bias != None and depth_bias != col.vlmSettings.depth_bias:
-                    logger.error(f'ERROR: {obj.name} merges multiple bake collections with different depth bias settings {obj.vlmSettings.bake_collections}')
-                depth_bias = col.vlmSettings.depth_bias
-                if reflection_probe != None and reflection_probe != col.vlmSettings.reflection_probe:
-                    logger.error(f'ERROR: {obj.name} merges multiple bake collections with different reflection_probe settings {obj.vlmSettings.bake_collections}')
-                reflection_probe = col.vlmSettings.reflection_probe
-                if refraction_probe != None and refraction_probe != col.vlmSettings.refraction_probe:
-                    logger.error(f'ERROR: {obj.name} merges multiple bake collections with different refraction_probe settings {obj.vlmSettings.bake_collections}')
-                refraction_probe = col.vlmSettings.refraction_probe
-            elif obj != pfobj:
-                logger.error(f'ERROR: {obj.name} contains object of missing bake collection {col}')
-        if not depth_bias: depth_bias = 0
-        if not reflection_probe: reflection_probe = ''
-        if not refraction_probe: refraction_probe = ''
-        if is_lightmap: depth_bias = depth_bias - 10
+        col = vlm_collections.get_collection(bake_col, obj.vlmSettings.bake_collections, create=False)
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', obj.location[0]/global_scale, -obj.location[1]/global_scale, obj.location[2]/global_scale)
         writer.write_tagged_padded_vector(b'VSIZ', obj.scale[0], obj.scale[1], obj.scale[2])
-        use_obj_pos = False
-        if obj.vlmSettings.bake_sync_trans:
-            sync_obj = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
-            if sync_obj:
-                use_obj_pos = sync_obj.vlmSettings.use_obj_pos
+        sync_obj = bpy.data.objects.get(obj.vlmSettings.bake_sync_trans)
+        use_obj_pos = sync_obj.vlmSettings.use_obj_pos if sync_obj else False
         if use_obj_pos:
             # RotX / RotY / RotZ
             writer.write_tagged_float(b'RTV0', 0)
@@ -436,7 +406,15 @@ def export_vpx(op, context):
         writer.write_tagged_string(b'NRMA', f'VLM.Nestmap{obj.vlmSettings.bake_nestmap} - NM' if has_normalmap else '')
         writer.write_tagged_u32(b'SIDS', 4)
         writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if obj == pfobj else export_name(obj.name))
-        writer.write_tagged_string(b'MATR', '' if is_lightmap or (obj == pfobj) else 'VLM.Bake.Active' if is_active else 'VLM.Bake.Solid')
+        if is_lightmap or (obj == pfobj):
+            mat = ''
+        elif col.vlmSettings.vpx_material != '':
+            mat = col.vlmSettings.vpx_material
+        elif col.vlmSettings.is_opaque:
+            mat = 'VLM.Bake.Solid'
+        else:
+            mat = 'VLM.Bake.Active'
+        writer.write_tagged_string(b'MATR', mat)
         writer.write_tagged_u32(b'SCOL', 0xFFFFFF)
         writer.write_tagged_bool(b'TVIS', obj != pfobj)
         writer.write_tagged_bool(b'DTXI', False)
@@ -451,7 +429,7 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'CLDR', obj == pfobj)
         writer.write_tagged_bool(b'ISTO', obj != pfobj)
         writer.write_tagged_bool(b'U3DM', True)
-        writer.write_tagged_bool(b'STRE', is_static)
+        writer.write_tagged_bool(b'STRE', obj == pfobj or (not is_lightmap and col.vlmSettings.use_static_rendering))
         writer.write_tagged_u32(b'DILI', 255) # 255 is 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
         writer.write_tagged_bool(b'REEN', False)
@@ -505,20 +483,27 @@ def export_vpx(op, context):
                 compressed_indices = zlib.compress(struct.pack(f'<{n_indices}H', *indices))
             writer.write_tagged_u32(b'M3CJ', len(compressed_indices))
             writer.write_tagged_data(b'M3CI', compressed_indices)
+        print(3)
+        if (obj == pfobj) or col.vlmSettings.is_opaque:
+            depth_bias = 0
+        elif is_lightmap:
+            depth_bias = col.vlmSettings.depth_bias - 1
+        else:
+            depth_bias = col.vlmSettings.depth_bias
         writer.write_tagged_float(b'PIDB', depth_bias)
         writer.write_tagged_bool(b'ADDB', is_lightmap)
         writer.write_tagged_float(b'FALP', 100)
         writer.write_tagged_u32(b'COLR', 0xFFFFFF)
         writer.write_tagged_bool(b'LOCK', True)
         writer.write_tagged_bool(b'LVIS', True)
-        writer.write_tagged_bool(b'ZMSK', False if (is_active or is_lightmap) else True)
+        writer.write_tagged_bool(b'ZMSK', True if (is_lightmap or (obj == pfobj) or not col.vlmSettings.is_opaque) else False)
         writer.write_tagged_u32(b'LAYR', 0)
         writer.write_tagged_string(b'LANR', 'VLM.Lightmaps' if is_lightmap else 'VLM.Visuals')
         if is_lightmap:
             sync_light, _ = get_vpx_sync_light(obj, context, light_col)
             writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
-        writer.write_tagged_string(b'REFL', reflection_probe)
-        writer.write_tagged_string(b'REFR', refraction_probe)
+        writer.write_tagged_string(b'REFL', '' if is_lightmap or (obj == pfobj) else col.vlmSettings.reflection_probe)
+        writer.write_tagged_string(b'REFR', '' if is_lightmap or (obj == pfobj) or col.vlmSettings.is_opaque else col.vlmSettings.refraction_probe)
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
@@ -554,7 +539,7 @@ def export_vpx(op, context):
         objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap == nestmap_index]
         if not objects:
             break
-        is_hdr = next( (o for o in objects if o.vlmSettings.bake_type == 'lightmap' and o.vlmSettings.bake_hdr_range > 1.0), None) is not None
+        is_hdr = next( (o for o in objects if o.vlmSettings.is_lightmap and o.vlmSettings.bake_hdr_range > 1.0), None) is not None
         base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}')
         nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.webp'
         if not os.path.exists(nestmap_path):
@@ -685,7 +670,7 @@ def export_vpx(op, context):
                     for line in code.splitlines():
                         if '\' VLM Arrays - End' in line:
                             # End of old arrays: add new ones
-                            new_code += get_script_arrays(result_col)
+                            new_code += get_script_arrays(bake_col, result_col)
                             in_old_arrays = 2
                         elif in_old_arrays == 1:
                             # Old arrays: just remove them
@@ -697,7 +682,7 @@ def export_vpx(op, context):
                             new_code += line
                             new_code += '\n'
                     if in_old_arrays < 2:
-                        new_code += '\n' + get_script_arrays(result_col)
+                        new_code += '\n' + get_script_arrays(bake_col, result_col)
                     wr = biff_io.BIFF_writer()
                     wr.write_string(new_code)
                     br.insert_data(wr.get_data())

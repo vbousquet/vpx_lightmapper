@@ -576,7 +576,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
             target_h = target_heights[n]
 
             # Compute render mask, including lightmap's seam fading
-            if island_obj.vlmSettings.bake_type != 'lightmap': has_alpha[n] = True # This could be improved to detect non opaque bakemap
+            if not island_obj.vlmSettings.is_lightmap: has_alpha[n] = True # This could be improved to detect non opaque bakemap
             pts=[]
             pts_col=[]
             lines=[]
