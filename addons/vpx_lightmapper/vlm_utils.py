@@ -26,6 +26,7 @@ import datetime
 import string
 import unicodedata
 import logging
+import logging.handlers
 from mathutils import Vector
 from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
