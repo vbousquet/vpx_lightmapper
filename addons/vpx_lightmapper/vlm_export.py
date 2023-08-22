@@ -429,7 +429,7 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'CLDR', obj == pfobj)
         writer.write_tagged_bool(b'ISTO', obj != pfobj)
         writer.write_tagged_bool(b'U3DM', True)
-        writer.write_tagged_bool(b'STRE', obj == pfobj or (not is_lightmap and col.vlmSettings.use_static_rendering))
+        writer.write_tagged_bool(b'STRE', obj == pfobj or (not is_lightmap and col.vlmSettings.use_static_rendering and col.vlmSettings.is_opaque))
         writer.write_tagged_u32(b'DILI', 255) # 255 is 1.0 for disable lighting
         writer.write_tagged_float(b'DILB', 1.0) # also disable lighting from below
         writer.write_tagged_bool(b'REEN', False)
@@ -483,7 +483,6 @@ def export_vpx(op, context):
                 compressed_indices = zlib.compress(struct.pack(f'<{n_indices}H', *indices))
             writer.write_tagged_u32(b'M3CJ', len(compressed_indices))
             writer.write_tagged_data(b'M3CI', compressed_indices)
-        print(3)
         if (obj == pfobj) or col.vlmSettings.is_opaque:
             depth_bias = 0
         elif is_lightmap:
@@ -496,7 +495,7 @@ def export_vpx(op, context):
         writer.write_tagged_u32(b'COLR', 0xFFFFFF)
         writer.write_tagged_bool(b'LOCK', True)
         writer.write_tagged_bool(b'LVIS', True)
-        writer.write_tagged_bool(b'ZMSK', True if (is_lightmap or (obj == pfobj) or not col.vlmSettings.is_opaque) else False)
+        writer.write_tagged_bool(b'ZMSK', False if (is_lightmap or (obj == pfobj) or not col.vlmSettings.is_opaque) else True)
         writer.write_tagged_u32(b'LAYR', 0)
         writer.write_tagged_string(b'LANR', 'VLM.Lightmaps' if is_lightmap else 'VLM.Visuals')
         if is_lightmap:
