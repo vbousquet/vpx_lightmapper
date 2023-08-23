@@ -310,6 +310,7 @@ def render_all_groups(op, context):
     n_lighting_situations = len(light_scenarios)
     n_render_performed = n_skipped = n_existing = 0
     n_bake_objects = len([obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake])
+    n_bake_normalmaps = len([obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake and obj.vlmSettings.bake_normalmap])
     n_total_render = (n_render_groups + n_bake_objects) * n_lighting_situations + n_bake_normalmaps
     logger.info(f'\nEvaluating {n_total_render} renders ({n_render_groups} render groups and {n_bake_objects} bakes for {n_lighting_situations} lighting situations, {n_bake_normalmaps} normal maps)')
     
