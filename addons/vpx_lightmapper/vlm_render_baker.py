@@ -46,11 +46,6 @@ def get_light_influence_radius(light):
     if not light.vlmSettings.enable_aoi:
         return (None, None)
     if light.type == 'LIGHT':
-        light_aois = {
-            0.01: [0.200, 1.069, 2.019, 4.314, 10.00],
-            0.05: [1.093, 1.093, 2.139, 4.434, 10.00],
-            0.10: [1.214, 1.214, 2.223, 4.656, 10.00],
-        }
         emission_strength = 0
         has_emission = False
         if light.data.use_nodes:
@@ -62,22 +57,10 @@ def get_light_influence_radius(light):
         if not has_emission: emission_strength = 1
         if light.data.type == 'POINT' or light.data.type == 'SPOT':
             radius = light.data.shadow_soft_size
-            emission = emission_strength * light.data.energy
-            if emission < 0.001: # avoid numeric bug if emission is 0
-                emission = 0.001
-            p = max(0, 1 + math.log10(emission))
-            if p < 4:
-                i = math.floor(p)
-                a = p - i
-                if radius <= 0.01:
-                    r = 0.01
-                elif radius <= 0.05:
-                    r = 0.05
-                else:
-                    r = 0.10
-                aoi_radius = (1-a)*light_aois[r][i] + a*light_aois[r][i+1]
-                #logger.info(f'L {light.name:>20} {radius} {r} {i} {a} => {aoi_radius}')
-                return (light.matrix_world @ mathutils.Vector((0,0,0)), aoi_radius)
+            power = emission_strength * light.data.energy
+            threshold = vlm_utils.get_lm_threshold()
+            aoi_radius = math.sqrt(0.0254 * power / threshold)
+            return (light.matrix_world @ mathutils.Vector((0,0,0)), aoi_radius)
     elif light.type == 'MESH' or light.type == 'CURVE':
         mesh_aois = {
             0.01: [0.240, 0.252, 0.409, 0.625],
@@ -327,7 +310,6 @@ def render_all_groups(op, context):
     n_lighting_situations = len(light_scenarios)
     n_render_performed = n_skipped = n_existing = 0
     n_bake_objects = len([obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake])
-    n_bake_normalmaps = len([obj for obj in bake_col.all_objects if obj.vlmSettings.bake_normalmap])
     n_total_render = (n_render_groups + n_bake_objects) * n_lighting_situations + n_bake_normalmaps
     logger.info(f'\nEvaluating {n_total_render} renders ({n_render_groups} render groups and {n_bake_objects} bakes for {n_lighting_situations} lighting situations, {n_bake_normalmaps} normal maps)')
     
@@ -350,7 +332,7 @@ def render_all_groups(op, context):
         # This needs to use the compositor to performs denoising and save to split file outputs.
         logger.info(f'\n. Processing batch render for group #{group_index+1}/{n_render_groups}')
         scenarios_to_process = [scenario for scenario in light_scenarios]
-        if max_scenarios_in_batch <= 1: # do not use batch rendering is doing a single scenario since it would be less efficient due to the compositor denoising
+        if max_scenarios_in_batch <= 1: # do not use batch rendering if doing a single scenario since it would be less efficient due to the compositor denoising
             scenarios_to_process = None
         while scenarios_to_process:
             prev_world = scene.world
@@ -489,8 +471,6 @@ def render_all_groups(op, context):
             else:
                 scene.render.use_border = False
             
-            #return {'FINISHED'}                    
-
             bpy.ops.render.render(write_still=False, scene=scene.name)
             n_render_performed += len(batch)
 
@@ -623,6 +603,7 @@ def render_all_groups(op, context):
             ti.image = bake_img
             mat.node_tree.nodes.active = ti
             img_nodes.append(ti)
+            
         for i, scenario in enumerate(light_scenarios, start=1):
             name, is_lightmap, light_col, lights = scenario
             render_path = f'{bakepath}{scenario[0]} - Bake - {obj.name}.exr'
@@ -693,6 +674,7 @@ def render_all_groups(op, context):
             else:
                 logger.info(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
+                
         if obj.vlmSettings.bake_normalmap:
             render_path = f'{bakepath}NormalMap - Bake - {obj.name}.exr'
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
