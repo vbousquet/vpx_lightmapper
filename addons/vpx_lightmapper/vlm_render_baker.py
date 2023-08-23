@@ -391,8 +391,9 @@ def render_all_groups(op, context):
                             else:
                                 scenario_influence = light_influence
                 if not scenario_influence:
-                    logger.info(f'. Skipping scenario {name} since it is not influencing group {group_index}')
-                    n_skipped += 1
+                    #Reported during normal render
+                    #logger.info(f'. Skipping scenario {name} since it is not influencing group {group_index}')
+                    #n_skipped += 1
                     continue
 
                 if influence:
