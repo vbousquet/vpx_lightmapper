@@ -229,6 +229,7 @@ class VLM_Collection_props(PropertyGroup):
     use_static_rendering: BoolProperty(name="Static Rendering", description="Mark this baked part to be statically pre-rendered in VPX", default = True)
     depth_bias: IntProperty(name="Depth Bias", description="Depth Bias applied to the layer when exported to VPX. Set to 0 for playfield, Negative for layer above playfield, positive for layers under playfield.", default = 0)
     refraction_probe: StringProperty(name="Refraction Probe", description="Identifier of the refraction probe to be used on export", default = '')
+    refraction_thickness: FloatProperty(name="Refraction Thickness", description="Thickness of refraction", default = 10.0)
     reflection_probe: StringProperty(name="Reflection Probe", description="Identifier of the reflection probe to be used on export", default = '')
     vpx_material: StringProperty(name="VPX Material", description="Name of a material to be used when exporting this collection instead of the default ones", default = '')
     # Light scenario collection
@@ -847,6 +848,7 @@ class VLM_PT_Col_Props(bpy.types.Panel):
             else:
                 layout.prop(col.vlmSettings, 'depth_bias', expand=True)
                 layout.prop(col.vlmSettings, 'refraction_probe', expand=True)
+                layout.prop(col.vlmSettings, 'refraction_thickness', expand=True)
             layout.prop(col.vlmSettings, 'reflection_probe', expand=True)
         elif light_col and col.name in light_col.children:
             layout.prop(col.vlmSettings, 'light_mode', expand=True)

@@ -503,6 +503,7 @@ def export_vpx(op, context):
             writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
         writer.write_tagged_string(b'REFL', '' if is_lightmap or (obj == pfobj) else col.vlmSettings.reflection_probe)
         writer.write_tagged_string(b'REFR', '' if is_lightmap or (obj == pfobj) or col.vlmSettings.is_opaque else col.vlmSettings.refraction_probe)
+        writer.write_tagged_float(b'RTHI', 10. if is_lightmap or (obj == pfobj) or col.vlmSettings.is_opaque else col.vlmSettings.refraction_thickness)
         writer.close()
         dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
         dst_stream.Write(writer.get_data())
