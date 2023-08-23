@@ -466,7 +466,7 @@ def render_all_groups(op, context):
                 out.file_slots[0].use_node_format = True
                 out.format.file_format = 'OPEN_EXR'
                 out.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
-                out.format.exr_codec = 'ZIP'
+                out.format.exr_codec = 'ZIP' # Lossless compression
                 out.format.color_depth = '16'
             
             elapsed = time.time() - start_time
@@ -679,6 +679,8 @@ def render_all_groups(op, context):
                     mask_scene.collection.objects.link(dup)
                     mask_scene.render.image_settings.file_format = "OPEN_EXR"
                     mask_scene.render.image_settings.color_mode = 'RGB'
+                    mask_scene.render.image_settings.exr_codec = 'DWAA'
+                    mask_scene.render.image_settings.color_depth = '16'
                     bpy.ops.render.render(write_still=True, scene=mask_scene.name)
                     mask_scene.collection.objects.unlink(dup)
                     mask_scene.render.image_settings.file_format = "PNG"
