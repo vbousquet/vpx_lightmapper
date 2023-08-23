@@ -165,21 +165,21 @@ def create_bake_meshes(op, context):
             for obj_name in object_names:
                 to_bake.append((obj_name, bake_col, [obj_name], obj_name, not bake_col.vlmSettings.is_opaque))
         else:
-            sync_obj = None
+            pivot_obj = None
             #No more lightmap merging if not (bake_col.vlmSettings.is_opaque and bake_col.vlmSettings.merge_lightmaps):
             sync_transform = None
             for obj_name in object_names:
                 obj = bpy.data.objects[obj_name]
                 if obj.vlmSettings.is_movable:
-                    if sync_obj and sync_transform != obj.matrix_world:
+                    if pivot_obj and sync_transform != obj.matrix_world:
                         logger.info(f'. ERROR: Bake collection {bake_col.name} bakes to a group with multiple objects marked as pivot point with different transforms. Only check the one you want to define the origin of the group.')
-                    sync_obj = obj_name
+                    pivot_obj = obj_name
                     sync_transform = obj.matrix_world
-            to_bake.append((bake_col.name, bake_col, object_names, sync_obj, not bake_col.vlmSettings.is_opaque))
+            to_bake.append((bake_col.name, bake_col, object_names, pivot_obj, not bake_col.vlmSettings.is_opaque))
         
     # Create all solid bake meshes
     bake_meshes = []
-    for bake_name, bake_col, bake_col_object_set, sync_obj, is_translucent in to_bake:
+    for bake_name, bake_col, bake_col_object_set, pivot_obj, is_translucent in to_bake:
         # Join all objects to build baked objects (converting to mesh, and preserving split normals)
         logger.info(f"\nBuilding solid bake target model for '{bake_name}'")
         poly_start = 0
@@ -294,7 +294,7 @@ def create_bake_meshes(op, context):
                 bpy.ops.object.mode_set(mode = 'OBJECT')
 
             # Remove backfacing faces
-            if optimize_mesh and sync_obj is None and opt_backface_limit_angle < 90.0:
+            if optimize_mesh and opt_backface_limit_angle < 90.0:
                 dot_limit = math.cos(radians(opt_backface_limit_angle + 90))
                 bpy.ops.object.mode_set(mode = 'EDIT')
                 bm = bmesh.from_edit_mesh(dup.data)
@@ -382,8 +382,8 @@ def create_bake_meshes(op, context):
         context.view_layer.objects.active = bake_target
 
         # Evaluate transform for the merged mesh
-        if sync_obj and bpy.data.objects[sync_obj]:
-            transform = bpy.data.objects[sync_obj].matrix_world
+        if pivot_obj and bpy.data.objects[pivot_obj]:
+            transform = bpy.data.objects[pivot_obj].matrix_world
         elif len(objects_to_join) == 1:
             transform = base_instances[0].matrix_world
         else:
@@ -403,7 +403,7 @@ def create_bake_meshes(op, context):
             bake_mesh.vertex_colors.new()
         
         logger.info(f'. Base solid mesh has {len(bake_mesh.polygons)} tris and {len(bake_mesh.vertices)} vertices')
-        bake_meshes.append((bake_col, bake_name, bake_mesh, transform, sync_obj))
+        bake_meshes.append((bake_col, bake_name, bake_mesh, transform, pivot_obj))
         result_col.objects.unlink(bake_target)
 
         # Save solid bake to the result collection
@@ -424,14 +424,14 @@ def create_bake_meshes(op, context):
             bake_instance.vlmSettings.bake_collections = bake_col.name
             bake_instance.vlmSettings.bake_nestmap = prev_nestmap
             bake_instance.vlmSettings.bake_sync_light = ''
-            bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
+            bake_instance.vlmSettings.bake_sync_trans = pivot_obj if pivot_obj is not None else ''
             bake_instance.vlmSettings.bake_hdr_range = bake_hdr_range[light_name]
             bake_instance.vlmSettings.is_lightmap = False
     
     # Build all the visibility maps
     vmaps = []
     logger.info(f'\nPreparing all lightmap visibility masks (prune map size={prunemap_width}x{prunemap_height})')
-    for bake_col, bake_name, bake_mesh, transform, sync_obj in bake_meshes:
+    for bake_col, bake_name, bake_mesh, transform, pivot_obj in bake_meshes:
         logger.info(f'. Preparing visibility mask for {bake_name}')
         obj = bpy.data.objects.new(f"LightMesh", bake_mesh)
         result_col.objects.link(obj)
@@ -448,7 +448,7 @@ def create_bake_meshes(op, context):
         if not is_lightmap: continue
         influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
         logger.info(f'\nProcessing lightmaps for {light_name} [{i+1}/{len(light_scenarios)}]')
-        for (bake_col, bake_name, bake_mesh, transform, sync_obj), lightmap_vmap in zip(bake_meshes, vmaps):
+        for (bake_col, bake_name, bake_mesh, transform, pivot_obj), lightmap_vmap in zip(bake_meshes, vmaps):
             obj_name = f'LM.{light_name}.{bake_name}'
             prev_nestmap = -1
             if bpy.data.objects.get(obj_name): # Expert mode: if regenerating meshes with previous nestmapping result, just reuse them
@@ -480,7 +480,7 @@ def create_bake_meshes(op, context):
                 bake_instance.vlmSettings.bake_collections = bake_col.name
                 bake_instance.vlmSettings.bake_hdr_range = hdr_range
                 bake_instance.vlmSettings.bake_sync_light = ';'.join([l.name for l in lights]) if lights else ''
-                bake_instance.vlmSettings.bake_sync_trans = sync_obj if sync_obj is not None else ''
+                bake_instance.vlmSettings.bake_sync_trans = pivot_obj if pivot_obj is not None else ''
 
     # Perform sanity check on the result
     for obj in result_col.all_objects:
