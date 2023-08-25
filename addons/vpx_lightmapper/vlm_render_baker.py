@@ -321,6 +321,24 @@ def render_all_groups(op, context):
             if obj.vlmSettings.bake_mask:
                 render_col.objects.link(obj.vlmSettings.bake_mask)
             render_col.objects.link(obj)
+
+        # Evaluate lighting scenario influence for this group
+        scenario_influences = []
+        for name, is_lightmap, light_col, lights in light_scenarios:
+            if not is_lightmap or light_col.vlmSettings.world:
+                scenario_influence = (0, 1, 0, 1)
+            else:
+                scenario_influence = None
+                for light in lights:
+                    light_influence = get_light_influence(scene, context.view_layer.depsgraph, camera_object, light, None)
+                    if light_influence:
+                        if scenario_influence:
+                            min_x, max_x, min_y, max_y = scenario_influence
+                            min_x2, max_x2, min_y2, max_y2 = light_influence
+                            scenario_influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
+                        else:
+                            scenario_influence = light_influence
+            scenario_influences.append(scenario_influence)
         
         #########
         # Blender 3.2+ batch light pass rendering
@@ -328,7 +346,7 @@ def render_all_groups(op, context):
         # In Blender 3.2, we can render multiple lights at once and save there data separately using light groups for way faster rendering.
         # This needs to use the compositor to performs denoising and save to split file outputs.
         logger.info(f'\n. Processing batch render for group #{group_index+1}/{n_render_groups}')
-        scenarios_to_process = [scenario for scenario in light_scenarios]
+        scenarios_to_process = [x for x in zip(light_scenarios, scenario_influences)]
         if max_scenarios_in_batch <= 1: # do not use batch rendering if doing a single scenario since it would be less efficient due to the compositor denoising
             scenarios_to_process = None
         while scenarios_to_process:
@@ -350,7 +368,14 @@ def render_all_groups(op, context):
             batch = []
             influence = None
             remaining_scenarios = []
-            for i, scenario in enumerate(scenarios_to_process, start=1):
+            scenarios_to_select = scenarios_to_process.copy()
+            def sortByInfluenceArea(x):
+                scenario, scenario_influence = x
+                min_x, max_x, min_y, max_y = scenario_influence
+                return (max_x - min_x) * (max_y - min_y)
+            scenarios_to_select.sort(key=sortByInfluenceArea) # Start with the smaller scenarios (to optimize render area size, since smaller have possiblities to be grouped together)
+            while len(batch) < max_scenarios_in_batch and scenarios_to_select:
+                scenario, scenario_influence = scenarios_to_select.pop(0)
                 name, is_lightmap, light_col, lights = scenario
                 # Light pass does not work with emitter meshes (consider the scenario as processed for the batch since it will be processed later)
                 if next((l for l in lights if l.type != 'LIGHT'), None): 
@@ -363,10 +388,6 @@ def render_all_groups(op, context):
                     else:
                         remaining_scenarios.append(scenario)
                         continue
-                # Maximum number of simultaneous scenario (Blender may crash by out of memory if there are too much)
-                if len(batch) >= max_scenarios_in_batch: 
-                    remaining_scenarios.append(scenario)
-                    continue
                 # Do not re-render existing cached renders
                 render_path = f'{bakepath}{name} - Group {group_index}.exr'
                 if not opt_force_render and os.path.exists(bpy.path.abspath(render_path)):
@@ -374,32 +395,21 @@ def render_all_groups(op, context):
                     n_existing += 1
                     continue
                 # Only render if the scenario influence the objects in the group
-                if not is_lightmap or light_col.vlmSettings.world:
-                    scenario_influence = (0, 1, 0, 1)
-                else:
-                    scenario_influence = None
-                    for light in lights:
-                        light_influence = get_light_influence(scene, context.view_layer.depsgraph, camera_object, light, group_mask)
-                        if light_influence:
-                            if scenario_influence:
-                                min_x, max_x, min_y, max_y = scenario_influence
-                                min_x2, max_x2, min_y2, max_y2 = light_influence
-                                scenario_influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
-                            else:
-                                scenario_influence = light_influence
                 if not scenario_influence:
                     #Reported during normal render
                     #logger.info(f'. Skipping scenario {name} since it is not influencing group {group_index}')
                     #n_skipped += 1
                     continue
 
+                # Compute Overall scenario influence
                 if influence:
                     min_x, max_x, min_y, max_y = influence
                     min_x2, max_x2, min_y2, max_y2 = scenario_influence
                     influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
                 else:
                     influence = scenario_influence
-                
+
+                # Append scenario to render scene and batch
                 scene.view_layers[0].lightgroups.add(name=name.replace(".","_"))
                 initial_state = (0, None)
                 if vlm_utils.is_rgb_led(lights):
@@ -427,20 +437,27 @@ def render_all_groups(op, context):
                     links.new(denoise.outputs['Image'], alpha.inputs['Image'])
                     links.new(rl.outputs['Alpha'], alpha.inputs['Alpha'])
                     links.new(alpha.outputs['Image'], out.inputs['Image'])
-                batch.append((scenario, denoise, out, initial_state))
+                batch.append((scenario, denoise, out, initial_state, scenario_influence))
 
+                # Sort remaining scenarios to priorize the ones that will lead to the smaller render area, or if the result is the same area, choose the smallest ones
+                def sortkey(x):
+                    scenario, scenario_influence = x
+                    min_x, max_x, min_y, max_y = influence
+                    min_x2, max_x2, min_y2, max_y2 = scenario_influence
+                    min_x3, max_x3, min_y3, max_y3 = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
+                    return (max_x3 - min_x3) * (max_y3 - min_y3) * 100 - (max_x2 - min_x2) * (max_y2 - min_y2)
+                scenarios_to_select.sort(key=sortkey)
+
+            remaining_scenarios.extend(scenarios_to_select)
             if not batch:
                 scenarios_to_process = remaining_scenarios
                 continue
 
             scene.world = render_world
 
-            for scenario, denoise, out, initial_state in batch:
+            for scenario, denoise, out, initial_state, scenario_influence in batch:
                 name, is_lightmap, light_col, lights = scenario
                 links.new(rl.outputs[f'Combined_{name.replace(".","_")}'], denoise.inputs[0])
-
-            for scenario, denoise, out, _ in batch:
-                name, is_lightmap, light_col, lights = scenario
                 out.base_path = f'{bakepath}'
                 out.file_slots[0].path = f'{name} - Group {group_index}.exr'
                 out.file_slots[0].use_node_format = True
@@ -448,6 +465,7 @@ def render_all_groups(op, context):
                 out.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
                 out.format.exr_codec = 'ZIP' # Lossless compression
                 out.format.color_depth = '16'
+                logger.info(f'. Scenario selected: {name} influence: {scenario_influence}')
             
             elapsed = time.time() - start_time
             msg = f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for {len(batch)} lighting scenarios (influence: {influence}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
@@ -480,8 +498,8 @@ def render_all_groups(op, context):
                         os.remove(outRenderFileName)
                     os.rename(bpy.path.abspath(f'{bakepath}{file}'), outRenderFileName)
 
-            for scenario, denoise, out, initial_state in batch:
-                _, _, _, lights = scenario
+            for scenario, denoise, out, initial_state, scenario_influence in batch:
+                name, is_lightmap, light_col, lights = scenario
                 for light in lights:
                     render_col.objects.unlink(light)
                 if initial_state[0] == 1:
