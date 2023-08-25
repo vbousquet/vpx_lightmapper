@@ -460,7 +460,6 @@ def render_all_groups(op, context):
                 remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
                 msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
             logger.info(msg)
-            logger.info(f'. Scenarios: {",".join(s[0][0] for s in batch)}')
 
             # Setup AOI
             if influence != (0, 1, 0, 1):
