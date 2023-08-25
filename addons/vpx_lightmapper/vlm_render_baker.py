@@ -262,10 +262,6 @@ def render_all_groups(op, context):
     n_render_groups = vlm_utils.get_n_render_groups(context)
     light_scenarios = vlm_utils.get_lightings(context)
     bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
-    
-    fixed_view = bpy.data.node_groups.get('Fixed View Incoming')
-    if fixed_view:
-        fixed_view.nodes['Incoming'].inputs[0].default_value = camera_object.location
 
     # Create temp render scene, using the user render settings setup
     scene = bpy.data.scenes.new('VLM.Tmp Render Scene')

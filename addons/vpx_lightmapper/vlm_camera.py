@@ -76,10 +76,6 @@ def camera_inclination_update(op, context):
         camera_inclination = context.scene.vlmSettings.camera_inclination +  context.scene.vlmSettings.camera_layback / 2
         camera_layback = 0
         fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col)
-       
-    # update fixed view shader
-    fv_incoming = bpy.data.node_groups.get('VLM.Fixed View Incoming')
-    if fv_incoming: fv_incoming.nodes['Camera Pos'].inputs[0].default_value = camera_object.location
 
 
 def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col):
