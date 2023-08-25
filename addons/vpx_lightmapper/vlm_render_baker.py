@@ -135,23 +135,29 @@ def get_light_influence(scene, depsgraph, camera, light, group_mask):
     if not mask: # No mask, just return the bounds of the area of influence of the light
         return aoi
 
-    min_x = int(aoi[0] * (w-1))
-    max_x = int(aoi[1] * (w-1))
-    min_y = int(aoi[2] * (h-1))
-    max_y = int(aoi[3] * (h-1))
+    min_x = min(w-1, max(0, int(math.floor(aoi[0] * (w-1)))))
+    max_x = min(w-1, max(0, int(math.ceil (aoi[1] * (w-1)))))
+    min_y = min(h-1, max(0, int(math.floor(aoi[2] * (h-1)))))
+    max_y = min(h-1, max(0, int(math.ceil (aoi[3] * (h-1)))))
     light_center = project_point(proj, center)
     light_center.x *= w - 1
     light_center.y *= h - 1
     alpha_y = (max_y - min_y) / (max_x - min_x)
     max_r2 = (max_x - min_x) * (max_x - min_x) / 4
+    opt_min_x, opt_max_x, opt_min_y, opt_max_y = (w-1, 0, h-1, 0)
+    influenced = False
     for y in range(min_y, max_y + 1):
-        py = (y - light_center.y) * alpha_y
+        py = (y + 0.5 - light_center.y) * alpha_y
         py2 = py * py
         for x in range(min_x, max_x + 1):
-            px = x - light_center.x
+            px = x + 0.5 - light_center.x
             if px*px+py2 < max_r2 and mask[x + y * w] > 0: # inside the influence elipsoid, with an influenced object
-                return aoi
-    return None
+                influenced = True
+                opt_min_x, opt_max_x, opt_min_y, opt_max_y = (min(x, opt_min_x), max(x, opt_max_x), min(y, opt_min_y), max(y, opt_max_y))
+    if influenced and opt_min_x < opt_max_x and opt_min_y < opt_max_y:
+        return (float(opt_min_x) / (w-1), float(opt_max_x) / (w-1), float(opt_min_y) / (h-1), float(opt_max_y) / (h-1))
+    else:
+        return None
 
 
 def check_min_render_size(scene):
@@ -465,10 +471,10 @@ def render_all_groups(op, context):
                 out.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
                 out.format.exr_codec = 'ZIP' # Lossless compression
                 out.format.color_depth = '16'
-                logger.info(f'. Scenario selected: {name} influence: {scenario_influence}')
+                logger.info(f'. Scenario {name} selected, render area: {scenario_influence}')
             
             elapsed = time.time() - start_time
-            msg = f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for {len(batch)} lighting scenarios (influence: {influence}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+            msg = f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for {len(batch)} lighting scenarios (render area: {(influence[1]-influence[0])*(influence[3]-influence[2]):5.2%} {influence}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
             if elapsed > 0 and n_render_performed > 0:
                 elapsed_per_render = elapsed / n_render_performed
                 remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
