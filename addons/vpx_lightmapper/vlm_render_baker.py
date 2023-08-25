@@ -322,33 +322,33 @@ def render_all_groups(op, context):
                 render_col.objects.link(obj.vlmSettings.bake_mask)
             render_col.objects.link(obj)
 
-        # Evaluate lighting scenario influence for this group
-        scenario_influences = []
-        for name, is_lightmap, light_col, lights in light_scenarios:
-            if not is_lightmap or light_col.vlmSettings.world:
-                scenario_influence = (0, 1, 0, 1)
-            else:
-                scenario_influence = None
-                for light in lights:
-                    light_influence = get_light_influence(scene, context.view_layer.depsgraph, camera_object, light, None)
-                    if light_influence:
-                        if scenario_influence:
-                            min_x, max_x, min_y, max_y = scenario_influence
-                            min_x2, max_x2, min_y2, max_y2 = light_influence
-                            scenario_influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
-                        else:
-                            scenario_influence = light_influence
-            scenario_influences.append(scenario_influence)
-        
         #########
         # Blender 3.2+ batch light pass rendering
         #
         # In Blender 3.2, we can render multiple lights at once and save there data separately using light groups for way faster rendering.
         # This needs to use the compositor to performs denoising and save to split file outputs.
         logger.info(f'\n. Processing batch render for group #{group_index+1}/{n_render_groups}')
-        scenarios_to_process = [x for x in zip(light_scenarios, scenario_influences)]
         if max_scenarios_in_batch <= 1: # do not use batch rendering if doing a single scenario since it would be less efficient due to the compositor denoising
             scenarios_to_process = None
+        else:
+            scenarios_to_process = []
+            for scenario in light_scenarios:
+                name, is_lightmap, light_col, lights = scenario
+                if not is_lightmap or light_col.vlmSettings.world:
+                    scenario_influence = (0, 1, 0, 1)
+                else:
+                    scenario_influence = None
+                    for light in lights:
+                        light_influence = get_light_influence(scene, context.view_layer.depsgraph, camera_object, light, group_mask)
+                        if light_influence:
+                            if scenario_influence:
+                                min_x, max_x, min_y, max_y = scenario_influence
+                                min_x2, max_x2, min_y2, max_y2 = light_influence
+                                scenario_influence = (min(min_x, min_x2), max(max_x, max_x2), min(min_y, min_y2), max(max_y, max_y2))
+                            else:
+                                scenario_influence = light_influence
+                if scenario_influence:
+                    scenarios_to_process.append((scenario, scenario_influence))
         while scenarios_to_process:
             prev_world = scene.world
             render_world = None
