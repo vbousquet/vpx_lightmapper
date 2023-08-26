@@ -502,6 +502,7 @@ def export_vpx(op, context):
             sync_light, _ = get_vpx_sync_light(obj, context, light_col)
             writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
         writer.write_tagged_string(b'REFL', '' if is_lightmap or (obj == pfobj) else col.vlmSettings.reflection_probe)
+        writer.write_tagged_float(b'RSTR', 0.3 if is_lightmap or (obj == pfobj) else col.vlmSettings.reflection_strength)
         writer.write_tagged_string(b'REFR', '' if is_lightmap or (obj == pfobj) or col.vlmSettings.is_opaque else col.vlmSettings.refraction_probe)
         writer.write_tagged_float(b'RTHI', 10. if is_lightmap or (obj == pfobj) or col.vlmSettings.is_opaque else col.vlmSettings.refraction_thickness)
         writer.close()

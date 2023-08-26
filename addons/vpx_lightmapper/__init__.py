@@ -231,6 +231,7 @@ class VLM_Collection_props(PropertyGroup):
     refraction_probe: StringProperty(name="Refraction Probe", description="Identifier of the refraction probe to be used on export", default = '')
     refraction_thickness: FloatProperty(name="Refraction Thickness", description="Thickness of refraction", default = 10.0)
     reflection_probe: StringProperty(name="Reflection Probe", description="Identifier of the reflection probe to be used on export", default = '')
+    reflection_strength: FloatProperty(name="Reflection Strength", description="Strength of reflection", default = 0.3)
     vpx_material: StringProperty(name="VPX Material", description="Name of a material to be used when exporting this collection instead of the default ones", default = '')
     # Light scenario collection
     light_mode: EnumProperty(
@@ -850,6 +851,7 @@ class VLM_PT_Col_Props(bpy.types.Panel):
                 layout.prop(col.vlmSettings, 'refraction_probe', expand=True)
                 layout.prop(col.vlmSettings, 'refraction_thickness', expand=True)
             layout.prop(col.vlmSettings, 'reflection_probe', expand=True)
+            layout.prop(col.vlmSettings, 'reflection_strength', expand=True)
         elif light_col and col.name in light_col.children:
             layout.prop(col.vlmSettings, 'light_mode', expand=True)
             layout.prop(col.vlmSettings, 'world', expand=True)
