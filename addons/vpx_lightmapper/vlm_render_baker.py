@@ -713,7 +713,7 @@ def render_all_groups(op, context):
                 scene.render.image_settings.color_depth = '16'
                 # context needs an active, linked, not hidden, mesh
                 with context.temp_override(scene=scene, active_object=obj, selected_objects=[obj]):
-                    bpy.ops.object.bake(type='NORMAL', normal_space='OBJECT', normal_r='POS_X', normal_g='POS_Y', normal_b='POS_Z', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
+                    bpy.ops.object.bake(type='NORMAL', normal_space='OBJECT', normal_r='POS_X', normal_g='NEG_Y', normal_b='NEG_Z', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
                     bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
                 logger.info('\n')
                 n_render_performed += 1
