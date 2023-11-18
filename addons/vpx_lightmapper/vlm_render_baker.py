@@ -510,7 +510,8 @@ def render_all_groups(op, context):
                     render_col.objects.unlink(light)
                 if initial_state[0] == 1:
                     for o, c in initial_state[1]: o.data.color = c
-                bpy.ops.scene.view_layer_remove_lightgroup({'scene':scene})
+                with bpy.context.temp_override(scene=scene):
+                    bpy.ops.scene.view_layer_remove_lightgroup()
             nodes.clear()
             links.clear()
             scene.use_nodes = False
