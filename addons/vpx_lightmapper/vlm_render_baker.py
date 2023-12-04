@@ -282,9 +282,8 @@ def render_all_groups(op, context):
     scene.render.engine = 'CYCLES'
     scene.render.use_border = False
     scene.render.use_crop_to_border = False
-    render_size = vlm_utils.get_render_size(context)
-    scene.render.resolution_x = render_size[0]
-    scene.render.resolution_y = render_size[1]
+    scene.render.resolution_x = opt_render_width
+    scene.render.resolution_y = opt_render_height
     scene.render.film_transparent = True
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
@@ -579,7 +578,7 @@ def render_all_groups(op, context):
 
     # Create temp render scene for rendering object masks & influence map
     opt_mask_size = 1024 # Height used for the object masks
-    opt_mask_pad = math.ceil(opt_mask_size * 2 / render_size[1])
+    opt_mask_pad = math.ceil(opt_mask_size * 2 / opt_render_height)
     mask_scene = bpy.data.scenes.new('VLM.Tmp Mask Scene')
     mask_scene.collection.objects.link(camera_object)
     mask_scene.camera = camera_object
@@ -643,8 +642,8 @@ def render_all_groups(op, context):
         render_ratio = context.scene.vlmSettings.render_ratio / 100.0
         img_nodes = []
         bake_img = bpy.data.images.new('Bake', int(dup.vlmSettings.bake_width * render_ratio), int(dup.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
-        mask_scene.render.resolution_x = render_size[0]
-        mask_scene.render.resolution_y = render_size[1]
+        mask_scene.render.resolution_x = opt_render_width
+        mask_scene.render.resolution_y = opt_render_height
         for mat in dup.data.materials:
             node_uvmap = mat.node_tree.nodes.new(type='ShaderNodeAttribute')
             node_uvmap. attribute_name = 'UVMap'

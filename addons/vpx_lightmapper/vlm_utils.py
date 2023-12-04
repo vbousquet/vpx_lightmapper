@@ -54,7 +54,7 @@ def get_lm_threshold():
 
 
 def get_render_size(context):
-    # render height apply to projected playfield, so upscale accordingly
+    # render height apply to projected playfield, so upscale accordingly, keeping user defined aspect ratio
     camera = context.scene.camera
     if not camera:
         logger.error("ERROR: missing camera")
@@ -80,9 +80,10 @@ def get_render_size(context):
     if v_size <= 0.0:
         logger.error("ERROR: invalid view")
         return
+    ar = context.scene.render.resolution_x / context.scene.render.resolution_y
     rh = round(context.scene.vlmSettings.render_height * context.scene.vlmSettings.render_ratio / (100.0 * v_size))
-    rw = round(rh * (max_u - min_u) / v_size)
-    print(f'. Render size set to {int(rw)}x{int(rh)} for an expected playfield render of {round(u_size*rw)}x{round(v_size*rh)}, target playfield height was {round(context.scene.vlmSettings.render_height * context.scene.vlmSettings.render_ratio / 100.0)}')
+    rw = round(rh * ar)
+    print(f'. Render size computed to {int(rw)}x{int(rh)} for an expected playfield render of {round(u_size*rw)}x{round(v_size*rh)}, target playfield height was {round(context.scene.vlmSettings.render_height * context.scene.vlmSettings.render_ratio / 100.0)}')
     return (int(rw), int(rh))
 
 
