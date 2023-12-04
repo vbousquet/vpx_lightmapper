@@ -1979,7 +1979,8 @@ def read_vpx(op, context, filepath):
     except:
         context.scene.vlmSettings.table_file = filepath
     
-    context.scene.vlmSettings.playfield_size = (playfield_left, playfield_top, playfield_width, playfield_height)
+    context.scene.vlmSettings.playfield_width = playfield_width
+    context.scene.vlmSettings.playfield_height = playfield_height
 
     # Force a render size update
     vlm_utils.update_render_size(None, context)

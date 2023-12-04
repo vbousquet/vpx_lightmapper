@@ -122,8 +122,8 @@ def unit_update(self, context):
         print(f'old scale:{context.scene.vlmSettings.active_scale} => new scale:{new_scale}')
         scaling = new_scale / context.scene.vlmSettings.active_scale
         # FIXME scale all objects relative to origin
-        for i in range(4):
-            context.scene.vlmSettings.playfield_size[i] = scaling * context.scene.vlmSettings.playfield_size[i]
+        context.scene.vlmSettings.playfield_width = scaling * context.scene.vlmSettings.playfield_width
+        context.scene.vlmSettings.playfield_height = scaling * context.scene.vlmSettings.playfield_height
         context.scene.vlmSettings.active_scale = new_scale
 
 
@@ -189,7 +189,8 @@ class VLM_Scene_props(PropertyGroup):
     )
     # Active table informations
     table_file: StringProperty(name="Table", description="Table filename", default="")
-    playfield_size: FloatVectorProperty(name="Playfield size:", description="Size of the playfield in VP unit", default=(0, 0, 0, 0), size=4)
+    playfield_width: FloatProperty(name="Playfield Width", description="Width of the playfield in inches", default = 1.0, update=vlm_utils.update_render_size)
+    playfield_height: FloatProperty(name="Playfield Height", description="Height of the playfield in inches", default = 1.0, update=vlm_utils.update_render_size)
     active_scale: FloatProperty(name="Active scale", description="Scale of the active table", default = 1.0)
     # Tools
     render_group_select: IntProperty(name="Select Group", description="Select all objects from a render group", default = 0, min = 0, update=select_render_group)
@@ -577,7 +578,8 @@ class VLM_OT_table_uv(Operator):
         return context.mode == 'OBJECT' and len(context.selected_objects) > 0
 
     def execute(self, context):
-        l, t, w, h = context.scene.vlmSettings.playfield_size
+        w = context.scene.vlmSettings.playfield_width * (2.54 / 100.0)
+        h = context.scene.vlmSettings.playfield_height * (2.54 / 100.0)
         o = bpy.data.objects.new("Table UV", None)
         context.scene.collection.objects.link(o)
         o.empty_display_type = 'ARROWS'
@@ -755,12 +757,15 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
         vlmProps = context.scene.vlmSettings
+        # Size & render size properties
+        #layout.prop(vlmProps, "active_scale")
+        layout.prop(vlmProps, "playfield_width")
+        layout.prop(vlmProps, "playfield_height")
         # Render properties
         layout.prop(vlmProps, "render_height")
         layout.prop(vlmProps, "render_ratio")
-        layout.prop(vlmProps, "max_lighting")
         layout.separator()
-        # Mesh properties
+        layout.prop(vlmProps, "max_lighting")
         layout.prop(vlmProps, "remove_backface", text='Backface')
         layout.prop(vlmProps, "keep_pf_reflection_faces")
         layout.separator()
@@ -788,9 +793,6 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         row.label(text='Batch:')
         row.prop(vlmProps, "batch_inc_group", expand=True)
         row.prop(vlmProps, "batch_shutdown", expand=True)
-        #layout.separator()
-        #layout.prop(vlmProps, "active_scale")
-        #layout.prop(vlmProps, "playfield_size")
 
 
 class VLM_PT_Col_Props(bpy.types.Panel):

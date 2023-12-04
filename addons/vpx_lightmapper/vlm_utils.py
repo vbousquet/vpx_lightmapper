@@ -61,12 +61,11 @@ def get_render_size(context):
         return
     modelview_matrix = camera.matrix_world.normalized().inverted()
     camsize = math.tan(camera.data.angle / 2.0)
-    min_u = min_v = 100000
-    max_u = max_v = -100000
-    playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
-    playfield_right = playfield_width + playfield_left
-    playfield_bottom = playfield_height + playfield_top
-    pf = (mathutils.Vector((playfield_left, -playfield_bottom, 0.0)), mathutils.Vector((playfield_right, -playfield_bottom, 0.0)), mathutils.Vector((playfield_left, -playfield_top, 0.0)), mathutils.Vector((playfield_right, -playfield_top, 0.0)))
+    min_u = min_v = 100000000
+    max_u = max_v = -100000000
+    playfield_width = context.scene.vlmSettings.playfield_width * (2.54 / 100.0)
+    playfield_height = context.scene.vlmSettings.playfield_height * (2.54 / 100.0)
+    pf = (mathutils.Vector((0.0, -playfield_height, 0.0)), mathutils.Vector((playfield_width, -playfield_height, 0.0)), mathutils.Vector((0, 0.0, 0.0)), mathutils.Vector((playfield_width, 0.0, 0.0)))
     for co in pf:
         p1 = modelview_matrix @ Vector((co[0], co[1], co[2], 1))
         if p1.z == 0.0: p1.z = 0.00001
@@ -497,7 +496,8 @@ def render_mask(context, width, height, target_image, view_matrix, projection_ma
 
 def render_blueprint(context, height, is_solid):
     image_name = 'blueprint'
-    playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
+    playfield_width = context.scene.vlmSettings.playfield_width * (2.54 / 100.0)
+    playfield_height = context.scene.vlmSettings.playfield_height * (2.54 / 100.0)
     view_matrix = mathutils.Matrix.LocRotScale(mathutils.Vector((-1.0, 1.0, 0)), None, mathutils.Vector((2.0 / playfield_width, 2.0 / playfield_height, 0.1)))
     projection_matrix = mathutils.Matrix.OrthoProjection('XY', 4)
     width = int(height * playfield_width / playfield_height)

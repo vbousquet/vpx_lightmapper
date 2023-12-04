@@ -335,14 +335,11 @@ def export_vpx(op, context):
     pf_friction = pf_elasticity = pf_falloff = pf_scatter = 0
     if needs_playfield_physics:
         logger.info('. Adding a default playfield mesh')
-        playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
-        playfield_right = playfield_width + playfield_left
-        playfield_bottom = playfield_height + playfield_top
         vert = [
-            (playfield_left, -playfield_bottom, 0.0), 
-            (playfield_right, -playfield_bottom, 0.0), 
-            (playfield_left, -playfield_top, 0.0), 
-            (playfield_right, -playfield_top, 0.0)]
+            (0.0,                                                        -context.scene.vlmSettings.playfield_height * (2.54 / 100.0), 0.0), 
+            (context.scene.vlmSettings.playfield_width * (2.54 / 100.0), -context.scene.vlmSettings.playfield_height * (2.54 / 100.0), 0.0), 
+            (0.0,                                                        0.0, 0.0), 
+            (context.scene.vlmSettings.playfield_width * (2.54 / 100.0), 0.0, 0.0)]
         pfmesh = bpy.data.meshes.new("VPX.Mesh.Playfield.Exp")
         pfmesh.from_pydata(vert, [], [(0, 1, 2), (1, 3, 2)])
         pfmesh.uv_layers.new(name='UVMap Nested')
