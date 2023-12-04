@@ -27,7 +27,6 @@ from math import radians
 from bpy_extras.io_utils import axis_conversion
 from . import biff_io
 from . import vlm_utils
-from . import vlm_camera
 from . import vlm_collections
 
 # Dependencies which need a custom install (not included in the Blender install)
@@ -347,7 +346,7 @@ def read_vpx(op, context, filepath):
     opt_plastic_translucency = 1.0
     opt_bevel_plastics = context.scene.vlmSettings.bevel_plastics
     opt_detect_insert_overlay = True # Place any flasher containing 'insert' in its name to the overlay collection
-    opt_render_height = vlm_utils.get_render_height(context)
+    opt_render_height = vlm_utils.get_render_size(context)(0)
     
     # Purge unlinked datas to avoid reusing them
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -381,9 +380,6 @@ def read_vpx(op, context, filepath):
         ring_mat.base_color = (1,1,1,1)
         ring_mat.glossy_color = (0,0,0,0)
         ring_mat.is_metal = True
-        camera_fov = 40
-        camera_layback = 25
-        camera_inclination = 25
         materials[ring_mat.name.casefold()] = ring_mat
         movables = {}
         while not game_data.is_eof():
@@ -445,12 +441,6 @@ def read_vpx(op, context, filepath):
                 n_images = game_data.get_u32()
             elif game_data.tag == 'SCOL':
                 n_collections = game_data.get_u32()
-            elif game_data.tag == 'FOVF':
-                camera_fov = game_data.get_float()
-            elif game_data.tag == 'LAYF':
-                camera_layback = game_data.get_float()
-            elif game_data.tag == 'INCF':
-                camera_inclination = game_data.get_float()
             elif game_data.tag == 'CODE':
                 code_pos = game_data.pos
                 code_size = game_data.get_u32()
@@ -1968,20 +1958,6 @@ def read_vpx(op, context, filepath):
             movables.vlmSettings.is_opaque = True
             movables.name = "Movables"
         
-    # Setup the bake camera. Computation happens in the update method of these properties
-    camera_object = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
-    if not camera_object:
-        camera_object = bpy.data.objects.new('VPX Camera', bpy.data.cameras.new(name='Camera'))
-        camera_object.vlmSettings.vpx_object = 'VPX.Camera'
-        camera_object.vlmSettings.vpx_subpart = 'Bake'
-        camera_object.data.clip_start = 0.01
-        camera_object.data.clip_end = 1000.0
-        vlm_collections.get_collection(context.scene.collection, HIDDEN_COL).objects.link(camera_object)
-    camera_object.data.angle = radians(camera_fov)
-    context.scene.vlmSettings.camera_layback = camera_layback
-    context.scene.vlmSettings.camera_inclination = camera_inclination
-    created_objects.append(camera_object.name)
-
     # Move to hidden all imported objects that were not reimported
     for obj in [obj for obj in scene_col.all_objects if obj.vlmSettings.vpx_object != '' and obj.name not in created_objects]:
         vlm_collections.unlink(obj)
@@ -2004,6 +1980,9 @@ def read_vpx(op, context, filepath):
         context.scene.vlmSettings.table_file = filepath
     
     context.scene.vlmSettings.playfield_size = (playfield_left, playfield_top, playfield_width, playfield_height)
-    vlm_camera.camera_inclination_update(None, context)
+
+    # Force a render size update
+    vlm_utils.update_render_size(None, context)
+
     logger.info(f"\nImport finished.")
     return {"FINISHED"}

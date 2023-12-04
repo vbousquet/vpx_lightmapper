@@ -53,57 +53,51 @@ def get_lm_threshold():
     return 0.01
 
 
-def get_render_height(context):
-    return int(int(context.scene.vlmSettings.render_height) * context.scene.vlmSettings.render_ratio / 100.0) - 4 - 2 * context.scene.vlmSettings.padding
-
-
 def get_render_size(context):
-    opt_render_height = get_render_height(context)
-    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
-    render_size = (int(opt_render_height * render_aspect_ratio), opt_render_height)
-    if context.scene.vlmSettings.layback_mode == 'fit_pf':
-        # render height apply to projected playfield, so upscale accordingly
-        camera = context.scene.camera
-        if camera:
-            modelview_matrix = camera.matrix_world.normalized().inverted()
-            winx = render_size[0] * context.scene.render.pixel_aspect_x
-            winy = render_size[1] * context.scene.render.pixel_aspect_y
-            if winx > winy:
-                xasp = 1.0
-                yasp = winx / float(winy)
-            else:
-                xasp = winy / float(winx)
-                yasp = 1.0
-            shiftx = 0.5 - (camera.data.shift_x * xasp)
-            shifty = 0.5 - (camera.data.shift_y * yasp)
-            camsize = math.tan(camera.data.angle / 2.0)
-            min_u = min_v = 100000
-            max_u = max_v = -100000
-            playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
-            playfield_right = playfield_width + playfield_left
-            playfield_bottom = playfield_height + playfield_top
-            pf = (mathutils.Vector((playfield_left, -playfield_bottom, 0.0)), mathutils.Vector((playfield_right, -playfield_bottom, 0.0)), mathutils.Vector((playfield_left, -playfield_top, 0.0)), mathutils.Vector((playfield_right, -playfield_top, 0.0)))
-            for co in pf:
-                p1 = modelview_matrix @ Vector((co[0], co[1], co[2], 1))
-                if p1.z == 0.0: p1.z = 0.00001
-                u = shiftx + xasp * (-p1.x * ((1.0 / camsize) / p1.z)) / 2.0
-                v = shifty + yasp * (-p1.y * ((1.0 / camsize) / p1.z)) / 2.0
-                min_v = min(min_v, v)
-                max_v = max(max_v, v)
-                min_u = min(min_u, u)
-                max_u = max(max_u, u)
-            v_size = max_v - min_v
-            if v_size > 0.0:
-                s = 1.0 / v_size
-                render_size = (int(s * opt_render_height * render_aspect_ratio), int(s * opt_render_height))
-                print(f'. Upscale to fit PF to render size: {s}')
-                print(f'. Expected playfield render size: {int((max_u-min_u)*render_size[0])}x{int((max_v-min_v)*render_size[1])}')
-    return render_size
+    # render height apply to projected playfield, so upscale accordingly
+    camera = context.scene.camera
+    if not camera:
+        logger.error("ERROR: missing camera")
+        return
+    modelview_matrix = camera.matrix_world.normalized().inverted()
+    camsize = math.tan(camera.data.angle / 2.0)
+    min_u = min_v = 100000
+    max_u = max_v = -100000
+    playfield_left, playfield_top, playfield_width, playfield_height = context.scene.vlmSettings.playfield_size
+    playfield_right = playfield_width + playfield_left
+    playfield_bottom = playfield_height + playfield_top
+    pf = (mathutils.Vector((playfield_left, -playfield_bottom, 0.0)), mathutils.Vector((playfield_right, -playfield_bottom, 0.0)), mathutils.Vector((playfield_left, -playfield_top, 0.0)), mathutils.Vector((playfield_right, -playfield_top, 0.0)))
+    for co in pf:
+        p1 = modelview_matrix @ Vector((co[0], co[1], co[2], 1))
+        if p1.z == 0.0: p1.z = 0.00001
+        u = (-p1.x * ((1.0 / camsize) / p1.z)) / 2.0
+        v = (-p1.y * ((1.0 / camsize) / p1.z)) / 2.0
+        min_v = min(min_v, v)
+        max_v = max(max_v, v)
+        min_u = min(min_u, u)
+        max_u = max(max_u, u)
+    u_size = max_u - min_u
+    v_size = max_v - min_v
+    if v_size <= 0.0:
+        logger.error("ERROR: invalid view")
+        return
+    rh = round(context.scene.vlmSettings.render_height * context.scene.vlmSettings.render_ratio / (100.0 * v_size))
+    rw = round(rh * (max_u - min_u) / v_size)
+    print(f'. Render size set to {int(rw)}x{int(rh)} for an expected playfield render of {round(u_size*rw)}x{round(v_size*rh)}, target playfield height was {round(context.scene.vlmSettings.render_height * context.scene.vlmSettings.render_ratio / 100.0)}')
+    return (int(rw), int(rh))
 
 
 def get_render_proj_ar(context):
-    render_size = get_render_size(context)
-    return int(render_size[0] * context.scene.render.pixel_aspect_x) / float(int(render_size[1] * context.scene.render.pixel_aspect_y))
+    opt_render_width, opt_render_height = get_render_size(context)
+    return opt_render_width / opt_render_height
+
+
+def update_render_size(op, context):
+    context.scene.render.pixel_aspect_x = 1
+    context.scene.render.pixel_aspect_y = 1
+    opt_render_width, opt_render_height = get_render_size(context)
+    context.scene.render.resolution_x = opt_render_width
+    context.scene.render.resolution_y = opt_render_height
 
 
 def run_with_logger(op):

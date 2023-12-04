@@ -103,8 +103,8 @@ def create_bake_meshes(op, context):
     
     # Texture packing
     proj_ar = vlm_utils.get_render_proj_ar(context)
-    opt_render_height = vlm_utils.get_render_height(context)
-    opt_ar = context.scene.vlmSettings.render_aspect_ratio
+    opt_render_width, opt_render_height = vlm_utils.get_render_size(context)
+    opt_ar = opt_render_width / opt_render_height
 
     # Bake mesh generation settings
     opt_backface_limit_angle = context.scene.vlmSettings.remove_backface
@@ -208,10 +208,11 @@ def create_bake_meshes(op, context):
             with context.temp_override(active_object=dup, selected_objects=[dup]):
                 for modifier in dup.modifiers:
                     if 'NoExp' in modifier.name: break # or (modifier.type == 'BEVEL' and modifier.width < 0.1)
-                    try:
-                        bpy.ops.object.modifier_apply(modifier=modifier.name)
-                    except:
-                        logger.info(f'. ERROR {obj_name} has an invalid modifier which was not applied')
+                    if modifier.show_render:
+                        try:
+                            bpy.ops.object.modifier_apply(modifier=modifier.name)
+                        except:
+                            logger.info(f'. ERROR {obj_name} has an invalid modifier which was not applied')
                 dup.modifiers.clear()
 
             # Remove custom normals since they will be lost during mesh optimization
@@ -275,6 +276,9 @@ def create_bake_meshes(op, context):
                 for loop in triangle_loops:
                     areas[loop[0].face] += vlm_utils.tri_area( *(Vector( (*l[uv_loop].uv, 0) ) for l in loop) )
                 bm.free()
+                if not areas:
+                    logger.info(f'. ERROR {obj_name} is degenerated (no triangles). Object discarded')
+                    continue
                 max_size = int(max(areas.values()) * opt_render_height * opt_render_height * opt_ar)
                 if max_size < opt_lod_threshold:
                     ratio = math.sqrt(max_size / opt_lod_threshold)

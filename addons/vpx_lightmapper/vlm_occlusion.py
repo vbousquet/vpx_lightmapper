@@ -46,12 +46,15 @@ def select_occluded(op, context):
     start_time = time.time()
     opt_mask_size = 512
     
+    opt_render_width, opt_render_height = vlm_utils.get_render_size(context)
+    opt_ar = opt_render_width / opt_render_height
+
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
     scene.collection.objects.link(camera_object)
     scene.camera = camera_object
     scene.render.engine = 'CYCLES'
     scene.render.resolution_y = opt_mask_size
-    scene.render.resolution_x = int(opt_mask_size * context.scene.vlmSettings.render_aspect_ratio)
+    scene.render.resolution_x = int(opt_mask_size * opt_ar)
     scene.render.pixel_aspect_x = context.scene.render.pixel_aspect_x
     scene.cycles.device = 'GPU'
     scene.cycles.samples = 1

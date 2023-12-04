@@ -19,7 +19,6 @@ import math
 import mathutils
 import time
 from . import vlm_utils
-from . import vlm_camera
 from . import vlm_collections
 from PIL import Image # External dependency
 
@@ -67,13 +66,13 @@ def compute_render_groups(op, context):
     opt_mask_size = 1024 # Height used for the object masks
     opt_force_render = False # Force rendering even if cache is available
 
-    # Force a camera update
-    vlm_camera.camera_inclination_update(op, context)
+    # Force a render size update
+    vlm_utils.update_render_size(op, context)
 
     # at least 2 pixels padding around each objects to avoid overlaps, and help clean island spliting => depends on actual render size
-    render_size = vlm_utils.get_render_size(context)
-    opt_mask_pad = math.ceil(opt_mask_size * 2 / render_size[1])
-    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
+    opt_render_width, opt_render_height = vlm_utils.get_render_size(context)
+    opt_ar = opt_render_width / opt_render_height
+    opt_mask_pad = math.ceil(opt_mask_size * 2 / opt_render_height)
 
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
     scene.collection.objects.link(camera_object)
@@ -81,7 +80,7 @@ def compute_render_groups(op, context):
     scene.render.engine = 'BLENDER_EEVEE'
     scene.render.film_transparent = True
     scene.render.resolution_y = opt_mask_size
-    scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
+    scene.render.resolution_x = int(opt_mask_size * opt_ar)
     scene.render.pixel_aspect_x = context.scene.render.pixel_aspect_x
     scene.render.image_settings.file_format = "PNG"
     scene.render.image_settings.color_mode = 'RGBA'

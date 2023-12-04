@@ -182,23 +182,47 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
     n_failed = 0
     render_length = 0
     while islands_to_pack:
-        # Sort from biggest squared pixcount sum to smallest
-        islands_to_pack.sort(key=lambda p: p.pix_count*p.pix_count, reverse=True)
-
         # Select island groups
-        total_pixcount = sum([block.pix_count for block in islands_to_pack])
-        n_min_pages = max(1, int(total_pixcount / pack_threshold))
-            
         pixcount = 0
         selection = []
-        # Dispatch blocks on the total amount of remaining pages (don't put all the big one in the first page)
+        total_pixcount = sum([block.pix_count for block in islands_to_pack])
+        n_min_pages = max(1, int(total_pixcount / pack_threshold))
+
+        # Group objects by lightmap since they are used together on VPX side (to limit texture switching when rendering)
+        # lm_groups = []
+        # lm_processed = {}
+        # for block in islands_to_pack:
+            # obj, bm, block_islands, block_pix_count = block
+            # if obj.vlmSettings.bake_lighting not in lm_processed:
+                # blocks = [x for x in islands_to_pack if x[0].vlmSettings.bake_lighting == obj.vlmSettings.bake_lighting]
+                # lm_group = (blocks, sum([x.pix_count for x in blocks]))
+                # lm_processed[obj.vlmSettings.bake_lighting] = lm_group
+                # lm_groups.append(lm_group)
+        # lm_groups.sort(key=lambda p: p[1], reverse=True)
+        # lm_selection = []
+
+        # Dispatch largest full lighting scenario across the nestmaps
+        # for blocks, lm_pixcount in lm_groups[::n_min_pages]:
+            # if pixcount == 0 or pixcount + lm_pixcount <= pack_threshold:
+                # selection.extend(blocks)
+                # lm_selection.append( (blocks, lm_pixcount) )
+                # pixcount += lm_pixcount
+        # Then fill up with the smallest lighting scenarios (still keeping them together to limit texture switching at render time)
+        # for blocks, lm_pixcount in reversed(lm_groups):
+            # if pixcount == 0 or (pixcount + lm_pixcount <= pack_threshold and not blocks[0] in selection):
+                # selection.extend(blocks)
+                # lm_selection.append( (blocks, lm_pixcount) )
+                # pixcount += lm_pixcount
+
+        # Dispatch large blocks on the total amount of remaining pages (don't put all the big one in the first page)
+        islands_to_pack.sort(key=lambda p: p.pix_count, reverse=True)
         for block in islands_to_pack[::n_min_pages]:
-            if pixcount == 0 or pixcount + block.pix_count <= pack_threshold:
+            if pixcount == 0 or (pixcount + block.pix_count <= pack_threshold and not block in selection):
                 selection.append(block)
                 pixcount += block.pix_count
-        # Then fill up with small blocks
+        # Then fill up with remaining small blocks
         for block in reversed(islands_to_pack):
-            if pixcount == 0 or pixcount + block.pix_count <= pack_threshold and not block in selection:
+            if pixcount == 0 or (pixcount + block.pix_count <= pack_threshold and not block in selection):
                 selection.append(block)
                 pixcount += block.pix_count
         
@@ -250,29 +274,64 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                 n_failed = n_failed + 1
                 if len(selection) > 1:
                     retry_count = retry_count + 1
+                    limited_threshold = pack_threshold - int(tex_w * tex_h * 0.01 * retry_count) # Get down threshold after each retry to ensure finding a solution
+
+                    # Nesting overflowed while we have only a single lightmap: remove individual blocks
                     incompatible_blocks = []
                     for overflow_object in set([island['source'][0] for island in nestmap.islands]):
                         overflow_block = next((block for block in selection if block.obj == overflow_object))
                         incompatible_blocks.append(overflow_block)
-                    incompatible_blocks.sort(key=lambda p: p.pix_count*p.pix_count)
                     incompatible_sets.append(set([block.obj.name for block in incompatible_blocks]))
-                    # select smallest incompatible block with an impact of at least 1% of the overall pixel count, replace it with smaller blocks
-                    overflow_block = next((block for block in incompatible_blocks if block.pix_count > int(tex_w * tex_h * 0.01)), incompatible_blocks[0])
-                    pixcount = pixcount - overflow_block.pix_count
-                    selection.remove(overflow_block)
 
-                    limited_threshold = pack_threshold - int(tex_w * tex_h * 0.01 * retry_count) # Get down threshold after each retry to ensure finding a solution
-                    n_added = added_pixcount = 0
-                    for block in reversed(islands_to_pack):
-                        if pixcount == 0 or pixcount + block.pix_count <= limited_threshold and not block in selection:
-                            new_set = set([block.obj.name for block in selection])
-                            new_set.add(block.obj.name)
-                            if new_set not in incompatible_sets:
-                                selection.append(block)
-                                pixcount += block.pix_count
-                                added_pixcount += block.pix_count
-                                n_added += 1
-                    logger.info(f'. Nesting overflowed. Replacing {overflow_block.obj.name} ({overflow_block.pix_count}px) from nesting group (smallest incompatible nest block) with {n_added} smaller blocks ({added_pixcount}px)')
+                    # if len(lm_selection) > 1:
+                        # # Nesting overflowed while we have multiple lightmaps: remove entire lightmaps
+                        # lm_overflow = []
+                        # for lm_group in lm_selection:
+                            # lm = lm_group[0][0].vlmSettings.bake_lighting
+                            # for overflow_object in set([island['source'][0] for island in nestmap.islands]):
+                                # if overflow_object.vlmSettings.bake_lighting == lm:
+                                    # lm_overflow.append(lm_group)
+                                    # break
+                        # # select smallest incompatible lightmap of at least 1% of the overall pixel count, replace it with smaller blocks
+                        # lm_overflow.sort(key=lambda p: p[1])
+                        # overflow_lm = next((lm_group for lm_group in lm_overflow if lm_group[1] > int(tex_w * tex_h * 0.01)), lm_overflow[0])
+                        # pixcount = pixcount - overflow_lm[1]
+                        # lm_selection.remove(overflow_lm)
+                        # selection = [i for i in selection if i not in overflow_lm[0]]
+
+                        # n_added = added_pixcount = 0
+                        # for lm_group in reversed(lm_groups):
+                            # lm_blocks, lm_pixcount = lm_group
+                            # if pixcount == 0 or pixcount + lm_pixcount <= limited_threshold and not lm_group in lm_selection:
+                                # new_set = set([block.obj.name for block in selection])
+                                # new_set.extends([block.obj.name for block in lm_blocks])
+                                # if new_set not in incompatible_sets:
+                                    # selection.extends(lm_blocks)
+                                    # lm_selection.append(lm_group)
+                                    # pixcount += lm_pixcount
+                                    # added_pixcount += lm_pixcount
+                                    # n_added += len(lm_blocks)
+                        # logger.info(f'. Nesting overflowed. Replacing Lightmap {overflow_lm[0][0].obj.vlmSettings.bake_lighting} ({overflow_lm[1]}px) from nesting group (smallest incompatible nest lightmap) with {n_added} smaller blocks ({added_pixcount}px) from other lightmaps')
+                        
+                    # else:
+                    if True:
+                        # select smallest incompatible block with an impact of at least 1% of the overall pixel count, replace it with smaller blocks
+                        incompatible_blocks.sort(key=lambda p: p.pix_count*p.pix_count)
+                        overflow_block = next((block for block in incompatible_blocks if block.pix_count > int(tex_w * tex_h * 0.01)), incompatible_blocks[0])
+                        pixcount = pixcount - overflow_block.pix_count
+                        selection.remove(overflow_block)
+
+                        n_added = added_pixcount = 0
+                        for block in reversed(islands_to_pack):
+                            if pixcount == 0 or pixcount + block.pix_count <= limited_threshold and not block in selection:
+                                new_set = set([block.obj.name for block in selection])
+                                new_set.add(block.obj.name)
+                                if new_set not in incompatible_sets:
+                                    selection.append(block)
+                                    pixcount += block.pix_count
+                                    added_pixcount += block.pix_count
+                                    n_added += 1
+                        logger.info(f'. Nesting overflowed. Replacing {overflow_block.obj.name} ({overflow_block.pix_count}px) from nesting group (smallest incompatible nest block) with {n_added} smaller blocks ({added_pixcount}px)')
                     
                     # reset uv
                     index = 0
@@ -751,7 +810,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
             Image.open(path_png).save(path_webp, format = "WebP", lossless = True)
     
     bpy.data.scenes.remove(scene)
-    logger.info(f'. Nest map generated and saved to {base_filepath}')
+    logger.info(f'. Nestmap rendered and saved to {base_filepath}')
 
 
 def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, tex_h):

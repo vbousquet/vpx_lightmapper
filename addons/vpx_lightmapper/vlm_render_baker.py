@@ -258,13 +258,13 @@ def render_all_groups(op, context):
     start_time = time.time()
     bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
+    opt_render_width, opt_render_height = vlm_utils.get_render_size(context)
+    opt_ar = opt_render_width / opt_render_height
     if context.scene.vlmSettings.max_lighting == 0:
         max_scenarios_in_batch = 1024
     else:
-        opt_render_height = vlm_utils.get_render_height(context)
         max_scenarios_in_batch = int(context.scene.vlmSettings.max_lighting * 4096 / opt_render_height)
     opt_force_render = False # Force rendering even if cache is available
-    render_aspect_ratio = context.scene.vlmSettings.render_aspect_ratio
     n_render_groups = vlm_utils.get_n_render_groups(context)
     light_scenarios = vlm_utils.get_lightings(context)
     bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
@@ -319,6 +319,18 @@ def render_all_groups(op, context):
     # Perform the actual rendering of all the passes
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 1.0
     for group_index, group_mask in enumerate(group_masks):
+        is_already_done = True
+        for scenario in light_scenarios:
+            name, is_lightmap, light_col, lights = scenario
+            render_path = f'{bakepath}{name} - Group {group_index}.exr'
+            if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
+                is_already_done = False
+                break
+        if is_already_done:
+            logger.info(f'. Skipping group {group_index} since all scenarios are already rendered and cached')
+            n_existing += len(light_scenarios)
+            continue
+
         objects = [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == group_index and not obj.vlmSettings.use_bake]
         n_objects = len(objects)
         for obj in objects:
@@ -589,12 +601,25 @@ def render_all_groups(op, context):
             render_col.objects.link(obj.vlmSettings.bake_mask)
         if not obj.vlmSettings.hide_from_others:
             indirect_col.objects.unlink(obj)
-        render_col.objects.link(obj)
+        
+        # Create a duplicate and apply modifiers since they can generate/modify the UV map
+        dup = obj.copy()
+        dup.data = dup.data.copy()
+        render_col.objects.link(dup)
+        with context.temp_override(active_object=dup, selected_objects=[dup]):
+            for modifier in dup.modifiers:
+                if modifier.show_render:
+                    try:
+                        bpy.ops.object.modifier_apply(modifier=modifier.name)
+                    except:
+                        logger.info(f'. ERROR {obj.name} has an invalid modifier which was not applied')
+            dup.modifiers.clear()
+        
         elapsed = time.time() - start_time
         
         # Render object mask (or load from cache if available)
         mask_scene.render.resolution_y = opt_mask_size
-        mask_scene.render.resolution_x = int(opt_mask_size * render_aspect_ratio)
+        mask_scene.render.resolution_x = int(opt_mask_size * opt_ar)
         mask_scene.render.image_settings.file_format = "PNG"
         mask_scene.render.image_settings.color_mode = 'RGBA'
         mask_scene.render.filepath = f'{mask_path}{vlm_utils.clean_filename(obj.name)}.png'
@@ -603,9 +628,9 @@ def render_all_groups(op, context):
             im = Image.open(bpy.path.abspath(mask_scene.render.filepath))
             need_render = im.size[0] != mask_scene.render.resolution_x or im.size[1] != mask_scene.render.resolution_y
         if need_render:
-            mask_scene.collection.objects.link(obj)
+            mask_scene.collection.objects.link(dup)
             bpy.ops.render.render(write_still=True, scene=mask_scene.name)
-            mask_scene.collection.objects.unlink(obj)
+            mask_scene.collection.objects.unlink(dup)
             im = Image.open(bpy.path.abspath(mask_scene.render.filepath))
         for p in range(opt_mask_pad):
             im.alpha_composite(im, (0, 1))
@@ -617,14 +642,18 @@ def render_all_groups(op, context):
         # Bake object for each lighting scenario
         render_ratio = context.scene.vlmSettings.render_ratio / 100.0
         img_nodes = []
-        bake_img = bpy.data.images.new('Bake', int(obj.vlmSettings.bake_width * render_ratio), int(obj.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
+        bake_img = bpy.data.images.new('Bake', int(dup.vlmSettings.bake_width * render_ratio), int(dup.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
         mask_scene.render.resolution_x = render_size[0]
         mask_scene.render.resolution_y = render_size[1]
-        for mat in obj.data.materials:
+        for mat in dup.data.materials:
+            node_uvmap = mat.node_tree.nodes.new(type='ShaderNodeAttribute')
+            node_uvmap. attribute_name = 'UVMap'
             ti = mat.node_tree.nodes.new("ShaderNodeTexImage")
             ti.image = bake_img
+            mat.node_tree.links.new(node_uvmap.outputs[0], ti.inputs[0])
             mat.node_tree.nodes.active = ti
-            img_nodes.append(ti)
+            img_nodes.append((ti, node_uvmap))
+        dup.data.uv_layers['UVMap'].active = True 
             
         for i, scenario in enumerate(light_scenarios, start=1):
             name, is_lightmap, light_col, lights = scenario
@@ -646,17 +675,17 @@ def render_all_groups(op, context):
                     scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
                     scene.render.image_settings.color_depth = '16'
                     # Bake texture (context needs an active, linked, not hidden, mesh)
-                    with context.temp_override(scene=scene, active_object=obj, selected_objects=[obj]):
+                    with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
                         scene.render.bake.view_from = 'ACTIVE_CAMERA'
                         bpy.ops.object.bake(type='COMBINED', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
                         bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
                     restore_func(state)
                     # Render for influence map
-                    dup = obj.copy()
-                    dup.data = dup.data.copy()
-                    for poly in dup.data.polygons:
+                    dup2 = dup.copy()
+                    dup2.data = dup2.data.copy()
+                    for poly in dup2.data.polygons:
                         poly.material_index = 0
-                    dup.data.materials.clear()
+                    dup2.data.materials.clear()
                     mat = bpy.data.materials.new(name)
                     mat.use_nodes = True
                     nodes = mat.node_tree.nodes
@@ -677,15 +706,15 @@ def render_all_groups(op, context):
                     links.new(node_transparent.outputs[0], node_add.inputs[1])
                     links.new(node_add.outputs[0], node_output.inputs[0])
                     mat.blend_method = 'BLEND'
-                    dup.data.materials.append(mat)
+                    dup2.data.materials.append(mat)
                     mask_scene.render.filepath = influence_path
-                    mask_scene.collection.objects.link(dup)
+                    mask_scene.collection.objects.link(dup2)
                     mask_scene.render.image_settings.file_format = "OPEN_EXR"
                     mask_scene.render.image_settings.color_mode = 'RGB'
                     mask_scene.render.image_settings.exr_codec = 'DWAA'
                     mask_scene.render.image_settings.color_depth = '16'
                     bpy.ops.render.render(write_still=True, scene=mask_scene.name)
-                    mask_scene.collection.objects.unlink(dup)
+                    mask_scene.collection.objects.unlink(dup2)
                     mask_scene.render.image_settings.file_format = "PNG"
                     bpy.data.materials.remove(mat)
                     logger.info('\n')
@@ -697,7 +726,7 @@ def render_all_groups(op, context):
                 logger.info(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
                 
-        if obj.vlmSettings.bake_normalmap:
+        if dup.vlmSettings.bake_normalmap:
             render_path = f'{bakepath}NormalMap - Bake - {obj.name}.exr'
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
                 elapsed = time.time() - start_time
@@ -713,7 +742,7 @@ def render_all_groups(op, context):
                 scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
                 scene.render.image_settings.color_depth = '16'
                 # context needs an active, linked, not hidden, mesh
-                with context.temp_override(scene=scene, active_object=obj, selected_objects=[obj]):
+                with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
                     bpy.ops.object.bake(type='NORMAL', normal_space='OBJECT', normal_r='POS_X', normal_g='NEG_Y', normal_b='NEG_Z', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
                     bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
                 logger.info('\n')
@@ -721,14 +750,13 @@ def render_all_groups(op, context):
             else:
                 logger.info(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
-        for mat, ti in zip(obj.data.materials, img_nodes):
-            mat.node_tree.nodes.remove(ti)
+        for mat, ti in zip(dup.data.materials, img_nodes):
+            for node in ti:
+                mat.node_tree.nodes.remove(node)
         bpy.data.images.remove(bake_img)
-        if obj.vlmSettings.bake_mask:
-            render_col.objects.unlink(obj.vlmSettings.bake_mask)
-        if not obj.vlmSettings.hide_from_others:
-            indirect_col.objects.link(obj)
-        render_col.objects.unlink(obj)
+        if dup.vlmSettings.bake_mask:
+            render_col.objects.unlink(dup.vlmSettings.bake_mask)
+        render_col.objects.unlink(dup)
 
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 0.0
     bpy.data.scenes.remove(scene)
