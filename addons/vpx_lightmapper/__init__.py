@@ -187,6 +187,7 @@ class VLM_Scene_props(PropertyGroup):
         name='Export mode',
         default='remove_all'
     )
+    export_prefix: StringProperty(name="Export prefix", description="A prefix that will be applied to the nestmaps and VLM layers.", default="")
     # Active table informations
     table_file: StringProperty(name="Table", description="Table filename", default="")
     playfield_width: FloatProperty(name="Playfield Width", description="Width of the playfield in inches", default = 1.0, update=vlm_utils.update_render_size)
@@ -775,6 +776,7 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         layout.separator()
         # Export properties
         layout.prop(vlmProps, "export_mode")
+        layout.prop(vlmProps, "export_prefix")
         layout.separator()
         # Actions buttons
         row = layout.row()
