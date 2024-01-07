@@ -346,7 +346,7 @@ def read_vpx(op, context, filepath):
     opt_plastic_translucency = 1.0
     opt_bevel_plastics = context.scene.vlmSettings.bevel_plastics
     opt_detect_insert_overlay = True # Place any flasher containing 'insert' in its name to the overlay collection
-    opt_render_height = vlm_utils.get_render_size(context)(0)
+    opt_render_height = vlm_utils.get_render_size(context)[0]
     
     # Purge unlinked datas to avoid reusing them
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
