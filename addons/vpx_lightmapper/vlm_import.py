@@ -644,13 +644,21 @@ def read_vpx(op, context, filepath):
                 # Set bevelling on top and bottom edges
                 if bpy.app.version < (3, 4, 0):
                     mesh.use_customdata_edge_bevel = True
-                #elif not mesh.has_bevel_weight_edge:
-                #    bpy.ops.mesh.customdata_bevel_weight_edge_add()
-                for edge in mesh.edges:
-                    if abs(mesh.vertices[edge.vertices[0]].co.z - mesh.vertices[edge.vertices[1]].co.z) < 0.01 * global_scale:
-                         edge.bevel_weight = 1.0
-                    else:
-                         edge.bevel_weight = 0.0
+                if bpy.app.version >= (4, 0, 0):
+                    bevel_weight_attr = mesh.attributes.new("bevel_weight_edge", "FLOAT", "EDGE")
+                    for idx, edge in enumerate(mesh.edges):
+                        if abs(mesh.vertices[edge.vertices[0]].co.z - mesh.vertices[edge.vertices[1]].co.z) < 0.01 * global_scale:
+                            bevel_weight_attr.data[idx].value = 1.0
+                        else:
+                            bevel_weight_attr.data[idx].value = 0.0
+                else:
+                    #elif not mesh.has_bevel_weight_edge:
+                    #    bpy.ops.mesh.customdata_bevel_weight_edge_add()
+                    for edge in mesh.edges:
+                        if abs(mesh.vertices[edge.vertices[0]].co.z - mesh.vertices[edge.vertices[1]].co.z) < 0.01 * global_scale:
+                            edge.bevel_weight = 1.0
+                        else:
+                            edge.bevel_weight = 0.0
                 # Compute split normals, trying to get the right smoothing
                 mesh.calc_normals_split()
                 normals = [(0,0,0) for i in mesh.loops]
