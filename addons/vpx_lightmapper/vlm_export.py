@@ -35,7 +35,8 @@ from win32com import storagecon
 
 
 def export_name(object_name):
-    return object_name.replace(".", "_").replace(" ", "_").replace("-", "_")
+    export_prefix = bpy.context.scene.vlmSettings.export_prefix
+    return export_prefix + object_name.replace(".", "_").replace(" ", "_").replace("-", "_")
 
 
 def elem_ref(name):
@@ -83,7 +84,8 @@ def push_map_array(name, parts):
 
 
 def get_script_arrays(bake_col, result_col):
-    code = '\' VLM Arrays - Start\n'
+    export_prefix = bpy.context.scene.vlmSettings.export_prefix
+    code = f'\' VLM {export_prefix} Arrays - Start\n'
     # Per Parts
     code += '\' Arrays per baked part\n'
     all_parts = sorted(list({(obj.vlmSettings.bake_collections, bpy.data.objects.get(obj.vlmSettings.bake_sync_trans), export_name(obj.vlmSettings.bake_collections if bpy.data.objects.get(obj.vlmSettings.bake_sync_trans) is None or vlm_collections.get_collection(bake_col, obj.vlmSettings.bake_collections, create=False).vlmSettings.bake_mode == 'group' else bpy.data.objects.get(obj.vlmSettings.bake_sync_trans).name)) for obj in result_col.all_objects}), key=lambda x: x[2])
@@ -98,18 +100,18 @@ def get_script_arrays(bake_col, result_col):
         code += push_map_array(f'BL_{export_name(lightmap)}', sorted([obj for obj in result_col.all_objects if lightmap == obj.vlmSettings.bake_lighting], key=lambda x: x.name))
     # Globals arrays
     code += '\' Global arrays\n'
-    code += push_map_array('BG_Bakemap', sorted([obj for obj in result_col.all_objects if not obj.vlmSettings.is_lightmap], key=lambda x: x.name))
-    code += push_map_array('BG_Lightmap', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.is_lightmap], key=lambda x: x.name))
-    code += push_map_array('BG_All', sorted([obj for obj in result_col.all_objects], key=lambda x: x.name))
-    code += '\' VLM Arrays - End\n'
+    code += push_map_array(f'BG{export_prefix}_Bakemap', sorted([obj for obj in result_col.all_objects if not obj.vlmSettings.is_lightmap], key=lambda x: x.name))
+    code += push_map_array(f'BG{export_prefix}_Lightmap', sorted([obj for obj in result_col.all_objects if obj.vlmSettings.is_lightmap], key=lambda x: x.name))
+    code += push_map_array(f'BG{export_prefix}_All', sorted([obj for obj in result_col.all_objects], key=lambda x: x.name))
+    code += f'\' VLM {export_prefix} Arrays - End\n'
     return code
 
 
 def export_vpx(op, context):
     """Export bakes by updating the reference VPX file:
-    . Remove all items in 'VLM.Visuals' and 'VLM.Lightmaps' layer
+    . Remove all items in 'VLM.Visuals' and 'VLM.Lightmaps' layer which match the export prefix
     . Disable rendering for all baked objects, eventually removing them
-    . Add all nestmaps as texture with 'VLM.' prefixed name
+    . Add all nestmaps as texture with 'VLM.[export_prefix]' prefixed name
     . Add base materials with 'VLM.' prefixed name
     . Add all bakes as primitives in the 'VLM.Visuals' layer
     """
@@ -135,6 +137,7 @@ def export_vpx(op, context):
     bakepath = vlm_utils.get_bakepath(context)
     vlm_utils.mkpath(f"{bakepath}Export/")
     export_mode = context.scene.vlmSettings.export_mode
+    export_prefix = context.scene.vlmSettings.export_prefix
     light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
     global_scale = vlm_utils.get_global_scale(context)
     output_path = bpy.path.abspath(f"//{os.path.splitext(bpy.path.basename(input_path))[0]} - VLM.vpx")
@@ -297,10 +300,10 @@ def export_vpx(op, context):
             if (is_part_baked or is_playfield_mesh) and visibility_field:
                 item_data.put_bool(False)
             item_data.skip_tag()
-        if is_playfield_mesh and not layer_name == 'VLM.Visuals':
+        if is_playfield_mesh and not layer_name == f'VLM.{export_prefix}Visuals':
             needs_playfield_physics = False
         # Filters out objects
-        remove = (layer_name == 'VLM.Visuals') or (layer_name == 'VLM.Lightmaps')
+        remove = (layer_name == f'VLM.{export_prefix}Visuals') or (layer_name == f'VLM.{export_prefix}Lightmaps')
         if export_mode == 'remove' or export_mode == 'remove_all':
             # Baked objects are only kept if contributing to physics
             if is_baked and not is_physics: remove = True
@@ -331,6 +334,8 @@ def export_vpx(op, context):
     # Add new bake models and default playfield collider if needed
     meshes_to_export = sorted([obj for obj in result_col.all_objects], key=lambda x: f'{x.vlmSettings.is_lightmap}-{x.name}')
 
+    for testb in meshes_to_export:
+        print(testb.vlmSettings.bake_collections)
     pfobj = None
     pf_friction = pf_elasticity = pf_falloff = pf_scatter = 0
     if needs_playfield_physics:
@@ -358,15 +363,19 @@ def export_vpx(op, context):
                 pf_scatter = br.get_float()
             br.skip_tag()
     for obj in meshes_to_export:
+
+        is_lightmap = obj.vlmSettings.is_lightmap and obj != pfobj
+        col = vlm_collections.get_collection(bake_col, obj.vlmSettings.bake_collections, create=False)
+
         obj.data.validate()
         obj.data.calc_normals_split() # compute loop normal (would be 0,0,0 otherwise)
         uv_layer_nested = obj.data.uv_layers.get("UVMap Nested")
         if not uv_layer_nested:
             logger.info(f'. Missing nested uv map for {obj.name}')
             continue
-        is_lightmap = obj.vlmSettings.is_lightmap and obj != pfobj
+        
         has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None) is not None
-        col = vlm_collections.get_collection(bake_col, obj.vlmSettings.bake_collections, create=False)
+        
         writer = biff_io.BIFF_writer()
         writer.write_u32(19)
         writer.write_tagged_padded_vector(b'VPOS', obj.location[0]/global_scale, -obj.location[1]/global_scale, obj.location[2]/global_scale)
@@ -399,8 +408,8 @@ def export_vpx(op, context):
             writer.write_tagged_float(b'RTV6', 0)
             writer.write_tagged_float(b'RTV7', 0)
             writer.write_tagged_float(b'RTV8', 0)
-        writer.write_tagged_string(b'IMAG', f'VLM.Nestmap{obj.vlmSettings.bake_nestmap}')
-        writer.write_tagged_string(b'NRMA', f'VLM.Nestmap{obj.vlmSettings.bake_nestmap} - NM' if has_normalmap else '')
+        writer.write_tagged_string(b'IMAG', f'VLM.{export_prefix}Nestmap{obj.vlmSettings.bake_nestmap}')
+        writer.write_tagged_string(b'NRMA', f'VLM.{export_prefix}Nestmap{obj.vlmSettings.bake_nestmap} - NM' if has_normalmap else '')
         writer.write_tagged_u32(b'SIDS', 4)
         writer.write_tagged_wide_string(b'NAME', 'playfield_mesh' if obj == pfobj else export_name(obj.name))
         if is_lightmap or (obj == pfobj):
@@ -435,7 +444,7 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'OVPH', True if obj == pfobj else False)
         writer.write_tagged_bool(b'DIPT', False)
         writer.write_tagged_bool(b'OSNM', True)
-        writer.write_tagged_string(b'M3DN', f'VLM.{obj.name}')
+        writer.write_tagged_string(b'M3DN', f'VLM.{obj.name}') #mesh filename
         indices = []
         vertices = []
         vert_dict = {}
@@ -460,7 +469,7 @@ def export_vpx(op, context):
                     indices.append(existing_index)
         n_indices = len(indices)
         compressed = True
-        logger.info(f'. Adding {n_vertices:>6} vertices, {int(n_indices/3):>6} faces for {obj.name}')
+        logger.info(f'. Adding {n_vertices:>6} vertices, {int(n_indices/3):>6} faces for {export_prefix}{obj.name}')
         writer.write_tagged_u32(b'M3VN', n_vertices)
         if not compressed:
             writer.write_tagged_data(b'M3DX', struct.pack(f'<{len(vertices)}f', *vertices))
@@ -494,7 +503,7 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'LVIS', True)
         writer.write_tagged_bool(b'ZMSK', False if (is_lightmap or (obj == pfobj) or not col.vlmSettings.is_opaque) else True)
         writer.write_tagged_u32(b'LAYR', 0)
-        writer.write_tagged_string(b'LANR', 'VLM.Lightmaps' if is_lightmap else 'VLM.Visuals')
+        writer.write_tagged_string(b'LANR', f'VLM.{export_prefix}Lightmaps' if is_lightmap else f'VLM.{export_prefix}Visuals')
         if is_lightmap:
             sync_light, _ = get_vpx_sync_light(obj, context, light_col)
             writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
@@ -520,7 +529,7 @@ def export_vpx(op, context):
                 name = br.get_string()
                 break
             br.skip_tag()
-        remove = name.startswith('VLM.Nestmap')
+        remove = name.startswith(f'VLM.{export_prefix}Nestmap')
         remove = remove or (export_mode=='remove_all' and name not in used_images and name in removed_images)
         if remove:
             logger.info(f'. Image {name:>20s} was removed from export table')
@@ -545,7 +554,7 @@ def export_vpx(op, context):
             op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
             return {'CANCELLED'}
         img_writer = biff_io.BIFF_writer()
-        img_writer.write_tagged_string(b'NAME', f'VLM.Nestmap{nestmap_index}')
+        img_writer.write_tagged_string(b'NAME', f'VLM.{export_prefix}Nestmap{nestmap_index}')
         img_writer.write_tagged_string(b'PATH', nestmap_path)
         with open(nestmap_path, 'rb') as f:
             img_data = f.read()
@@ -558,7 +567,7 @@ def export_vpx(op, context):
             width, height = image.size
             if loaded == 'loaded': bpy.data.images.remove(image)
         writer = biff_io.BIFF_writer()
-        writer.write_tagged_string(b'NAME', f'VLM.Nestmap{nestmap_index}')
+        writer.write_tagged_string(b'NAME', f'VLM.{export_prefix}Nestmap{nestmap_index}')
         writer.write_tagged_string(b'PATH', nestmap_path)
         writer.write_tagged_u32(b'WDTH', width)
         writer.write_tagged_u32(b'HGHT', height)
@@ -590,7 +599,7 @@ def export_vpx(op, context):
                 op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
                 return {'CANCELLED'}
             img_writer = biff_io.BIFF_writer()
-            img_writer.write_tagged_string(b'NAME', f'VLM.Nestmap{nestmap_index} - NM')
+            img_writer.write_tagged_string(b'NAME', f'VLM.{export_prefix}Nestmap{nestmap_index} - NM')
             img_writer.write_tagged_string(b'PATH', nestmap_path)
             with open(nestmap_path, 'rb') as f:
                 img_data = f.read()
@@ -603,7 +612,7 @@ def export_vpx(op, context):
                 width, height = image.size
                 if loaded == 'loaded': bpy.data.images.remove(image)
             writer = biff_io.BIFF_writer()
-            writer.write_tagged_string(b'NAME', f'VLM.Nestmap{nestmap_index} - NM')
+            writer.write_tagged_string(b'NAME', f'VLM.{export_prefix}Nestmap{nestmap_index} - NM')
             writer.write_tagged_string(b'PATH', nestmap_path)
             writer.write_tagged_u32(b'WDTH', width)
             writer.write_tagged_u32(b'HGHT', height)
@@ -666,14 +675,14 @@ def export_vpx(op, context):
                     new_code = ""
                     in_old_arrays = 0
                     for line in code.splitlines():
-                        if '\' VLM Arrays - End' in line:
+                        if f'\' VLM {export_prefix} Arrays - End' in line:
                             # End of old arrays: add new ones
                             new_code += get_script_arrays(bake_col, result_col)
                             in_old_arrays = 2
                         elif in_old_arrays == 1:
                             # Old arrays: just remove them
                             pass
-                        elif '\' VLM Arrays - Start' in line:
+                        elif f'\' VLM {export_prefix} Arrays - Start' in line:
                             # Old arrays: just remove them
                             in_old_arrays = 1
                         else:

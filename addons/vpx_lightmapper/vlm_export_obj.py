@@ -38,8 +38,16 @@ def export_obj(op, context):
         bpy.ops.object.select_all(action='DESELECT')
         obj.select_set(True)
         context.view_layer.objects.active = obj
-        #bpy.ops.export_scene.obj(filepath=bpy.path.abspath(f'{bakepath}{obj.name}.obj'), use_selection=True, use_edges=False, use_materials=False, use_triangles=True, global_scale=scale, axis_forward='-Y', axis_up='-Z')
-        bpy.ops.wm.obj_export(filepath=bpy.path.abspath(f'{bakepath}{obj.name}.obj'), use_selection=True, use_edges=False, use_materials=False, use_triangles=True, global_scale=scale, axis_forward='-Y', axis_up='-Z')
+        bpy.ops.wm.obj_export(
+            filepath=bpy.path.abspath(f'{bakepath}{obj.name}.obj'),
+            export_selected_objects=True, 
+            global_scale=scale, 
+            forward_axis='NEGATIVE_Y', 
+            up_axis='NEGATIVE_Z', 
+            export_materials=False, 
+            export_triangulated_mesh=True
+        )
+
 
     # Duplicate and reset UV of target bake objects (which require a nestmap)
     to_nest = []
@@ -81,8 +89,8 @@ def export_obj(op, context):
             bpy.ops.object.select_all(action='DESELECT')
             dup.select_set(True)
             context.view_layer.objects.active = dup
-            #bpy.ops.export_scene.obj(filepath=bpy.path.abspath(f'{bakepath}{dup.name}.obj'), use_selection=True, use_edges=False, use_materials=False, use_triangles=True, global_scale=scale, axis_forward='-Y', axis_up='-Z')
-            bpy.ops.wm.obj_export(filepath=bpy.path.abspath(f'{bakepath}{dup.name}.obj'), use_selection=True, use_edges=False, use_materials=False, use_triangles=True, global_scale=scale, axis_forward='-Y', axis_up='-Z')
+            bpy.ops.export_scene.obj(filepath=bpy.path.abspath(f'{bakepath}{dup.name}.obj'), use_selection=True, use_edges=False, use_materials=False, use_triangles=True, global_scale=scale, axis_forward='-Y', axis_up='-Z')
+            #bpy.ops.wm.(filepath=bpy.path.abspath(f'{bakepath}{dup.name}.obj'), use_selection=True, use_edges=False, use_materials=False, use_triangles=True, global_scale=scale, axis_forward='-Y', axis_up='-Z')
             # Delete created object
             #bpy.data.objects.remove(dup)
 
