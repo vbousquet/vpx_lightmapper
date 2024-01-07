@@ -1559,7 +1559,7 @@ def read_vpx(op, context, filepath):
                     for p in mesh.polygons:
                         p.use_smooth = True
                     mesh.use_auto_smooth = True
-                    mesh.calc_normals()
+                    #mesh.calc_normals()
                     vlm_utils.apply_split_normals(mesh)
                     uv_layer = mesh.uv_layers.new().data
                     for poly in mesh.polygons:
