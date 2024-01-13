@@ -190,7 +190,7 @@ def needs_update(context, vpx_name, created_objects, x, y, z):
         existing = next((o for o in context.scene.objects if vpx_name in o.vlmSettings.vpx_object.split(';')), None)
         update_location(existing, x, y, z)
         created_objects.append(existing.name)
-    else:
+    elif update_mode != 4:
         logger.info(f'. {["Skipping","Updating","Updating","Updating","Creating"][update_mode]} {vpx_name}')
     return update_mode
     
@@ -346,7 +346,6 @@ def read_vpx(op, context, filepath):
     opt_plastic_translucency = 1.0
     opt_bevel_plastics = context.scene.vlmSettings.bevel_plastics
     opt_detect_insert_overlay = True # Place any flasher containing 'insert' in its name to the overlay collection
-    opt_render_height = vlm_utils.get_render_size(context)[0]
     
     # Purge unlinked datas to avoid reusing them
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -906,8 +905,8 @@ def read_vpx(op, context, filepath):
                 bulb = False
                 image = ''
                 points = []
-                surface = ''
-                skipped = ('LOCK', 'LAYR', 'LANR', 'LVIS', 'STAT', 'TMON', 'TMIN', 'SHAP', 'BPAT', 'BINT', 'TRMS', 'BGLS', 'LIDB', 'FASP', 'FASD', 'STBM', 'SHRB', 'BMVA')
+                surface = '' # FIXME we should use HGHT if available
+                skipped = ('HGHT', 'STTF', 'SHDW', 'FADE', 'VSBL', 'LOCK', 'LAYR', 'LANR', 'LVIS', 'STAT', 'TMON', 'TMIN', 'SHAP', 'BPAT', 'BINT', 'TRMS', 'BGLS', 'LIDB', 'FASP', 'FASD', 'STBM', 'SHRB', 'BMVA')
                 while not item_data.is_eof():
                     item_data.next()
                     if item_data.tag == 'NAME':
@@ -1433,7 +1432,7 @@ def read_vpx(op, context, filepath):
                 position = (0.0, 0.0, 0.0)
                 size = (1.0, 1.0, 1.0)
                 n_sides = 8
-                skipped = ('PIID', 'LOCK', 'LAYR', 'LANR', 'LVIS', 'FALP', 'ADDB', 'PIDB', 'M3DN', 'OSNM', 'DIPT', 'OVPH', 'MAPH', 'EBFC', 'NRMA', 'SCOL', 'TVIS', 'DTXI', 'HTEV', 'THRS', 'ELAS', 'ELFO', 'RFCT', 'RSCT', 'EFUI', 'CORF', 'CLDR', 'ISTO', 'STRE', 'DILI', 'DILB', 'REEN', 'COLR')
+                skipped = ('BMIN', 'BMAX', 'ZMSK', 'LMAP', 'REFL', 'RSTR', 'REFR', 'RTHI', 'PIID', 'LOCK', 'LAYR', 'LANR', 'LVIS', 'FALP', 'ADDB', 'PIDB', 'M3DN', 'OSNM', 'DIPT', 'OVPH', 'MAPH', 'EBFC', 'NRMA', 'SCOL', 'TVIS', 'DTXI', 'HTEV', 'THRS', 'ELAS', 'ELFO', 'RFCT', 'RSCT', 'EFUI', 'CORF', 'CLDR', 'ISTO', 'STRE', 'DILI', 'DILB', 'REEN', 'COLR')
                 while not item_data.is_eof():
                     item_data.next()
                     if item_data.tag == 'NAME':
@@ -1900,7 +1899,8 @@ def read_vpx(op, context, filepath):
 
     # Create a translucency map for the playfield (translucent for inserts, diffuse otherwise)
     if len(pfmesh.materials) > 0 and pfmesh.materials[0] is not None and 'TranslucencyMap' in pfmesh.materials[0].node_tree.nodes:
-        translucency_image = bpy.data.images.new('PFTranslucency', int(opt_render_height/2), opt_render_height, alpha=True)
+        rw, rh = int(context.scene.vlmSettings.render_height * playfield_width / playfield_height),context.scene.vlmSettings.render_height
+        translucency_image = bpy.data.images.new('PFTranslucency', rw, rh, alpha=True)
         translucency_image.source = 'GENERATED' # Defaults to a full translucent playfield
         translucency_image.generated_type = 'BLANK'
         translucency_image.generated_color = (0.0, 0.0, 0.0, 1.0)
@@ -1919,13 +1919,27 @@ def read_vpx(op, context, filepath):
             bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
             view_matrix = mathutils.Matrix.LocRotScale(mathutils.Vector((-1.0, 1.0, 0)), None, mathutils.Vector((2.0 / playfield_width, 2.0 / playfield_height, 0.1)))
             projection_matrix = mathutils.Matrix.OrthoProjection('XY', 4)
-            vlm_utils.render_mask(context, int(opt_render_height / 2), opt_render_height, translucency_image, view_matrix, projection_matrix)
+            vlm_utils.render_mask(context, rw, rh, translucency_image, view_matrix, projection_matrix)
             vlm_collections.restore_all_col_links(cups_initial_collection)
             vlm_collections.delete_collection(tmp_col)
             translucency_image.pack()
             vlm_collections.pop_state(col_initial_state)
         translucency_image.use_fake_user = False
         
+    # If not existing, setup a default camera
+    camera_object = vlm_utils.get_vpx_item(context, 'VPX.Camera', 'Bake', single=True)
+    if not camera_object:
+        camera_object = bpy.data.objects.new('VPX Camera', bpy.data.cameras.new(name='Camera'))
+        camera_object.vlmSettings.vpx_object = 'VPX.Camera'
+        camera_object.vlmSettings.vpx_subpart = 'Bake'
+        camera_object.location.x = playfield_width / 2.0
+        camera_object.location.y = -playfield_height / 2.0
+        camera_object.location.z = 2.5
+        camera_object.data.clip_start = 0.01
+        camera_object.data.clip_end = 1000.0
+        vlm_collections.get_collection(context.scene.collection, HIDDEN_COL).objects.link(camera_object)
+        context.scene.camera = camera_object
+
     # If not yet existing, create a default bake setup
     bakes = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
     lights = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
@@ -1987,8 +2001,8 @@ def read_vpx(op, context, filepath):
     except:
         context.scene.vlmSettings.table_file = filepath
     
-    context.scene.vlmSettings.playfield_width = playfield_width
-    context.scene.vlmSettings.playfield_height = playfield_height
+    context.scene.vlmSettings.playfield_width = (playfield_width / global_scale) * (1.0625 / 50.0) # convert to inches
+    context.scene.vlmSettings.playfield_height = (playfield_height / global_scale) * (1.0625 / 50.0) # convert to inches
 
     # Force a render size update
     vlm_utils.update_render_size(None, context)
