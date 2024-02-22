@@ -753,6 +753,10 @@ def render_all_groups(op, context):
             for node in ti:
                 mat.node_tree.nodes.remove(node)
         bpy.data.images.remove(bake_img)
+
+        if not dup.vlmSettings.hide_from_others:
+            indirect_col.objects.link(dup)
+
         if dup.vlmSettings.bake_mask:
             render_col.objects.unlink(dup.vlmSettings.bake_mask)
         render_col.objects.unlink(dup)
