@@ -56,6 +56,10 @@ if "vlm_occlusion" in locals():
     importlib.reload(vlm_occlusion)
 else:
     from . import vlm_occlusion
+if "vlm_camera" in locals():
+    importlib.reload(vlm_camera)
+else:
+    from . import vlm_camera
 
 logger = vlm_utils.logger
 
@@ -152,6 +156,18 @@ class VLM_Scene_props(PropertyGroup):
     use_pf_translucency_map: BoolProperty(name="Translucency Map", description="Generate a translucency map for inserts", default = True)
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
+    # Camera options
+    camera_inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 15.0, update=vlm_camera.camera_inclination_update)
+    camera_layback: FloatProperty(name="Layback", description="Camera layback", default = 35.0, update=vlm_camera.camera_inclination_update)
+    layback_mode: EnumProperty(
+        items=[
+            ('disable', 'Disable', 'Disable layback', '', 0),
+            ('fit_pf', 'Fit PF', 'Fit camera to playfield.', '', 3)
+        ],
+        name='Layback mode',
+        default='fit_pf', 
+        update=vlm_camera.camera_inclination_update
+    )
     # Baker options
     batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
     batch_shutdown: BoolProperty(name="Shutdown", description="Shutdown computer after batch", default = False)
@@ -748,6 +764,20 @@ class VLM_PT_Importer(bpy.types.Panel):
         layout.prop(vlmProps, "use_pf_translucency_map")
 
 
+class VLM_PT_Camera(bpy.types.Panel):
+    bl_label = "VPX Camera"
+    bl_category = "VLM"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "scene"
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        vlmProps = context.scene.vlmSettings
+        layout.prop(vlmProps, "layback_mode", expand=True)
+        layout.prop(vlmProps, "camera_layback")
+        layout.prop(vlmProps, "camera_inclination")
+
 class VLM_PT_Lightmapper(bpy.types.Panel):
     bl_label = "VPX Light Mapper"
     bl_category = "VLM"
@@ -1206,6 +1236,7 @@ classes = (
     VLM_Collection_props,
     VLM_Object_props,
     VLM_PT_Importer,
+    VLM_PT_Camera,
     VLM_PT_Lightmapper,
     VLM_PT_Col_Props,
     VLM_PT_3D_VPX_Import,

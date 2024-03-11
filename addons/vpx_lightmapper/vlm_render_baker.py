@@ -35,6 +35,8 @@ logger = vlm_utils.logger
 
 def project_point(proj, p):
     p1 = proj @ Vector((p.x, p.y, p.z, 1)) # projected coordinates (range [-1, 1]x[-1, 1])
+    if p1.w<=0:
+        return Vector((1,1))
     return Vector(((1 + p1.x / p1.w) / 2, (1 - p1.y / p1.w) / 2)) # pixel coordinates (range [0, 1]x[0, 1])
 
 
@@ -753,6 +755,10 @@ def render_all_groups(op, context):
             for node in ti:
                 mat.node_tree.nodes.remove(node)
         bpy.data.images.remove(bake_img)
+
+        if not dup.vlmSettings.hide_from_others:
+            indirect_col.objects.link(dup)
+
         if dup.vlmSettings.bake_mask:
             render_col.objects.unlink(dup.vlmSettings.bake_mask)
         render_col.objects.unlink(dup)
