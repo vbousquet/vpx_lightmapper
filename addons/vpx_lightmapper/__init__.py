@@ -156,18 +156,6 @@ class VLM_Scene_props(PropertyGroup):
     use_pf_translucency_map: BoolProperty(name="Translucency Map", description="Generate a translucency map for inserts", default = True)
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
-    # Camera options
-    camera_inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 15.0, update=vlm_camera.camera_inclination_update)
-    camera_layback: FloatProperty(name="Layback", description="Camera layback", default = 35.0, update=vlm_camera.camera_inclination_update)
-    layback_mode: EnumProperty(
-        items=[
-            ('disable', 'Disable', 'Disable layback', '', 0),
-            ('fit_pf', 'Fit PF', 'Fit camera to playfield.', '', 3)
-        ],
-        name='Layback mode',
-        default='fit_pf', 
-        update=vlm_camera.camera_inclination_update
-    )
     # Baker options
     batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
     batch_shutdown: BoolProperty(name="Shutdown", description="Shutdown computer after batch", default = False)
@@ -687,6 +675,26 @@ class VLM_OT_render_blueprint(Operator):
         return {"FINISHED"}
 
 
+class VLM_OT_fit_camera(Operator):
+    bl_idname = "vlm.fitcamera"
+    bl_label = "Fit Camera"
+    bl_description = "Fit camera to parts to be baked"
+    bl_options = {"REGISTER", "UNDO"}
+    inclination: FloatProperty(name="Inclination", description="Camera inclination", default = 15.0)
+    
+    @classmethod
+    def poll(cls, context):
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+        if not context.scene.camera or not bake_col: return False
+        return True
+
+    def execute(self, context):
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+        context.scene.render.pixel_aspect_x = 1
+        vlm_camera.fit_camera(context, context.scene.camera, self.inclination, 0.0, bake_col)
+        return {"FINISHED"}
+
+
 class VLM_OT_load_render_images(Operator):
     bl_idname = "vlm.load_render_images_operator"
     bl_label = "Load/Unload Renders"
@@ -763,20 +771,6 @@ class VLM_PT_Importer(bpy.types.Panel):
         layout.prop(vlmProps, "insert_intensity")
         layout.prop(vlmProps, "use_pf_translucency_map")
 
-
-class VLM_PT_Camera(bpy.types.Panel):
-    bl_label = "VPX Camera"
-    bl_category = "VLM"
-    bl_space_type = 'PROPERTIES'
-    bl_region_type = 'WINDOW'
-    bl_context = "scene"
-    def draw(self, context):
-        layout = self.layout
-        layout.use_property_split = True
-        vlmProps = context.scene.vlmSettings
-        layout.prop(vlmProps, "layback_mode", expand=True)
-        layout.prop(vlmProps, "camera_layback")
-        layout.prop(vlmProps, "camera_inclination")
 
 class VLM_PT_Lightmapper(bpy.types.Panel):
     bl_label = "VPX Light Mapper"
@@ -1145,6 +1139,8 @@ class VLM_PT_3D_Tools(bpy.types.Panel):
         layout.operator(VLM_OT_render_blueprint.bl_idname)
         layout.separator()
         layout.operator(VLM_OT_export_obj.bl_idname, icon='EXPORT')
+        layout.separator()
+        layout.operator(VLM_OT_fit_camera.bl_idname, icon='CAMERA_DATA')
 
 
 class VLM_PT_3D_warning_panel(bpy.types.Panel):
@@ -1236,7 +1232,6 @@ classes = (
     VLM_Collection_props,
     VLM_Object_props,
     VLM_PT_Importer,
-    VLM_PT_Camera,
     VLM_PT_Lightmapper,
     VLM_PT_Col_Props,
     VLM_PT_3D_VPX_Import,
@@ -1264,6 +1259,7 @@ classes = (
     VLM_OT_apply_aoi,
     VLM_OT_table_uv,
     VLM_OT_render_blueprint,
+    VLM_OT_fit_camera,
     VLM_OT_load_render_images,
     VLM_OT_export_obj,
     VLM_OT_export_vpx,

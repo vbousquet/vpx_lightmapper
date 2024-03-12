@@ -28,42 +28,11 @@ from . import vlm_utils
 from . import vlm_collections
 
 
-def camera_inclination_update(op, context):
+def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col):
     """Update bake camera position based on its inclination, in order to fit the following constraints:
     - look at the center of the playfield
     - view all baked objects
-    - satisfy the target texture size on the vertical axis (height of the render)
-    
-    There are 3 way to take layback in account:
-    - disable: no layback, just normal fitting.
-    - deform: deform geometry (like in VPX) and perform normal fitting on the deformed geometry.
-    - camera: take layback in account in camera orientation (for correct shading and face visibility), 
-    and overscale image on the y axis (for bake texture density) corresponding to what it would have been
-    if we have deformed the geometry (like in VPX)
     """
-    camera_object = context.scene.camera
-    bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
-    if not camera_object or not bake_col:
-        print("Warning: Missing needed elements to fit the camera (camera or bake collection)")
-        return
-    
-    print(f'Fitting camera to bake objects')
-    
-    # Adjust the camera
-    context.scene.render.pixel_aspect_x = 1
-    layback_mode = context.scene.vlmSettings.layback_mode
-    if layback_mode == 'disable':
-        camera_inclination = context.scene.vlmSettings.camera_inclination
-        camera_layback = 0
-        fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col)
-    elif layback_mode == 'fit_pf':
-        # Compute deform camera parameter (aspect ratio and resulting render width) using an adjusted camera inclination instead
-        camera_inclination = context.scene.vlmSettings.camera_inclination +  context.scene.vlmSettings.camera_layback / 2
-        camera_layback = 0
-        fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col)
-
-
-def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_col):
     camera_fov = camera_object.data.angle
     playfield_left = 0.0
     playfield_top = 0.0 
@@ -111,7 +80,6 @@ def fit_camera(context, camera_object, camera_inclination, camera_layback, bake_
         render_size = vlm_utils.get_render_size(context)
         context.scene.render.resolution_x = int(render_size[1] * aspect_ratio)
         context.scene.render.resolution_y = render_size[1]
-        
     # Center on render output
     camera_object.data.shift_x = 0.25 * (max_x + min_x)
     camera_object.data.shift_y = 0.25 * (max_y + min_y)
