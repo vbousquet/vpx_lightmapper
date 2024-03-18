@@ -215,8 +215,8 @@ def create_bake_meshes(op, context):
                             logger.info(f'. ERROR {obj_name} has an invalid modifier which was not applied')
                 dup.modifiers.clear()
 
-            # Remove custom normals since they will be lost during mesh optimization
-            if optimize_mesh:
+            # FIXME Remove for Blender 4.1
+            if bpy.app.version < (4, 1, 0) and optimize_mesh: # Remove custom normals since they will be lost during mesh optimization
                 dup.data.free_normals_split()
                 dup.data.use_auto_smooth = False # Don't use custom normals since we removed them
                 with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -225,7 +225,8 @@ def create_bake_meshes(op, context):
 
             # Save normals
             dup.data.validate()
-            dup.data.calc_normals_split() # compute loop normal (would 0,0,0 otherwise since we free them above)
+            if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+                dup.data.calc_normals_split() # compute loop normal (would 0,0,0 otherwise since we free them above)
             
             # Switch material to baked ones (needs to be done after applying modifiers which may create material slots)
             for poly in dup.data.polygons:
@@ -461,7 +462,8 @@ def create_bake_meshes(op, context):
             prev_nestmap = bpy.data.objects[obj_name].vlmSettings.bake_nestmap if bpy.data.objects.get(obj_name) else -1
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             # Remove face shading (lightmap are not made to be shaded and the pruning process breaks the shading)
-            bake_instance.data.free_normals_split()
+            if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+                bake_instance.data.free_normals_split()
             bake_instance.data.use_auto_smooth = False # Don't use custom normals since we removed them
             with context.temp_override(active_object=bake_instance, selected_objects=[bake_instance]):
                 bpy.ops.object.shade_flat()

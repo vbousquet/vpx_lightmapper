@@ -55,6 +55,8 @@ def render_nestmaps(op, context):
         has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None)  is not None
         # VPX only supports opaque HDR therefore we pack all non lightmaps as LDR (luckily base bake is usually LDR, and we don't really need this for lightmaps which are RGB only)
         if not obj.vlmSettings.is_lightmap or obj.vlmSettings.bake_hdr_range <= 1.0:
+            if obj.vlmSettings.bake_hdr_range > 1.0:
+                logger.error('ERROR: Object {obj.name} is packed to an LDR nestmap while it has an HDR range of {obj.vlmSettings.bake_hdr_range}. Render will be wrongly clamped. You need to reduce bake lighting strength to avoid this.')
             if has_normalmap:
                 to_nest_ldr_nm.append(obj)
             else:

@@ -368,7 +368,8 @@ def export_vpx(op, context):
         col = vlm_collections.get_collection(bake_col, obj.vlmSettings.bake_collections, create=False)
 
         obj.data.validate()
-        obj.data.calc_normals_split() # compute loop normal (would be 0,0,0 otherwise)
+        if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+            obj.data.calc_normals_split() # compute loop normal (would be 0,0,0 otherwise)
         uv_layer_nested = obj.data.uv_layers.get("UVMap Nested")
         if not uv_layer_nested:
             logger.info(f'. Missing nested uv map for {obj.name}')
