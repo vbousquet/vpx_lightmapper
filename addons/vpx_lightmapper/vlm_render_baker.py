@@ -737,6 +737,7 @@ def render_all_groups(op, context):
                     remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
                     msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
                 logger.info(msg)
+                if bake_info_group and 'IsNormalMap' in bake_info_group.nodes: bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 1.0
                 scene.render.filepath = render_path
                 scene.render.image_settings.file_format = 'OPEN_EXR'
                 scene.render.image_settings.color_mode = 'RGB'
@@ -748,6 +749,7 @@ def render_all_groups(op, context):
                     bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
                 logger.info('\n')
                 n_render_performed += 1
+                if bake_info_group and 'IsNormalMap' in bake_info_group.nodes: bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 0.0
             else:
                 logger.info(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
