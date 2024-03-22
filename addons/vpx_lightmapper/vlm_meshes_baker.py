@@ -457,6 +457,7 @@ def create_bake_meshes(op, context):
             obj_name = f'LM.{light_name}.{bake_name}'
             prev_nestmap = -1
             if bpy.data.objects.get(obj_name): # Expert mode: if regenerating meshes with previous nestmapping result, just reuse them
+                logger.info(f'\n > Reusing existing mesh for {obj_name}')
                 prev_nestmap = bpy.data.objects[obj_name].vlmSettings.bake_nestmap
                 bpy.data.objects.remove(bpy.data.objects[obj_name], do_unlink=True)
             prev_nestmap = bpy.data.objects[obj_name].vlmSettings.bake_nestmap if bpy.data.objects.get(obj_name) else -1
@@ -464,7 +465,7 @@ def create_bake_meshes(op, context):
             # Remove face shading (lightmap are not made to be shaded and the pruning process breaks the shading)
             if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
                 bake_instance.data.free_normals_split()
-            bake_instance.data.use_auto_smooth = False # Don't use custom normals since we removed them
+                bake_instance.data.use_auto_smooth = False # Don't use custom normals since we removed them
             with context.temp_override(active_object=bake_instance, selected_objects=[bake_instance]):
                 bpy.ops.object.shade_flat()
             n_faces = len(bake_instance.data.polygons)
