@@ -358,6 +358,14 @@ class VLM_OT_compute_render_groups(Operator):
         if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
         if not context.scene.camera: return False
         return True
+
+    @classmethod
+    def description(cls, context, properties):
+        desc = "Evaluate render groups"
+        if context.blend_data.filepath == '': desc = desc + "\n\nFile must be saved first"
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): desc = desc + "\n\nVLM.Bake must be populated first"
+        if not context.scene.camera: desc = desc + "\n\nAn active camera must be defined first"
+        return desc
         
     def execute(self, context):
         return vlm_utils.run_with_logger(lambda : vlm_group_baker.compute_render_groups(self, context))
@@ -379,6 +387,19 @@ class VLM_OT_render_all_groups(Operator):
         for obj in bake_col.all_objects:
             if not obj.vlmSettings.indirect_only and not obj.vlmSettings.use_bake and obj.vlmSettings.render_group < 0: return False
         return True
+
+    @classmethod
+    def description(cls, context, properties):
+        desc = "Render all groups for all lighting situation"
+        if context.blend_data.filepath == '': desc = desc + "\n\nFile must be saved first"
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+        if not bake_col:
+            desc = desc + "\n\nVLM.Bake must be populated first"
+        elif next((obj for obj in bake_col.all_objects if not obj.vlmSettings.indirect_only and not obj.vlmSettings.use_bake and obj.vlmSettings.render_group < 0), None) is not None:
+            desc = desc + "\n\nRender groups must be evaluated first"
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False): desc = desc + "\n\nVLM.Lights must be populated first"
+        if not context.scene.camera: desc = desc + "\n\nAn active camera must be defined first"
+        return desc
         
     def execute(self, context):
         return vlm_utils.run_with_logger(lambda : vlm_render_baker.render_all_groups(self, context))
@@ -397,6 +418,15 @@ class VLM_OT_create_bake_meshes(Operator):
         if not vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False): return False
         if not context.scene.camera: return False
         return True
+
+    @classmethod
+    def description(cls, context, properties):
+        desc = "Create all bake meshes for all lighting situation"
+        if context.blend_data.filepath == '': desc = desc + "\n\nFile must be saved first"
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): desc = desc + "\n\nVLM.Bake must be populated first"
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False): desc = desc + "\n\nVLM.Lights must be populated first"
+        if not context.scene.camera: desc = desc + "\n\nAn active camera must be defined first"
+        return desc
         
     def execute(self, context):
         return vlm_utils.run_with_logger(lambda : vlm_meshes_baker.create_bake_meshes(self, context))
@@ -413,8 +443,50 @@ class VLM_OT_render_nestmaps(Operator):
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         return result_col is not None and len(result_col.all_objects) > 0
 
+    @classmethod
+    def description(cls, context, properties):
+        desc = "Compute and render all nestmaps"
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        if result_col is None or len(result_col.all_objects) == 0:
+            desc = desc + "\n\nYou must generate the baked meshes first"
+        return desc
+
     def execute(self, context):
         return vlm_utils.run_with_logger(lambda : vlm_nestmap_baker.render_nestmaps(self, context))
+
+
+class VLM_OT_export_vpx(Operator):
+    bl_idname = "vlm.export_vpx_operator"
+    bl_label = "5. Export VPX"
+    bl_description = "Export to an updated VPX table file"
+    bl_options = {"REGISTER"}
+    
+    @classmethod
+    def poll(cls, context):
+        if context.blend_data.filepath == '': return False
+        if not os.path.isfile(bpy.path.abspath(context.scene.vlmSettings.table_file)): return False
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        if not result_col: return False
+        for obj in result_col.all_objects:
+            if obj.vlmSettings.bake_nestmap < 0: return False
+        return True
+
+    @classmethod
+    def description(cls, context, properties):
+        desc = "Export to an updated VPX table file"
+        if context.blend_data.filepath == '': desc = desc + "\n\nFile must be saved first"
+        if not os.path.isfile(bpy.path.abspath(context.scene.vlmSettings.table_file)): desc = desc + "\n\nVPX template file must be defined first"
+        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): desc = desc + "\n\nVLM.Bake must be populated first"
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        if not result_col:
+            desc = desc + "\n\nBaked meshes must be generated first"
+        elif next((obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap < 0), None) is not None:
+            desc = desc + "\n\nNestmaps must be generated first"
+        return desc
+        
+    def execute(self, context):
+        return vlm_utils.run_with_logger(lambda : vlm_export.export_vpx(self, context))
 
 
 class VLM_OT_batch_bake(Operator):
@@ -450,27 +522,6 @@ class VLM_OT_batch_bake(Operator):
         bpy.ops.wm.save_mainfile()
         vlm_utils.run_with_logger(lambda : logger.info(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}"))
         return self.do_shutdown(context, result)
-
-
-class VLM_OT_export_vpx(Operator):
-    bl_idname = "vlm.export_vpx_operator"
-    bl_label = "5. Export VPX"
-    bl_description = "Export to an updated VPX table file"
-    bl_options = {"REGISTER"}
-    
-    @classmethod
-    def poll(cls, context):
-        if context.blend_data.filepath == '': return False
-        if not os.path.isfile(bpy.path.abspath(context.scene.vlmSettings.table_file)): return False
-        if not vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False): return False
-        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
-        if not result_col: return False
-        for obj in result_col.all_objects:
-            if obj.vlmSettings.bake_nestmap < 0: return False
-        return True
-
-    def execute(self, context):
-        return vlm_utils.run_with_logger(lambda : vlm_export.export_vpx(self, context))
 
 
 class VLM_OT_export_obj(Operator):
