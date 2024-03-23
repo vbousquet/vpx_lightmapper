@@ -276,6 +276,17 @@ class VLM_OT_new_from_vpx(Operator, ImportHelper):
     filename_ext = ".vpx"
     filter_glob: StringProperty(default="*.vpx", options={'HIDDEN'}, maxlen=255,)
     
+    @classmethod
+    def poll(cls, context):
+        if context.blend_data.filepath == '': return False
+        return True
+
+    @classmethod
+    def description(cls, context, properties):
+        desc = "Start a new VPX lightmap project"
+        if context.blend_data.filepath == '': desc = desc + "\n\nFile must be saved first"
+        return desc
+        
     def execute(self, context):
         context.scene.render.engine = 'CYCLES'
         context.scene.render.film_transparent = True
