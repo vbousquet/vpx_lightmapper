@@ -43,6 +43,7 @@ def render_nestmaps(op, context):
     to_nest_hdr = []
     to_nest_ldr_nm = []
     to_nest_hdr_nm = []
+    bakemap_hdr_range = 0.0
     for obj in to_nest:
         uvmap = next((uv for uv in obj.data.uv_layers if uv.name == 'UVMap'), None)
         if uvmap is None:
@@ -55,8 +56,8 @@ def render_nestmaps(op, context):
         has_normalmap = next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None)  is not None
         # VPX only supports opaque HDR therefore we pack all non lightmaps as LDR (luckily base bake is usually LDR, and we don't really need this for lightmaps which are RGB only)
         if not obj.vlmSettings.is_lightmap or obj.vlmSettings.bake_hdr_range <= 1.0:
-            if obj.vlmSettings.bake_hdr_range > 1.0:
-                logger.error('ERROR: Object {obj.name} is packed to an LDR nestmap while it has an HDR range of {obj.vlmSettings.bake_hdr_range}. Render will be wrongly clamped. You need to reduce bake lighting strength to avoid this.')
+            if not obj.vlmSettings.is_lightmap and obj.vlmSettings.bake_hdr_range > bakemap_hdr_range:
+                bakemap_hdr_range = obj.vlmSettings.bake_hdr_range
             if has_normalmap:
                 to_nest_ldr_nm.append(obj)
             else:
@@ -72,6 +73,10 @@ def render_nestmaps(op, context):
     max_tex_size = min(8192, int(context.scene.vlmSettings.tex_size))
     if len(to_nest_ldr) > 0:
         logger.info('\nNesting all LDR parts')
+        logger.info(f'> Bakemap HDR range: {bakemap_hdr_range} (render lighting will be rescaled accordingly)')
+        for obj in to_nest_ldr:
+            if not obj.vlmSettings.is_lightmap:
+                obj.vlmSettings.bake_hdr_range = bakemap_hdr_range
         n_ldr_nestmaps, splitted_objects = vlm_nest.nest(context, to_nest_ldr, 'UVMap', 'UVMap Nested', max_tex_size, max_tex_size, 'Nestmap', n_nestmaps)
         n_nestmaps += n_ldr_nestmaps
     if len(to_nest_hdr) > 0:

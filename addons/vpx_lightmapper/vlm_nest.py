@@ -517,11 +517,13 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
         uniform sampler2D render;
         uniform vec2 src_size;
         uniform int padding;
+        uniform float hdr_scale;
         void main() {
             if (uv.x < 0.0 || uv.x >= 1.0 || uv.y < 0.0 || uv.y >= 1.0)
                 FragColor = vec4(0.0);
             else
             {
+                vec4 rescale = vec4(hdr_scale, hdr_scale, hdr_scale, 1.0);
                 vec2 min_uv = vec2(0.5/src_size);
                 vec2 max_uv = vec2(1.0 - 0.5/src_size);
                 float seam_sum = 0.0;
@@ -547,7 +549,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                         }
                         else
                         { // Only accumulate outside of border (mask < 1.0) since it would contain border fade as well mixed with part transparency
-                            padding_accum += texture(render, uv_ofs) * dist_factor;
+                            padding_accum += texture(render, uv_ofs) * rescale * dist_factor;
                             padding_sum += dist_factor;
                         }
                     }
@@ -561,7 +563,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                     float inside = smoothstep(0.0, 2.0, sqrt(distance_to_outside)); // Fixed 2 pixel border/interior fading
                     seam = seam / seam_sum;
                     seam.a = step(0.001, seam.a); // binary island mask
-                    FragColor = seam * mix(padding_accum / padding_sum, texture(render, uv), inside);
+                    FragColor = seam * mix(padding_accum / padding_sum, texture(render, uv) * rescale, inside);
                     // Clamp to avoid overflows in VPX shaders
                     FragColor = clamp(FragColor, vec4(0.), vec4(1000., 1000., 1000., 1000.));
                }
@@ -599,7 +601,10 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
     with_normalmap = False
     for obj_name in sorted(list({obj.name for (obj, _, _, _) in selection}), key=lambda x:bpy.data.objects[x].vlmSettings.bake_lighting):
         obj = bpy.data.objects[obj_name]
-        logger.info(f'. Copying renders (HDR range={obj.vlmSettings.bake_hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders')
+        msg = ''
+        if not obj.vlmSettings.is_lightmap and obj.vlmSettings.bake_hdr_range > 1.0:
+            msg = f'. WARNING: Darkening to avoid LDR overflow (darkening factor is HDR range)'
+        logger.info(f'. Copying renders (HDR range={obj.vlmSettings.bake_hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders{msg}')
 
         # Render to the packed nest map
         for island in islands:
@@ -695,6 +700,10 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
             if not island_render is None:
                 with offscreen_renders[n].bind():
                     render_shader.bind()
+                    if not obj.vlmSettings.is_lightmap and obj.vlmSettings.bake_hdr_range > 1.0:
+                        render_shader.uniform_float("hdr_scale", 1.0 / obj.vlmSettings.bake_hdr_range)
+                    else:
+                        render_shader.uniform_float("hdr_scale", 1.0)
                     render_shader.uniform_float("src_size", (src_w, src_h))
                     render_shader.uniform_float("dst_size", (target_w, target_h))
                     render_shader.uniform_float("ref_width", mask_w)
@@ -718,6 +727,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                 with_normalmap = True
                 with offscreen_normalmaps[n].bind():
                     render_shader.bind()
+                    render_shader.uniform_float("hdr_scale", 1.0)
                     render_shader.uniform_float("src_size", (src_w, src_h))
                     render_shader.uniform_float("dst_size", (target_w, target_h))
                     render_shader.uniform_float("ref_width", mask_w)

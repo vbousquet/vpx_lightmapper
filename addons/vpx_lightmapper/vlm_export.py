@@ -623,7 +623,7 @@ def export_vpx(op, context):
             writer.close()
             dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
             dst_stream.Write(writer.get_data())
-            logger.info(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
+            logger.info(f'. Adding NestNormalMap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
             n_images += 1
         nestmap_index += 1
 
