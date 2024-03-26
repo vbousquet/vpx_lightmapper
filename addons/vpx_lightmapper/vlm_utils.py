@@ -276,14 +276,15 @@ def pop_render_settings(state):
 
 def apply_split_normals(me):
 	# Write the blender internal smoothing as custom split vertex normals
-	me.calc_normals_split()
-	cl_nors = array.array('f', [0.0] * (len(me.loops) * 3))
-	me.loops.foreach_get('normal', cl_nors)
-	me.polygons.foreach_set('use_smooth', [False] * len(me.polygons))
-	nors_split_set = tuple(zip(*(iter(cl_nors),) * 3))
-	me.normals_split_custom_set(nors_split_set)
-	# Enable the use custom split normals data
-	me.use_auto_smooth = True
+    if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+        me.calc_normals_split()
+        cl_nors = array.array('f', [0.0] * (len(me.loops) * 3))
+        me.loops.foreach_get('normal', cl_nors)
+        me.polygons.foreach_set('use_smooth', [False] * len(me.polygons))
+        nors_split_set = tuple(zip(*(iter(cl_nors),) * 3))
+        me.normals_split_custom_set(nors_split_set)
+        # Enable the use custom split normals data
+        me.use_auto_smooth = True
 
 
 def get_bakepath(context, type='ROOT'):

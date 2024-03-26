@@ -659,7 +659,8 @@ def read_vpx(op, context, filepath):
                         else:
                             edge.bevel_weight = 0.0
                 # Compute split normals, trying to get the right smoothing
-                mesh.calc_normals_split()
+                if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+                    mesh.calc_normals_split()
                 normals = [(0,0,0) for i in mesh.loops]
                 epsilon = 0.00001 * global_scale
                 uv_layer = mesh.uv_layers.active.data
@@ -703,8 +704,9 @@ def read_vpx(op, context, filepath):
                                     n = mathutils.Vector((scale * poly.normal[0], scale * poly.normal[1], n[2])).normalized()
                                     break
                         normals[loop_index] = n
-                mesh.use_auto_smooth = True
-                mesh.normals_split_custom_set(normals)
+                if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+                    mesh.use_auto_smooth = True
+                    mesh.normals_split_custom_set(normals)
                 n_points = len(points)
                 # For wall height of 0, uv_pt2[1] == uv_pt1[1], resulting in degenerate UV generation
                 if uv_pt2[1] == uv_pt1[1]: 
@@ -1007,8 +1009,9 @@ def read_vpx(op, context, filepath):
                     obj = context.view_layer.objects.active
                     scene_col.objects.unlink(obj)
                     mesh = obj.data
-                    mesh.use_auto_smooth = True
-                    mesh.normals_split_custom_set([(0,0,1) for i in mesh.loops])
+                    if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+                        mesh.use_auto_smooth = True
+                        mesh.normals_split_custom_set([(0,0,1) for i in mesh.loops])
                     uv_layer = mesh.uv_layers.active.data
                     for poly in mesh.polygons:
                         for loop_index in poly.loop_indices:
@@ -1539,8 +1542,9 @@ def read_vpx(op, context, filepath):
                     mesh.from_pydata(vertices, [], faces)
                     mesh.flip_normals()
                     mesh.validate()
-                    mesh.use_auto_smooth = True
-                    mesh.normals_split_custom_set_from_vertices(normals)
+                    if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+                        mesh.use_auto_smooth = True
+                        mesh.normals_split_custom_set_from_vertices(normals)
                     uv_layer = mesh.uv_layers.new()
                     for i in range(len(mesh.loops)):
                         uv_layer.data[i].uv = uvs[mesh.loops[i].vertex_index]
@@ -1557,7 +1561,8 @@ def read_vpx(op, context, filepath):
                     bm.free()
                     for p in mesh.polygons:
                         p.use_smooth = True
-                    mesh.use_auto_smooth = True
+                    if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+                        mesh.use_auto_smooth = True
                     #mesh.calc_normals()
                     vlm_utils.apply_split_normals(mesh)
                     uv_layer = mesh.uv_layers.new().data
@@ -1648,8 +1653,9 @@ def read_vpx(op, context, filepath):
                 verts = [(pt[0] * global_scale - half_x, -pt[1] * global_scale - half_y, 0.0) for pt in points]
                 faces = [tuple([idx for idx in range(len(points))])]
                 mesh.from_pydata(verts, [], faces)
-                mesh.use_auto_smooth = True
-                mesh.normals_split_custom_set([(0,0,1) for i in mesh.loops])
+                if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+                    mesh.use_auto_smooth = True
+                    mesh.normals_split_custom_set([(0,0,1) for i in mesh.loops])
                 uv_layer = mesh.uv_layers.new().data
                 for poly in mesh.polygons:
                     for loop_index in poly.loop_indices:
@@ -1870,8 +1876,9 @@ def read_vpx(op, context, filepath):
         vert = [(playfield_left, -playfield_bottom, 0.0), (playfield_right, -playfield_bottom, 0.0), (playfield_left, -playfield_top, 0.0), (playfield_right, -playfield_top, 0.0)]
         pfmesh = bpy.data.meshes.new("VPX.Mesh.Playfield")
         pfmesh.from_pydata(vert, [], [(0, 1, 3, 2)])
-        pfmesh.use_auto_smooth = True
-        pfmesh.normals_split_custom_set([(0,0,1) for i in pfmesh.loops])
+        if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
+            pfmesh.use_auto_smooth = True
+            pfmesh.normals_split_custom_set([(0,0,1) for i in pfmesh.loops])
         uv_layer = pfmesh.uv_layers.new()
     _, playfield_obj = update_object(context, 'Playfield', '', pfmesh, STATIC_COL)
     playfield_obj.location = (0, 0, -0.01 * global_scale) # Move very slightly back to avoid exact matching with bottom of wall that would led to a 'hold out' shading
