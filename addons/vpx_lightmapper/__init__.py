@@ -157,6 +157,7 @@ class VLM_Scene_props(PropertyGroup):
     process_plastics: BoolProperty(name="Convert plastics", description="Detect plastics and converts them", default = True)
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
     # Baker options
+    force_open_console: BoolProperty(name="Console on bake", description="Force open a console on bake if not already present", default = True)
     batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
     batch_shutdown: BoolProperty(name="Shutdown", description="Shutdown computer after batch", default = False)
     render_height: IntProperty(
@@ -512,7 +513,33 @@ class VLM_OT_batch_bake(Operator):
             os.system("shutdown /s /t 1")
         return result
     
+    def spawn_console(self):
+        # This will only spawn a console window if one does not already exist.
+        try:
+            import win32gui, bpy
+        except:
+            #ghetto guard for windows use only, as it will need completely different methods to query windows on other platforms
+            return
+            
+        def get_window_titles():
+            ret = []
+            def winEnumHandler(hwnd, ctx):
+                if win32gui.IsWindowVisible(hwnd):
+                    txt = win32gui.GetWindowText(hwnd)
+                    if txt:
+                        ret.append((hwnd,txt))
+            win32gui.EnumWindows(winEnumHandler, None)
+            return ret
+
+        all_titles = get_window_titles()
+        window_ends = lambda title: [(hwnd,full_title) for (hwnd,full_title) in all_titles if full_title.endswith(title)]
+        all_matching_windows = window_ends('blender.exe') # a slightly broad assumption that only the console window ends with blender.exr in the title but works
+        if len(all_matching_windows) == 0:
+            bpy.ops.wm.console_toggle()
+            
     def execute(self, context):
+        if context.scene.vlmSettings.force_open_console:
+            self.spawn_console()
         start_time = time.time()
         vlm_utils.run_with_logger(lambda : logger.info(f"\nStarting complete bake batch..."))
         if context.scene.vlmSettings.batch_inc_group:
@@ -879,6 +906,7 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         row.use_property_split = False
         row.alignment = 'CENTER'
         row.label(text='Batch:')
+        row.prop(vlmProps, "force_open_console", expand=True)        
         row.prop(vlmProps, "batch_inc_group", expand=True)
         row.prop(vlmProps, "batch_shutdown", expand=True)
 
