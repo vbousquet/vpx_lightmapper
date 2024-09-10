@@ -313,9 +313,8 @@ def render_all_groups(op, context):
     n_lighting_situations = len(light_scenarios)
     n_render_performed = n_skipped = n_existing = 0
     n_bake_objects = len([obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake])
-    n_bake_normalmaps = len([obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake and obj.vlmSettings.bake_normalmap])
-    n_total_render = (n_render_groups + n_bake_objects) * n_lighting_situations + n_bake_normalmaps
-    logger.info(f'\nEvaluating {n_total_render} renders ({n_render_groups} render groups and {n_bake_objects} bakes for {n_lighting_situations} lighting situations, {n_bake_normalmaps} normal maps)')
+    n_total_render = (n_render_groups + n_bake_objects) * n_lighting_situations + (n_bake_objects*2)
+    logger.info(f'\nEvaluating {n_total_render} renders ({n_render_groups} render groups and {n_bake_objects} bakes for {n_lighting_situations} lighting situations, {n_bake_objects*2} normal & albedo maps)')
     
     # Perform the actual rendering of all the passes
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 1.0
@@ -578,7 +577,38 @@ def render_all_groups(op, context):
     # objects that will need traditional baking. This is especially true for movable parts like spinners, flipper bats,...
     # These objects will be processed with traditional bake which requires them to be UV unwrapped
 
-    # Create temp render scene for rendering object masks & influence map
+    # Create temp render scene for rendering object masks & influence map & denoising
+
+    temp_denoise_scene = bpy.data.scenes.new(name="VLM.Tmp Denoise Scene")
+    temp_denoise_scene.use_nodes = True
+    temp_denoise_scene.render.use_compositing = True
+    denoise_nodetree = temp_denoise_scene.node_tree
+    denoise_nodes = denoise_nodetree.nodes
+    denoise_links = denoise_nodetree.links
+    denoise_nodes.clear()
+    denoise_image_node = denoise_nodes.new(type="CompositorNodeImage")
+    denoise_image_node.location = (0, 0)
+    denoise_normal_map_node = denoise_nodes.new(type="CompositorNodeImage")
+    denoise_normal_map_node.location = (0, 300)
+    denoise_albedo_map_node = denoise_nodes.new(type="CompositorNodeImage")
+    denoise_albedo_map_node.location = (0, 600)
+    denoise_node = denoise_nodes.new(type="CompositorNodeDenoise")
+    denoise_node.location = (300, 0)
+    denoise_viewer_node = denoise_nodes.new(type="CompositorNodeViewer")
+    denoise_viewer_node.location = (600, 0)
+    denoise_file_output_node = denoise_nodes.new(type="CompositorNodeOutputFile")
+    denoise_file_output_node.location = (600, -300)
+    denoise_file_output_node.base_path = bpy.path.abspath("")
+    denoise_file_output_node.format.file_format = 'OPEN_EXR'
+    denoise_file_output_node.format.exr_codec = 'ZIP'
+    denoise_file_output_node.format.color_depth = '16'
+    denoise_links.new(denoise_image_node.outputs['Image'], denoise_node.inputs['Image'])
+    denoise_links.new(denoise_node.outputs['Image'], denoise_viewer_node.inputs['Image'])
+    denoise_links.new(denoise_node.outputs['Image'], denoise_file_output_node.inputs[0])
+    denoise_links.new(denoise_normal_map_node.outputs['Image'], denoise_node.inputs['Normal'])
+    denoise_links.new(denoise_albedo_map_node.outputs['Image'], denoise_node.inputs['Albedo'])
+    
+
     opt_mask_size = 1024 # Height used for the object masks
     opt_mask_pad = math.ceil(opt_mask_size * 2 / opt_render_height)
     mask_scene = bpy.data.scenes.new('VLM.Tmp Mask Scene')
@@ -645,20 +675,120 @@ def render_all_groups(op, context):
         
         # Bake object for each lighting scenario
         render_ratio = context.scene.vlmSettings.render_ratio / 100.0
-        img_nodes = []
-        bake_img = bpy.data.images.new('Bake', int(dup.vlmSettings.bake_width * render_ratio), int(dup.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
+        bake_img = bpy.data.images.get('Bake')
+        if not bake_img:
+            bake_img = bpy.data.images.new('Bake', int(dup.vlmSettings.bake_width * render_ratio), int(dup.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
+        bake_img_albedo = bpy.data.images.get('Bake_Albedo')
+        if not bake_img_albedo:
+            bake_img_albedo = bpy.data.images.new('Bake_Albedo', int(dup.vlmSettings.bake_width * render_ratio), int(dup.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
+        bake_img_normal = bpy.data.images.get('Bake_Normal')
+        if not bake_img_normal:
+            bake_img_normal = bpy.data.images.new('Bake_Normal', int(dup.vlmSettings.bake_width * render_ratio), int(dup.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
         mask_scene.render.resolution_x = opt_render_width
         mask_scene.render.resolution_y = opt_render_height
         for mat in dup.data.materials:
-            node_uvmap = mat.node_tree.nodes.new(type='ShaderNodeAttribute')
-            node_uvmap. attribute_name = 'UVMap'
-            ti = mat.node_tree.nodes.new("ShaderNodeTexImage")
+            node_uvmap = mat.node_tree.nodes.get("VLM_UVMapNode")
+            if not node_uvmap:
+                node_uvmap = mat.node_tree.nodes.new(type='ShaderNodeAttribute')
+                node_uvmap.attribute_name = 'UVMap'
+                node_uvmap.name = "VLM_UVMapNode"
+
+            ti = mat.node_tree.nodes.get("VLM_BakeImage")
+            if not ti:
+                ti = mat.node_tree.nodes.new("ShaderNodeTexImage")
+                ti.name = "VLM_BakeImage"
+
+            ti_albedo = mat.node_tree.nodes.get("VLM_AlbedoImage")
+            if not ti_albedo:
+                ti_albedo = mat.node_tree.nodes.new("ShaderNodeTexImage")
+                ti_albedo.name = "VLM_AlbedoImage" 
+
+            ti_normal = mat.node_tree.nodes.get("VLM_NormalImage")
+            if not ti_normal:
+                ti_normal = mat.node_tree.nodes.new("ShaderNodeTexImage")
+                ti_normal.name = "VLM_NormalImage"
+
             ti.image = bake_img
-            mat.node_tree.links.new(node_uvmap.outputs[0], ti.inputs[0])
-            mat.node_tree.nodes.active = ti
-            img_nodes.append((ti, node_uvmap))
-        dup.data.uv_layers['UVMap'].active = True 
+            ti_albedo.image = bake_img_albedo
+            ti_normal.image = bake_img_normal
+
+            if not any(link.to_node == ti for link in node_uvmap.outputs[0].links):
+                mat.node_tree.links.new(node_uvmap.outputs[0], ti.inputs[0])
             
+            if not any(link.to_node == ti_albedo for link in node_uvmap.outputs[0].links):
+                mat.node_tree.links.new(node_uvmap.outputs[0], ti_albedo.inputs[0])
+            
+            if not any(link.to_node == ti_normal for link in node_uvmap.outputs[0].links):
+                mat.node_tree.links.new(node_uvmap.outputs[0], ti_normal.inputs[0])
+
+            mat.node_tree.nodes.active = ti_normal
+
+        dup.data.uv_layers['UVMap'].active = True 
+
+        render_path_nm = f'{bakepath}NormalMap - Bake - {obj.name}.exr'
+        if opt_force_render or not os.path.exists(bpy.path.abspath(render_path_nm)):
+            elapsed = time.time() - start_time
+            msg = f". Baking '{obj.name}' normal map. Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+            if elapsed > 0 and n_render_performed > 0:
+                elapsed_per_render = elapsed / n_render_performed
+                remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
+                msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
+            logger.info(msg)
+            if bake_info_group and 'IsNormalMap' in bake_info_group.nodes: bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 1.0
+            scene.render.filepath = render_path_nm
+            scene.render.image_settings.file_format = 'OPEN_EXR'
+            scene.render.image_settings.color_mode = 'RGB'
+            scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
+            scene.render.image_settings.color_depth = '16'
+            # context needs an active, linked, not hidden, mesh
+            with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
+                bpy.ops.object.bake(type='NORMAL', normal_space='OBJECT', normal_r='POS_X', normal_g='NEG_Y', normal_b='NEG_Z', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
+                if dup.vlmSettings.bake_normalmap:
+                    bake_img_normal.save_render(bpy.path.abspath(render_path_nm), scene=scene)
+            logger.info('\n')
+            n_render_performed += 1
+            if bake_info_group and 'IsNormalMap' in bake_info_group.nodes: bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 0.0
+        else:
+            logger.info(f'Baking {obj.name} normal map. - Skipped since it is already rendered and cached')
+            n_existing += 1
+
+        render_path_diffuse = f'{bakepath}DiffuseColor - Bake - {obj.name}.exr'
+    
+        elapsed = time.time() - start_time
+        msg = f". Baking '{obj.name}' diffuse color (albedo). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+        if elapsed > 0 and n_render_performed > 0:
+            elapsed_per_render = elapsed / n_render_performed
+            remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
+            msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
+        logger.info(msg)
+        
+        if bake_info_group and 'IsDiffuse' in bake_info_group.nodes: 
+            bake_info_group.nodes['IsDiffuse'].outputs["Value"].default_value = 1.0
+        
+        scene.render.filepath = render_path_diffuse
+        scene.render.image_settings.file_format = 'OPEN_EXR'
+        scene.render.image_settings.color_mode = 'RGB'
+        scene.render.image_settings.exr_codec = 'ZIP'  # Lossless compression
+        scene.render.image_settings.color_depth = '16'
+        
+        for mat in dup.data.materials:
+            mat.node_tree.nodes.active = mat.node_tree.nodes.get("VLM_AlbedoImage")
+
+        with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
+            bpy.context.view_layer.use_pass_diffuse_color = True
+            bpy.ops.object.bake(type='DIFFUSE', pass_filter={'COLOR'}, use_selected_to_active=False, use_clear=True, margin=context.scene.vlmSettings.padding)
+        
+        logger.info('\n')
+        n_render_performed += 1
+        
+        # Reset Bake Info Group after bake if applicable
+        if bake_info_group and 'IsDiffuse' in bake_info_group.nodes: 
+            bake_info_group.nodes['IsDiffuse'].outputs["Value"].default_value = 0.0
+
+
+        for mat in dup.data.materials:
+            mat.node_tree.nodes.active = mat.node_tree.nodes.get("VLM_BakeImage")
+
         for i, scenario in enumerate(light_scenarios, start=1):
             name, is_lightmap, light_col, lights = scenario
             render_path = f'{bakepath}{scenario[0]} - Bake - {obj.name}.exr'
@@ -681,8 +811,24 @@ def render_all_groups(op, context):
                     # Bake texture (context needs an active, linked, not hidden, mesh)
                     with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
                         scene.render.bake.view_from = 'ACTIVE_CAMERA'
+                        scene.cycles.use_denoising = False
+                        # Load the rendered image (make sure to set the correct path to the rendered image)
                         bpy.ops.object.bake(type='COMBINED', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
-                        bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
+                        #bake_img.save_render(bpy.path.abspath(render_path), scene=scene)                        
+                    
+                    with context.temp_override(scene=temp_denoise_scene):
+                        denoise_file_output_node.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
+                        render_path_denoise = f'{bakepath}{scenario[0]} - Bake - {obj.name}'
+                        denoise_image_node.image = bake_img
+
+                        denoise_normal_map_node.image = bake_img_normal
+                        denoise_albedo_map_node.image = bake_img_albedo
+
+                        denoise_file_output_node.base_path = os.path.dirname(bpy.path.relpath(render_path_denoise))
+                        denoise_file_output_node.file_slots[0].path = os.path.basename(bpy.path.relpath(render_path_denoise))
+                        bpy.ops.render.render(use_viewport=False, write_still=False)
+                        os.rename(bpy.path.abspath(f'{render_path_denoise}0001.exr'), bpy.path.abspath(f'{render_path_denoise}.exr'))
+                        
                     restore_func(state)
                     # Render for influence map
                     dup2 = dup.copy()
@@ -730,36 +876,24 @@ def render_all_groups(op, context):
                 logger.info(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
                 
-        if dup.vlmSettings.bake_normalmap:
-            render_path = f'{bakepath}NormalMap - Bake - {obj.name}.exr'
-            if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
-                elapsed = time.time() - start_time
-                msg = f". Baking '{obj.name}' normal map. Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
-                if elapsed > 0 and n_render_performed > 0:
-                    elapsed_per_render = elapsed / n_render_performed
-                    remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
-                    msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
-                logger.info(msg)
-                if bake_info_group and 'IsNormalMap' in bake_info_group.nodes: bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 1.0
-                scene.render.filepath = render_path
-                scene.render.image_settings.file_format = 'OPEN_EXR'
-                scene.render.image_settings.color_mode = 'RGB'
-                scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
-                scene.render.image_settings.color_depth = '16'
-                # context needs an active, linked, not hidden, mesh
-                with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
-                    bpy.ops.object.bake(type='NORMAL', normal_space='OBJECT', normal_r='POS_X', normal_g='NEG_Y', normal_b='NEG_Z', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
-                    bake_img.save_render(bpy.path.abspath(render_path), scene=scene)
-                logger.info('\n')
-                n_render_performed += 1
-                if bake_info_group and 'IsNormalMap' in bake_info_group.nodes: bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 0.0
-            else:
-                logger.info(f'{msg} - Skipped since it is already rendered and cached')
-                n_existing += 1
-        for mat, ti in zip(dup.data.materials, img_nodes):
-            for node in ti:
+    
+        for mat in dup.data.materials:
+            node = mat.node_tree.nodes.get("VLM_UVMapNode")
+            if node:
                 mat.node_tree.nodes.remove(node)
+            node = mat.node_tree.nodes.get("VLM_BakeImage")
+            if node:
+                mat.node_tree.nodes.remove(node)
+            node = mat.node_tree.nodes.get("VLM_AlbedoImage")
+            if node:
+                mat.node_tree.nodes.remove(node)
+            node = mat.node_tree.nodes.get("VLM_NormalImage")
+            if node:
+                mat.node_tree.nodes.remove(node)
+
         bpy.data.images.remove(bake_img)
+        bpy.data.images.remove(bake_img_albedo)
+        bpy.data.images.remove(bake_img_normal)
 
         if not dup.vlmSettings.hide_from_others:
             indirect_col.objects.link(dup)
@@ -771,6 +905,7 @@ def render_all_groups(op, context):
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 0.0
     bpy.data.scenes.remove(scene)
     bpy.data.scenes.remove(mask_scene)
+    bpy.data.scenes.remove(temp_denoise_scene)
     length = time.time() - start_time
     logger.info(f"\nRendering finished in a total time of {vlm_utils.format_time(length)}")
     if n_existing > 0: logger.info(f". {n_existing:>3} renders were skipped since they were already existing")
