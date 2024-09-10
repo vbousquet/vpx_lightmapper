@@ -584,7 +584,10 @@ def render_all_groups(op, context):
     mask_scene = bpy.data.scenes.new('VLM.Tmp Mask Scene')
     mask_scene.collection.objects.link(camera_object)
     mask_scene.camera = camera_object
-    mask_scene.render.engine = 'BLENDER_EEVEE_NEXT'
+    if bpy.app.version < (4, 2, 0): 
+        mask_scene.render.engine = 'BLENDER_EEVEE'
+    else:
+        mask_scene.render.engine = 'BLENDER_EEVEE_NEXT'
     mask_scene.render.film_transparent = True
     mask_scene.render.pixel_aspect_x = context.scene.render.pixel_aspect_x
     mask_scene.render.image_settings.color_depth = '8'
