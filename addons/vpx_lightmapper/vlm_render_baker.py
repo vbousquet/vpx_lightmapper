@@ -639,6 +639,19 @@ def render_all_groups(op, context):
         # Create a duplicate and apply modifiers since they can generate/modify the UV map
         dup = obj.copy()
         dup.data = dup.data.copy()
+        
+        for light_obj in [obj for obj in light_col.all_objects if hasattr(obj, 'light_linking')]:
+            receiver_collection = light_obj.light_linking.receiver_collection
+            if receiver_collection:
+                if len([link_obj for link_obj in receiver_collection.all_objects if link_obj.name == obj.name]):
+                    logger.info(f'Linking light for {obj.name} to {receiver_collection.name}')
+                    receiver_collection.objects.link(dup)
+            blocker_collection = light_obj.light_linking.blocker_collection
+            if blocker_collection:
+                if len([link_obj for link_obj in blocker_collection.all_objects if link_obj.name == obj.name]):
+                    logger.info(f'Linking light for {obj.name} to {blocker_collection.name}')
+                    blocker_collection.objects.link(dup)
+
         render_col.objects.link(dup)
         with context.temp_override(active_object=dup, selected_objects=[dup]):
             for modifier in dup.modifiers:
@@ -869,6 +882,8 @@ def render_all_groups(op, context):
                     bpy.data.materials.remove(mat)
                     logger.info('\n')
                     n_render_performed += 1
+                    with context.temp_override(active_object=dup2, selected_objects=[dup2]):
+                        bpy.ops.object.delete()
                 else:
                     logger.info(f'{msg} - Skipped (no influence)')
                     n_skipped += 1
@@ -895,17 +910,33 @@ def render_all_groups(op, context):
         bpy.data.images.remove(bake_img_albedo)
         bpy.data.images.remove(bake_img_normal)
 
-        if not dup.vlmSettings.hide_from_others:
-            indirect_col.objects.link(dup)
+        if not obj.vlmSettings.hide_from_others:
+            indirect_col.objects.link(obj)
 
-        if dup.vlmSettings.bake_mask:
-            render_col.objects.unlink(dup.vlmSettings.bake_mask)
-        render_col.objects.unlink(dup)
+        if obj.vlmSettings.bake_mask:
+            render_col.objects.unlink(obj.vlmSettings.bake_mask)
+        
+        for light_obj in [obj for obj in light_col.all_objects if hasattr(obj, 'light_linking')]:
+            receiver_collection = light_obj.light_linking.receiver_collection
+            if receiver_collection:
+                if len([link_obj for link_obj in receiver_collection.all_objects if link_obj.name == obj.name]):
+                    logger.info(f'Unlinking light for {obj.name} to {receiver_collection.name}')
+                    receiver_collection.objects.unlink(dup)
+            blocker_collection = light_obj.light_linking.blocker_collection
+            if blocker_collection:
+                if len([link_obj for link_obj in blocker_collection.all_objects if link_obj.name == obj.name]):
+                    logger.info(f'Unlinking light for {obj.name} to {blocker_collection.name}')
+                    blocker_collection.objects.unlink(dup)
+
+        with context.temp_override(active_object=dup, selected_objects=[dup]):
+            bpy.ops.object.delete()
 
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 0.0
     bpy.data.scenes.remove(scene)
     bpy.data.scenes.remove(mask_scene)
     bpy.data.scenes.remove(temp_denoise_scene)
+    bpy.data.collections.remove(bpy.data.collections['Indirect'])
+    bpy.data.collections.remove(bpy.data.collections['Render'])
     length = time.time() - start_time
     logger.info(f"\nRendering finished in a total time of {vlm_utils.format_time(length)}")
     if n_existing > 0: logger.info(f". {n_existing:>3} renders were skipped since they were already existing")
