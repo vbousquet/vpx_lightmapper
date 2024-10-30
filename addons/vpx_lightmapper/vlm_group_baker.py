@@ -77,7 +77,10 @@ def compute_render_groups(op, context):
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
     scene.collection.objects.link(camera_object)
     scene.camera = camera_object
-    scene.render.engine = 'BLENDER_EEVEE_NEXT'
+    if bpy.app.version < (4, 2, 0): 
+        scene.render.engine = 'BLENDER_EEVEE'
+    else:
+        scene.render.engine = 'BLENDER_EEVEE_NEXT'
     scene.render.film_transparent = True
     scene.render.resolution_y = opt_mask_size
     scene.render.resolution_x = int(opt_mask_size * opt_ar)
