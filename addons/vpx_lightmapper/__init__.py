@@ -193,6 +193,17 @@ class VLM_Scene_props(PropertyGroup):
         default='remove_all'
     )
     export_prefix: StringProperty(name="Export prefix", description="A prefix that will be applied to the nestmaps and VLM layers.", default="")
+    
+    # Denoise Prefilter options
+    denoise_prefilter: EnumProperty(
+        items=[
+            ('NONE', 'None', 'No prefiltering, use when guiding passes are noise-free.', '', 0),
+            ('FAST', 'Fast', 'Denoise image and guiding passes together. Improves quality when guiding passes are noisy using least amount of extra processing time.', '', 1),
+            ('ACCURATE', 'Accurate', 'Prefilter noisy guiding passes before denoising image. Improves quality when guiding passes are noisy using extra processing time.', '', 2),
+        ],
+        name='Denoise Prefilter',
+        default='ACCURATE'
+    )
     # Active table informations
     table_file: StringProperty(name="Table", description="Table filename", default="")
     playfield_width: FloatProperty(name="Playfield Width", description="Width of the playfield in inches", default = 1.0, update=vlm_utils.update_render_size)
@@ -890,6 +901,9 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         # Export properties
         layout.prop(vlmProps, "export_mode")
         layout.prop(vlmProps, "export_prefix")
+        layout.separator()
+        # Denoise Prefilter
+        layout.prop(vlmProps, 'denoise_prefilter')
         layout.separator()
         # Actions buttons
         row = layout.row()

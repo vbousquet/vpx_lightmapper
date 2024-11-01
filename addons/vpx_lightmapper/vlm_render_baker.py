@@ -271,6 +271,8 @@ def render_all_groups(op, context):
     light_scenarios = vlm_utils.get_lightings(context)
     bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
 
+    denoise_prefilter = context.scene.vlmSettings.denoise_prefilter
+
     # Create temp render scene, using the user render settings setup
     scene = bpy.data.scenes.new('VLM.Tmp Render Scene')
     scene.collection.objects.link(camera_object)
@@ -439,6 +441,7 @@ def render_all_groups(op, context):
                     light.lightgroup = name.replace(".","_")
                     render_col.objects.link(light)
                 denoise = nodes.new("CompositorNodeDenoise")
+                denoise.prefilter = denoise_prefilter
                 denoise.location.x = 200
                 denoise.location.y = -(i-dec) * 200
                 links.new(rl.outputs['Denoising Normal'], denoise.inputs['Normal'])
@@ -593,6 +596,7 @@ def render_all_groups(op, context):
     denoise_albedo_map_node = denoise_nodes.new(type="CompositorNodeImage")
     denoise_albedo_map_node.location = (0, 600)
     denoise_node = denoise_nodes.new(type="CompositorNodeDenoise")
+    denoise_node.prefilter = denoise_prefilter
     denoise_node.location = (300, 0)
     denoise_viewer_node = denoise_nodes.new(type="CompositorNodeViewer")
     denoise_viewer_node.location = (600, 0)
