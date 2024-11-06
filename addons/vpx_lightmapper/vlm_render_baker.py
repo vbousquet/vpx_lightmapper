@@ -644,17 +644,26 @@ def render_all_groups(op, context):
         dup = obj.copy()
         dup.data = dup.data.copy()
         
+        light_linking_collections = []
+
         for light_obj in [obj for obj in light_col.all_objects if hasattr(obj, 'light_linking')]:
             receiver_collection = light_obj.light_linking.receiver_collection
             if receiver_collection:
-                if len([link_obj for link_obj in receiver_collection.all_objects if link_obj.name == obj.name]):
-                    logger.info(f'Linking light for {obj.name} to {receiver_collection.name}')
-                    receiver_collection.objects.link(dup)
+                for index, link_obj in enumerate(receiver_collection.all_objects):
+                    if link_obj.name == obj.name:  
+                     logger.info(f'Linking light for {obj.name} to Recevier Collection {receiver_collection.name}')
+                     light_linking_collections.append(receiver_collection)
+                     receiver_collection.objects.link(dup)
+                     receiver_collection.collection_objects[-1].light_linking.link_state = receiver_collection.collection_objects[index].light_linking.link_state
+
             blocker_collection = light_obj.light_linking.blocker_collection
             if blocker_collection:
-                if len([link_obj for link_obj in blocker_collection.all_objects if link_obj.name == obj.name]):
-                    logger.info(f'Linking light for {obj.name} to {blocker_collection.name}')
-                    blocker_collection.objects.link(dup)
+                for index, link_obj in enumerate(receiver_collection.all_objects):
+                    if link_obj.name == obj.name:
+                        logger.info(f'Linking light for {obj.name} to Blocker Collection {blocker_collection.name}')
+                        light_linking_collections.append(blocker_collection)
+                        blocker_collection.objects.link(dup)
+                        blocker_collection.collection_objects[-1].light_linking.link_state = blocker_collection.collection_objects[index].light_linking.link_state
 
         render_col.objects.link(dup)
         with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -920,17 +929,8 @@ def render_all_groups(op, context):
         if obj.vlmSettings.bake_mask:
             render_col.objects.unlink(obj.vlmSettings.bake_mask)
         
-        for light_obj in [obj for obj in light_col.all_objects if hasattr(obj, 'light_linking')]:
-            receiver_collection = light_obj.light_linking.receiver_collection
-            if receiver_collection:
-                if len([link_obj for link_obj in receiver_collection.all_objects if link_obj.name == obj.name]):
-                    logger.info(f'Unlinking light for {obj.name} to {receiver_collection.name}')
-                    receiver_collection.objects.unlink(dup)
-            blocker_collection = light_obj.light_linking.blocker_collection
-            if blocker_collection:
-                if len([link_obj for link_obj in blocker_collection.all_objects if link_obj.name == obj.name]):
-                    logger.info(f'Unlinking light for {obj.name} to {blocker_collection.name}')
-                    blocker_collection.objects.unlink(dup)
+        for light_collection in light_linking_collections:
+            light_collection.objects.unlink(dup)
 
         with context.temp_override(active_object=dup, selected_objects=[dup]):
             bpy.ops.object.delete()
