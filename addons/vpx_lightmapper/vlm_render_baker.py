@@ -650,16 +650,16 @@ def render_all_groups(op, context):
             receiver_collection = light_obj.light_linking.receiver_collection
             if receiver_collection:
                 for index, link_obj in enumerate(receiver_collection.all_objects):
-                    if link_obj.name == obj.name:  
-                     logger.info(f'Linking light for {obj.name} to Recevier Collection {receiver_collection.name}')
-                     light_linking_collections.append(receiver_collection)
-                     receiver_collection.objects.link(dup)
-                     receiver_collection.collection_objects[-1].light_linking.link_state = receiver_collection.collection_objects[index].light_linking.link_state
+                    if link_obj.name == obj.name and dup.name not in receiver_collection.all_objects:  
+                        logger.info(f'Linking light for {obj.name} to Recevier Collection {receiver_collection.name}')
+                        light_linking_collections.append(receiver_collection)
+                        receiver_collection.objects.link(dup)
+                        receiver_collection.collection_objects[-1].light_linking.link_state = receiver_collection.collection_objects[index].light_linking.link_state
 
             blocker_collection = light_obj.light_linking.blocker_collection
             if blocker_collection:
                 for index, link_obj in enumerate(receiver_collection.all_objects):
-                    if link_obj.name == obj.name:
+                    if link_obj.name == obj.name and dup.name not in blocker_collection.all_objects:
                         logger.info(f'Linking light for {obj.name} to Blocker Collection {blocker_collection.name}')
                         light_linking_collections.append(blocker_collection)
                         blocker_collection.objects.link(dup)
