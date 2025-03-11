@@ -48,11 +48,9 @@ def get_material(light_name, is_lightmap, is_group, has_normalmap, render_id):
     mat['VLM.HasNormalMap'] = has_normalmap
     if is_lightmap:
         mat.blend_method = 'BLEND'
-        mat.shadow_method = 'NONE'
         mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
     else:
         mat.blend_method = 'OPAQUE'
-        mat.shadow_method = 'HASHED'
         mat.node_tree.nodes["PackMap"].inputs[2].default_value = 0.0
     return mat
 
