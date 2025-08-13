@@ -1,6 +1,7 @@
 name: vpx_lightmapper
 on:
   push:
+  workflow_dispatch:
 
 env:
   VERSION_START_SHA: 890b280d3d2de9b5ae9d7e92d75ff71497323a47
@@ -32,7 +33,7 @@ jobs:
 
   build:
     name: Build VPX Light Mapper
-    runs-on: windows-2019
+    runs-on: windows-latest
     needs: [ version ]
     strategy:
       fail-fast: false
@@ -41,7 +42,7 @@ jobs:
       - run: |
           mkdir tmp
           cp -r addons/vpx_lightmapper tmp
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: vpx_lightmapper-${{ needs.version.outputs.tag }}
           path: tmp
