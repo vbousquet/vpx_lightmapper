@@ -31,6 +31,9 @@ def projected_bounds_area(mvp_matrix, obj):
         corners = [mvp_matrix @ obj.matrix_world @ mathutils.Vector((v.co[0], v.co[1], v.co[2], 1)) for v in obj.data.vertices]
     else:
         corners = [mvp_matrix @ obj.matrix_world @ mathutils.Vector((corner[0], corner[1], corner[2], 1)) for corner in obj.bound_box]
+    if not corners: # no geometry
+        logger.error(f". Object {obj.name} does not have any geometry, but is marked for baking")
+        return 0.0
     proj_x = [o for o in map(lambda a: a.x / a.w, corners)]
     proj_y = [o for o in map(lambda a: a.y / a.w, corners)]
     min_x = min(min_x, min(proj_x))
