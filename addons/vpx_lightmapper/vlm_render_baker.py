@@ -271,6 +271,8 @@ def render_all_groups(op, context):
     light_scenarios = vlm_utils.get_lightings(context)
     bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
 
+    denoise_prefilter = context.scene.vlmSettings.denoise_prefilter
+
     # Create temp render scene, using the user render settings setup
     scene = bpy.data.scenes.new('VLM.Tmp Render Scene')
     scene.collection.objects.link(camera_object)
@@ -439,6 +441,7 @@ def render_all_groups(op, context):
                     light.lightgroup = name.replace(".","_")
                     render_col.objects.link(light)
                 denoise = nodes.new("CompositorNodeDenoise")
+                denoise.prefilter = denoise_prefilter
                 denoise.location.x = 200
                 denoise.location.y = -(i-dec) * 200
                 links.new(rl.outputs['Denoising Normal'], denoise.inputs['Normal'])
@@ -593,6 +596,7 @@ def render_all_groups(op, context):
     denoise_albedo_map_node = denoise_nodes.new(type="CompositorNodeImage")
     denoise_albedo_map_node.location = (0, 600)
     denoise_node = denoise_nodes.new(type="CompositorNodeDenoise")
+    denoise_node.prefilter = denoise_prefilter
     denoise_node.location = (300, 0)
     denoise_viewer_node = denoise_nodes.new(type="CompositorNodeViewer")
     denoise_viewer_node.location = (600, 0)
@@ -640,17 +644,7 @@ def render_all_groups(op, context):
         dup = obj.copy()
         dup.data = dup.data.copy()
         
-        for light_obj in [obj for obj in light_col.all_objects if hasattr(obj, 'light_linking')]:
-            receiver_collection = light_obj.light_linking.receiver_collection
-            if receiver_collection:
-                if len([link_obj for link_obj in receiver_collection.all_objects if link_obj.name == obj.name]):
-                    logger.info(f'Linking light for {obj.name} to {receiver_collection.name}')
-                    receiver_collection.objects.link(dup)
-            blocker_collection = light_obj.light_linking.blocker_collection
-            if blocker_collection:
-                if len([link_obj for link_obj in blocker_collection.all_objects if link_obj.name == obj.name]):
-                    logger.info(f'Linking light for {obj.name} to {blocker_collection.name}')
-                    blocker_collection.objects.link(dup)
+        
 
         render_col.objects.link(dup)
         with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -807,6 +801,31 @@ def render_all_groups(op, context):
             render_path = f'{bakepath}{scenario[0]} - Bake - {obj.name}.exr'
             influence_path = f'{bakepath}{scenario[0]} - Influence - {obj.name}.exr'
             msg = f". Baking '{obj.name}' for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+
+
+            light_linking_collections = []
+
+            for light_obj in light_col.all_objects:
+                if hasattr(light_obj, 'light_linking'):
+                    receiver_collection = light_obj.light_linking.receiver_collection
+                    if receiver_collection:
+                        for index, link_obj in enumerate(receiver_collection.all_objects):
+                            if link_obj.name == obj.name and dup.name not in receiver_collection.all_objects:  
+                                logger.info(f'Linking light for {obj.name} to Recevier Collection {receiver_collection.name}')
+                                light_linking_collections.append(receiver_collection)
+                                receiver_collection.objects.link(dup)
+                                receiver_collection.collection_objects[-1].light_linking.link_state = receiver_collection.collection_objects[index].light_linking.link_state
+
+                blocker_collection = light_obj.light_linking.blocker_collection
+                if blocker_collection:
+                    for index, link_obj in enumerate(receiver_collection.all_objects):
+                        if link_obj.name == obj.name and dup.name not in blocker_collection.all_objects:
+                            logger.info(f'Linking light for {obj.name} to Blocker Collection {blocker_collection.name}')
+                            light_linking_collections.append(blocker_collection)
+                            blocker_collection.objects.link(dup)
+                            blocker_collection.collection_objects[-1].light_linking.link_state = blocker_collection.collection_objects[index].light_linking.link_state
+
+
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)) or not os.path.exists(bpy.path.abspath(influence_path)):
                 state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, obj_mask, render_col)
                 elapsed = time.time() - start_time
@@ -891,7 +910,10 @@ def render_all_groups(op, context):
                 logger.info(f'{msg} - Skipped since it is already rendered and cached')
                 n_existing += 1
                 
-    
+            for light_collection in light_linking_collections:
+                light_collection.objects.unlink(dup)
+
+
         for mat in dup.data.materials:
             node = mat.node_tree.nodes.get("VLM_UVMapNode")
             if node:
@@ -916,17 +938,7 @@ def render_all_groups(op, context):
         if obj.vlmSettings.bake_mask:
             render_col.objects.unlink(obj.vlmSettings.bake_mask)
         
-        for light_obj in [obj for obj in light_col.all_objects if hasattr(obj, 'light_linking')]:
-            receiver_collection = light_obj.light_linking.receiver_collection
-            if receiver_collection:
-                if len([link_obj for link_obj in receiver_collection.all_objects if link_obj.name == obj.name]):
-                    logger.info(f'Unlinking light for {obj.name} to {receiver_collection.name}')
-                    receiver_collection.objects.unlink(dup)
-            blocker_collection = light_obj.light_linking.blocker_collection
-            if blocker_collection:
-                if len([link_obj for link_obj in blocker_collection.all_objects if link_obj.name == obj.name]):
-                    logger.info(f'Unlinking light for {obj.name} to {blocker_collection.name}')
-                    blocker_collection.objects.unlink(dup)
+        
 
         with context.temp_override(active_object=dup, selected_objects=[dup]):
             bpy.ops.object.delete()
