@@ -406,7 +406,7 @@ def render_all_groups(op, context):
                         render_world = light_col.vlmSettings.world
                         render_world.lightgroup = name
                     else:
-                        remaining_scenarios.append(scenario)
+                        remaining_scenarios.append((scenario, scenario_influence))
                         continue
                 # Do not re-render existing cached renders
                 render_path = f'{bakepath}{name} - Group {group_index}.exr'
