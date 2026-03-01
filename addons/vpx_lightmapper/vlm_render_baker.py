@@ -144,6 +144,8 @@ def get_light_influence(scene, depsgraph, camera, light, group_mask):
     light_center = project_point(proj, center)
     light_center.x *= w - 1
     light_center.y *= h - 1
+    if max_x == min_x or max_y == min_y:
+        return None
     alpha_y = (max_y - min_y) / (max_x - min_x)
     max_r2 = (max_x - min_x) * (max_x - min_x) / 4
     opt_min_x, opt_max_x, opt_min_y, opt_max_y = (w-1, 0, h-1, 0)
