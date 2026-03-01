@@ -820,7 +820,7 @@ def render_all_groups(op, context):
 
                 blocker_collection = light_obj.light_linking.blocker_collection
                 if blocker_collection:
-                    for index, link_obj in enumerate(receiver_collection.all_objects):
+                    for index, link_obj in enumerate(blocker_collection.all_objects):
                         if link_obj.name == obj.name and dup.name not in blocker_collection.all_objects:
                             logger.info(f'Linking light for {obj.name} to Blocker Collection {blocker_collection.name}')
                             light_linking_collections.append(blocker_collection)
