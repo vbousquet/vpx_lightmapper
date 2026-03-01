@@ -528,7 +528,7 @@ class VLM_OT_batch_bake(Operator):
         # This will only spawn a console window if one does not already exist.
         try:
             import win32gui, bpy
-        except:
+        except Exception:
             #ghetto guard for windows use only, as it will need completely different methods to query windows on other platforms
             return
             

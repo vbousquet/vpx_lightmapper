@@ -503,7 +503,7 @@ def read_vpx(op, context, filepath):
                 image = bpy.data.images[name]
                 try:
                     image.unpack(method='REMOVE')
-                except:
+                except Exception:
                     pass
             else:
                 image = bpy.data.images.new(name, width, height, alpha=True)
@@ -2005,7 +2005,7 @@ def read_vpx(op, context, filepath):
 
     try:
         context.scene.vlmSettings.table_file = bpy.path.relpath(filepath)
-    except:
+    except Exception:
         context.scene.vlmSettings.table_file = filepath
     
     context.scene.vlmSettings.playfield_width = (playfield_width / global_scale) * (1.0625 / 50.0) # convert to inches

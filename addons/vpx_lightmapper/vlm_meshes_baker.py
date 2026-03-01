@@ -209,7 +209,7 @@ def create_bake_meshes(op, context):
                     if modifier.show_render:
                         try:
                             bpy.ops.object.modifier_apply(modifier=modifier.name)
-                        except:
+                        except Exception:
                             logger.info(f'. ERROR {obj_name} has an invalid modifier which was not applied')
                 dup.modifiers.clear()
 
