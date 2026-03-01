@@ -438,7 +438,7 @@ def render_all_groups(op, context):
                     colored_lights = [o for o in lights if o.type=='LIGHT']
                     prev_colors = [o.data.color for o in colored_lights]
                     for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
-                    initial_state = (1, zip(colored_lights, prev_colors))
+                    initial_state = (1, list(zip(colored_lights, prev_colors)))
                 for light in lights:
                     light.lightgroup = name.replace(".","_")
                     render_col.objects.link(light)
