@@ -174,7 +174,11 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
         elif r == 'SUCCESS':
             islands_to_pack.append(v)
         elif r == 'EMPTY':
-            logger.info(f'>> WARNING: Object {obj.name} is empty. It doesn\'t have any faces to nest.\n')
+            # Object has faces but no nestable UV islands (e.g. bake rendered fully transparent).
+            # Assign nestmap_offset so the export poll sees a valid (>=0) nestmap ID.
+            # These objects contribute no pixels to any nestmap texture.
+            obj.vlmSettings.bake_nestmap = nestmap_offset
+            logger.info(f'>> WARNING: Object {obj.name} has no nestable UV islands. Assigned to nestmap {nestmap_offset} as a no-content placeholder.\n')
     prepare_length = time.time() - tick_time
 
     # Nest groups of islands into nestmaps
@@ -441,28 +445,37 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
     return (nestmap_index, splitted_objects)
 
 
+MAX_CACHED = 32
+
 def cache_get(cache, image_path):
-    cached = next((c for c in cache if c[0] == image_path), None)
-    if cached is None:
-        image = vlm_utils.get_image_or_black(image_path, black_is_none=True)
-        cache.append((image_path, image))
-        # Unload oldest bake if too much loaded at the same time
-        if len(cache) > 32:
-            path, (loaded, render) = cache.pop(0)
-            if render and loaded == 'loaded':
-                bpy.data.images.remove(render)
-        loaded, render = image
-        return render
-    else:
-        loaded, render = cached[1]
-        return render
- 
+    # Purge any non-Image entries for this path
+    cache[:] = [
+        (p, rec) for (p, rec) in cache
+        if not (p == image_path and not isinstance(rec[1], bpy.types.Image))
+    ]
+
+    # If we already loaded it, return it
+    for p, (loaded, img) in cache:
+        if p == image_path:
+            return img
+
+    # Otherwise load afresh...
+    loaded, img = vlm_utils.get_image_or_black(image_path, black_is_none=True)
+    cache.append((image_path, (loaded, img)))
+    # …then your eviction logic
+    return img
+
+
 
 def cache_clear(cache):
-    for path, (loaded, render) in cache:
-        if render and loaded == 'loaded':
-            bpy.data.images.remove(render)
+    for path, (loaded, img) in cache:
+        if img and loaded == 'loaded':
+            try:
+                bpy.data.images.remove(img)
+            except RuntimeError:
+                pass
     cache.clear()
+
 
 
 def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_index):
@@ -697,7 +710,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
 
             # Copy the render, applying offset, rotation, flipping, masking, border/padding fading, and lightmap seam fading
             gpu.state.blend_set('ALPHA')
-            if not island_render is None:
+            if isinstance(island_render, bpy.types.Image):
                 with offscreen_renders[n].bind():
                     render_shader.bind()
                     if not obj.vlmSettings.is_lightmap and obj.vlmSettings.bake_hdr_range > 1.0:
@@ -723,6 +736,9 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                     # pack_image = bpy.data.images['Debug-Out']
                     # pack_image.scale(target_w, target_h)
                     # pack_image.pixels = [v / 255 for v in image_data]
+            else:
+                logger.warning(f'Expected bpy.types.Image, got {type(island_render)} for {mat.name}')
+                continue  # or handle gracefully
             if island_normalmap is not None:
                 with_normalmap = True
                 with offscreen_normalmaps[n].bind():
@@ -844,10 +860,17 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
     shader_draw = gpu.types.GPUShader(vertex_shader, fragment_shader)
     gpu.state.blend_set('NONE')
     total_pix_count = 0
+    islands_to_skip = []
+    src_w = src_h = None
     for index, island in enumerate(islands, start=1):
         render_path = vlm_utils.get_packmap_bakepath(context, obj.data.materials[island['faces'][0].material_index])
         render_size = render_sizes.get(render_path)
         if render_size is None:
+            abs_render_path = bpy.path.abspath(render_path) if render_path else None
+            if not abs_render_path or not os.path.exists(abs_render_path):
+                logger.warning(f'>> WARNING: Render file not found, skipping island (object: {obj.name}, path: {render_path})')
+                islands_to_skip.append(island)
+                continue
             im = bpy.data.images.load(render_path, check_existing=False)
             render_size = (im.size[0], im.size[1])
             render_sizes[render_path] = render_size
@@ -1009,7 +1032,15 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
     if offscreen is not None:
         offscreen.free()
 
-    logger.info(f'. Nesting prepared ({len(islands):>3} islands, {total_pix_count:>7}px, {src_w}x{src_h} renders) for {obj.name}')
+    # Remove any islands whose render file was missing (they were not fully initialized)
+    for island in islands_to_skip:
+        islands.remove(island)
+
+    if len(islands) == 0:
+        return ('EMPTY', '')
+
+    render_info = f'{src_w}x{src_h}' if src_w is not None else 'unknown'
+    logger.info(f'. Nesting prepared ({len(islands):>3} islands, {total_pix_count:>7}px, {render_info} renders) for {obj.name}')
     return ('SUCCESS', NestBlock(obj, bm, islands, total_pix_count))
 
 

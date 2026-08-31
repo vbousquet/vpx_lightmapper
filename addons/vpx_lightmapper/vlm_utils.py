@@ -355,6 +355,7 @@ def get_image_or_black(path, black_is_none=False):
         return ('black', black_image)
 
 
+
 def mkpath(path):
     pathlib.Path(bpy.path.abspath(path)).mkdir(parents=True, exist_ok=True)
 

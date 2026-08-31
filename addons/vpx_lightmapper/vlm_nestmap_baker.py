@@ -98,4 +98,9 @@ def render_nestmaps(op, context):
         obj.select_set(True)
         context.view_layer.objects.active = obj
     logger.info(f'\nNestmap generation finished ({n_nestmaps} nestmaps generated for {len(to_nest)} objects) in {str(datetime.timedelta(seconds=time.time() - start_time))}.')
+    # Diagnostic: any object still at -1 here is genuinely unexpected (empty-UV objects are
+    # now assigned nestmap_offset by nest(), so -1 means something went wrong during preparation)
+    unassigned = [obj.name for obj in to_nest if obj.vlmSettings.bake_nestmap < 0]
+    if unassigned:
+        logger.info(f'>> ERROR: {len(unassigned)} object(s) unexpectedly have no nestmap assigned after nesting completed. This will block the export button. Objects: {unassigned}')
     return {'FINISHED'}

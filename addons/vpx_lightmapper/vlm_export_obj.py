@@ -19,39 +19,35 @@ from . import vlm_nest
 
 
 def export_obj(op, context):
+    camera = context.scene.camera
+    if not camera:
+        op.report({'ERROR'}, 'Bake camera is missing')
+        return {'CANCELLED'}
+
     bakepath = vlm_utils.get_bakepath(context, type='EXPORT')
     vlm_utils.mkpath(bakepath)
     selected_objects = list(context.selected_objects)
+
+    render_size = vlm_utils.get_render_size(context)
+    proj_ar = vlm_utils.get_render_proj_ar(context)
 
     scale = 0.01 / vlm_utils.get_global_scale(context) # VPX has a default scale of 100, and Blender limit global_scale to 1000 (would need 1852 for inches), so 0.01 makes things ok for everyone
 
     # Export non bake objects
     for obj in [o for o in selected_objects if o.vlmSettings.bake_lighting == '']:
-        if obj.type == 'MESH':
-            bpy.ops.object.select_all(action='DESELECT')
-            obj.select_set(True)
-            context.view_layer.objects.active = obj
-            bpy.ops.wm.obj_export(
-                filepath=bpy.path.abspath(f'{bakepath}{obj.name}.obj'),
-                export_selected_objects=True, 
-                global_scale=scale, 
-                forward_axis='Y', 
-                up_axis='NEGATIVE_Z', 
-                export_materials=False, 
-                export_triangulated_mesh=True
-            )
-    
-    if len([o for o in selected_objects if o.vlmSettings.bake_lighting != '']) == 0:
-        print(f'Export finished (no bake, just objects)')
-        return {'FINISHED'}
+        bpy.ops.object.select_all(action='DESELECT')
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        bpy.ops.wm.obj_export(
+            filepath=bpy.path.abspath(f'{bakepath}{obj.name}.obj'),
+            export_selected_objects=True, 
+            global_scale=scale, 
+            forward_axis='NEGATIVE_Y', 
+            up_axis='NEGATIVE_Z', 
+            export_materials=False, 
+            export_triangulated_mesh=True
+        )
 
-    render_size = vlm_utils.get_render_size(context)
-    proj_ar = vlm_utils.get_render_proj_ar(context)
-
-    camera = context.scene.camera
-    if not camera:
-        op.report({'ERROR'}, 'Bake camera is missing')
-        return {'CANCELLED'}
 
     # Duplicate and reset UV of target bake objects (which require a nestmap)
     to_nest = []
