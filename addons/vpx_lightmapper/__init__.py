@@ -492,7 +492,13 @@ class VLM_OT_export_vpx(Operator):
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         if not result_col: return False
         for obj in result_col.all_objects:
-            if obj.vlmSettings.bake_nestmap < 0: return False
+            if obj.vlmSettings.bake_nestmap < 0:
+                # 'UVMap Nested' is created for every object at the start of render_nestmaps,
+                # before any nesting begins. Its presence means the object was processed by a
+                # completed nestmap run (it may simply have had no nestable UV islands).
+                # Block only if the object has never been through nestmap generation at all.
+                if not obj.data.uv_layers.get('UVMap Nested'):
+                    return False
         return True
 
     @classmethod
@@ -504,8 +510,14 @@ class VLM_OT_export_vpx(Operator):
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         if not result_col:
             desc = desc + "\n\nBaked meshes must be generated first"
-        elif next((obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap < 0), None) is not None:
-            desc = desc + "\n\nNestmaps must be generated first"
+        else:
+            # Flag objects missing nestmaps that were never processed (no 'UVMap Nested' layer)
+            blocking = [obj.name for obj in result_col.all_objects
+                        if obj.vlmSettings.bake_nestmap < 0 and not obj.data.uv_layers.get('UVMap Nested')]
+            if blocking:
+                preview = ', '.join(blocking[:5])
+                suffix = f'... (+{len(blocking)-5} more)' if len(blocking) > 5 else ''
+                desc = desc + f"\n\nNestmaps must be generated first — not yet processed: {preview}{suffix}"
         return desc
         
     def execute(self, context):
@@ -556,19 +568,34 @@ class VLM_OT_batch_bake(Operator):
         if context.scene.vlmSettings.batch_inc_group:
             result = vlm_utils.run_with_logger(lambda : vlm_group_baker.compute_render_groups(self, context))
             if 'FINISHED' not in result: return self.do_shutdown(context, result)
-            bpy.ops.wm.save_mainfile()
+            try:
+                bpy.ops.wm.save_mainfile()
+            except Exception as e:
+                logger.warning(f'Autosave after group computation failed: {e}')
         result = vlm_utils.run_with_logger(lambda : vlm_render_baker.render_all_groups(self, context))
         if 'FINISHED' not in result: return self.do_shutdown(context, result)
-        bpy.ops.wm.save_mainfile()
+        try:
+            bpy.ops.wm.save_mainfile()
+        except Exception as e:
+            logger.warning(f'Autosave after render failed: {e}')
         result = vlm_utils.run_with_logger(lambda : vlm_meshes_baker.create_bake_meshes(self, context))
         if 'FINISHED' not in result: return self.do_shutdown(context, result)
-        bpy.ops.wm.save_mainfile()
+        try:
+            bpy.ops.wm.save_mainfile()
+        except Exception as e:
+            logger.warning(f'Autosave after mesh creation failed: {e}')
         result = vlm_utils.run_with_logger(lambda : vlm_nestmap_baker.render_nestmaps(self, context))
         if 'FINISHED' not in result: return self.do_shutdown(context, result)
-        bpy.ops.wm.save_mainfile()
+        try:
+            bpy.ops.wm.save_mainfile()
+        except Exception as e:
+            logger.warning(f'Autosave after nestmap generation failed: {e}')
         result = vlm_utils.run_with_logger(lambda : vlm_export.export_vpx(self, context))
         if 'FINISHED' not in result: return self.do_shutdown(context, result)
-        bpy.ops.wm.save_mainfile()
+        try:
+            bpy.ops.wm.save_mainfile()
+        except Exception as e:
+            logger.warning(f'Autosave after export failed: {e}')
         vlm_utils.run_with_logger(lambda : logger.info(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}"))
         return self.do_shutdown(context, result)
 
@@ -1020,7 +1047,8 @@ class VLM_PT_3D_VPX_Light(bpy.types.Panel):
     def draw(self, context):
         self.layout.use_property_split = True
         self.layout.prop(context.active_object.vlmSettings, 'vpx_object', text='Light', expand=True)
-        self.layout.prop(context.active_object.vlmSettings, 'is_rgb_led', text='White Bake', expand=True)
+        if context.active_object.type == 'LIGHT':
+            self.layout.prop(context.active_object.vlmSettings, 'is_rgb_led', text='White Bake', expand=True)
         self.layout.prop(context.active_object.vlmSettings, 'enable_aoi', text='Enable AOI', expand=True)
         self.layout.operator(VLM_OT_apply_aoi.bl_idname)
 
