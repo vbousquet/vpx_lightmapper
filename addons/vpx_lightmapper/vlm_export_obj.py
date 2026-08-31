@@ -31,22 +31,51 @@ def export_obj(op, context):
     render_size = vlm_utils.get_render_size(context)
     proj_ar = vlm_utils.get_render_proj_ar(context)
 
-    scale = 0.01 / vlm_utils.get_global_scale(context) # VPX has a default scale of 100, and Blender limit global_scale to 1000 (would need 1852 for inches), so 0.01 makes things ok for everyone
+    scale = 1.0 / vlm_utils.get_global_scale(context)
+    # OBJ stores the complete world transform in the mesh below. To make the
+    # resulting OBJ numerically match VLM's VPX mesh coordinates (which are
+    # written as vertex / global_scale), the OBJ exporter must use the inverse
+    # of VLM's global scale. In VPX units this is 100, so the OBJ can be
+    # imported into VPX with Scale = 1 instead of Scale = 100.
 
-    # Export non bake objects
+    # Export non-bake objects
+    #
+    # IMPORTANT: The VPX batch exporter writes mesh vertices in object-local
+    # coordinates and stores the object's transform separately (VPOS/VSIZ/RTV*).
+    # OBJ has no equivalent VPX transform record, so the object's complete
+    # world transform must be baked into the exported mesh.  The old code passed
+    # the object directly to Blender's OBJ exporter, which made the single OBJ
+    # export depend on the OBJ exporter's transform handling and caused position
+    # and size mismatches when the OBJ was imported into VPX.
     for obj in [o for o in selected_objects if o.vlmSettings.bake_lighting == '']:
         bpy.ops.object.select_all(action='DESELECT')
         obj.select_set(True)
         context.view_layer.objects.active = obj
+
+        # Work on a temporary copy so the user's original object is untouched.
+        bpy.ops.object.duplicate()
+        dup = context.view_layer.objects.active
+        dup.name = f'ExpOBJ.{obj.name}'
+
+        # Match the transform treatment used by the batch/bake exporter:
+        # bake matrix_world into the mesh and leave the exported object at the
+        # origin with unit/identity object transform. This makes OBJ coordinates
+        # unambiguous and keeps position, rotation and scale consistent.
+        dup.data.transform(dup.matrix_world)
+        dup.matrix_world.identity()
+
         bpy.ops.wm.obj_export(
             filepath=bpy.path.abspath(f'{bakepath}{obj.name}.obj'),
-            export_selected_objects=True, 
-            global_scale=scale, 
-            forward_axis='NEGATIVE_Y', 
-            up_axis='NEGATIVE_Z', 
-            export_materials=False, 
+            export_selected_objects=True,
+            global_scale=scale,
+            forward_axis='NEGATIVE_Y',
+            up_axis='NEGATIVE_Z',
+            export_materials=False,
             export_triangulated_mesh=True
         )
+
+        # Remove only the temporary export copy.
+        bpy.data.objects.remove(dup, do_unlink=True)
 
 
     # Duplicate and reset UV of target bake objects (which require a nestmap)
@@ -81,6 +110,13 @@ def export_obj(op, context):
 
         # Export Wavefront objects
         for dup in to_nest:
+            # Match the batch exporter transform convention. The batch path
+            # applies each bake object's complete world transform to its mesh
+            # before exporting and then resets the object transform. Without
+            # this, the single OBJ path can export different position/scale data.
+            dup.data.transform(dup.matrix_world)
+            dup.matrix_world.identity()
+
             # Remove initial split materials
             dup.active_material_index = 0
             for i in range(len(dup.material_slots)):
