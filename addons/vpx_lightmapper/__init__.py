@@ -528,7 +528,7 @@ class VLM_OT_batch_bake(Operator):
         # This will only spawn a console window if one does not already exist.
         try:
             import win32gui, bpy
-        except:
+        except Exception:
             #ghetto guard for windows use only, as it will need completely different methods to query windows on other platforms
             return
             
@@ -544,8 +544,10 @@ class VLM_OT_batch_bake(Operator):
 
         all_titles = get_window_titles()
         window_ends = lambda title: [(hwnd,full_title) for (hwnd,full_title) in all_titles if full_title.endswith(title)]
-        all_matching_windows = window_ends('blender.exe') # a slightly broad assumption that only the console window ends with blender.exr in the title but works
-        if len(all_matching_windows) == 0:
+        window_contains = lambda title: [(hwnd,full_title) for (hwnd,full_title) in all_titles if title.lower() in full_title.lower()]
+        all_matching_windows = window_ends('blender.exe') # a slightly broad assumption that only the console window ends with blender.exe in the title but works
+        console_already_open = len(all_matching_windows) > 0 or len(window_contains('blender python')) > 0
+        if not console_already_open:
             bpy.ops.wm.console_toggle()
             
     def execute(self, context):

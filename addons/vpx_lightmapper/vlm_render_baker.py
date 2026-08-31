@@ -144,6 +144,8 @@ def get_light_influence(scene, depsgraph, camera, light, group_mask):
     light_center = project_point(proj, center)
     light_center.x *= w - 1
     light_center.y *= h - 1
+    if max_x == min_x or max_y == min_y:
+        return None
     alpha_y = (max_y - min_y) / (max_x - min_x)
     max_r2 = (max_x - min_x) * (max_x - min_x) / 4
     opt_min_x, opt_max_x, opt_min_y, opt_max_y = (w-1, 0, h-1, 0)
@@ -406,7 +408,7 @@ def render_all_groups(op, context):
                         render_world = light_col.vlmSettings.world
                         render_world.lightgroup = name
                     else:
-                        remaining_scenarios.append(scenario)
+                        remaining_scenarios.append((scenario, scenario_influence))
                         continue
                 # Do not re-render existing cached renders
                 render_path = f'{bakepath}{name} - Group {group_index}.exr'
@@ -436,7 +438,7 @@ def render_all_groups(op, context):
                     colored_lights = [o for o in lights if o.type=='LIGHT']
                     prev_colors = [o.data.color for o in colored_lights]
                     for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
-                    initial_state = (1, zip(colored_lights, prev_colors))
+                    initial_state = (1, list(zip(colored_lights, prev_colors)))
                 for light in lights:
                     light.lightgroup = name.replace(".","_")
                     render_col.objects.link(light)
@@ -652,7 +654,7 @@ def render_all_groups(op, context):
                 if modifier.show_render:
                     try:
                         bpy.ops.object.modifier_apply(modifier=modifier.name)
-                    except:
+                    except Exception:
                         logger.info(f'. ERROR {obj.name} has an invalid modifier which was not applied')
             dup.modifiers.clear()
         
@@ -818,7 +820,7 @@ def render_all_groups(op, context):
 
                 blocker_collection = light_obj.light_linking.blocker_collection
                 if blocker_collection:
-                    for index, link_obj in enumerate(receiver_collection.all_objects):
+                    for index, link_obj in enumerate(blocker_collection.all_objects):
                         if link_obj.name == obj.name and dup.name not in blocker_collection.all_objects:
                             logger.info(f'Linking light for {obj.name} to Blocker Collection {blocker_collection.name}')
                             light_linking_collections.append(blocker_collection)
