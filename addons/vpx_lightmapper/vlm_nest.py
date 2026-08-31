@@ -1,3 +1,4 @@
+import gc
 #    Copyright (C) 2022  Vincent Bousquet
 #
 #    This program is free software: you can redistribute it and/or modify
@@ -146,7 +147,7 @@ import collections
 NestBlock = namedtuple("NestBlock", "obj bm islands pix_count")
 NestMap = namedtuple("NestMap", "padding islands targets target_heights")
 
-def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_name, nestmap_offset):
+def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_name, nestmap_offset, resume_index=0):
     '''Perform nesting of a group of objects to a minimal (not optimal) set of nestmaps
     Eventually splitting objects that can't fit into a single nestmap.
     '''
@@ -161,10 +162,14 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
     islands_to_pack = []
     render_sizes = {}
     
-    to_prepare = [o for o in objects]
+    # When resuming after a completed nestmap, objects already assigned to a
+    # previous nestmap are intentionally left untouched.  Split duplicates
+    # created for later pages still carry -1 and are therefore prepared normally.
+    to_prepare = [o for o in objects if resume_index <= 0 or o.vlmSettings.bake_nestmap < 0]
     while to_prepare:
         obj = to_prepare.pop()
-        obj.vlmSettings.bake_nestmap = -1
+        if resume_index <= 0:
+            obj.vlmSettings.bake_nestmap = -1
         r, v = prepare_nesting(context, obj, padding, uv_bake_name, render_sizes, tex_w, tex_h)
         if r == 'FAILED':
             return None
@@ -182,7 +187,7 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
     prepare_length = time.time() - tick_time
 
     # Nest groups of islands into nestmaps
-    nestmap_index = 0
+    nestmap_index = max(0, int(resume_index))
     n_failed = 0
     render_length = 0
     while islands_to_pack:
@@ -255,6 +260,8 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                 logger.info(f'. Nesting succeeded.')
                 # Success: store result for later nestmap render
                 tick_time = time.time()
+                vlm_utils.set_diagnostic_stage(f'Nesting: rendering nestmap {nestmap_offset + nestmap_index}')
+                vlm_utils.diagnostic_snapshot(f'nestmap-call-{nestmap_offset + nestmap_index}')
                 render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
                 render_length = time.time() - tick_time
                 nestmap_index = nestmap_index + 1
@@ -272,6 +279,30 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                     if faces_to_remove: bmesh.ops.delete(bm, geom=faces_to_remove, context='FACES')
                     bm.to_mesh(obj.data)
                     bm.free()
+
+                # Durable checkpoint: only mark a nestmap complete after its
+                # texture has been written AND the nested mesh state has been
+                # committed back to Blender.  This makes the saved .blend the
+                # source of truth for resume after a Blender/PC crash.
+                try:
+                    context.scene['_vlm_nesting_checkpoint_active'] = True
+                    context.scene['_vlm_nesting_checkpoint_next_index'] = int(nestmap_index)
+                    context.scene['_vlm_nesting_checkpoint_time'] = time.time()
+                    completed = []
+                    try:
+                        completed = list(__import__('json').loads(context.scene.get('_vlm_nesting_checkpoint_completed', '[]')))
+                    except Exception:
+                        completed = []
+                    done_index = int(nestmap_offset + nestmap_index - 1)
+                    if done_index not in completed: completed.append(done_index)
+                    context.scene['_vlm_nesting_checkpoint_completed'] = __import__('json').dumps(sorted(set(completed)))
+                    vlm_utils.set_diagnostic_stage(f'Nesting: saving checkpoint after nestmap {nestmap_offset + nestmap_index}')
+                    vlm_utils.diagnostic_snapshot(f'checkpoint-save-{nestmap_offset + nestmap_index}')
+                    if bpy.data.filepath:
+                        bpy.ops.wm.save_mainfile()
+                    logger.info(f'. Nesting checkpoint saved after nestmap {nestmap_offset + nestmap_index - 1}. Resume index: {nestmap_index}')
+                except Exception as checkpoint_error:
+                    logger.warning(f'. Could not save nesting checkpoint after nestmap {nestmap_offset + nestmap_index}: {checkpoint_error}')
                 break
             else:
                 # remove last block and start again with a smaller group
@@ -433,6 +464,16 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
                     render_nestmap(context, [NestBlock(obj, None, processed_islands, processed_pix_count)], uv_bake_name, nestmap, nestmap_name, nestmap_offset + nestmap_index)
                     render_length = time.time() - tick_time
                     nestmap_index = nestmap_index + 1
+                    # Same durable checkpoint rule for the single-page split path.
+                    try:
+                        context.scene['_vlm_nesting_checkpoint_active'] = True
+                        context.scene['_vlm_nesting_checkpoint_next_index'] = int(nestmap_index)
+                        context.scene['_vlm_nesting_checkpoint_time'] = time.time()
+                        if bpy.data.filepath:
+                            bpy.ops.wm.save_mainfile()
+                        logger.info(f'. Nesting checkpoint saved after nestmap {nestmap_offset + nestmap_index - 1}. Resume index: {nestmap_index}')
+                    except Exception as checkpoint_error:
+                        logger.warning(f'. Could not save nesting checkpoint after split nestmap {nestmap_offset + nestmap_index - 1}: {checkpoint_error}')
                     logger.info(f'. {len(processed_islands)} islands were nested on the first page and kept.')
                     break
 
@@ -445,40 +486,59 @@ def nest(context, objects, uv_bake_name, uv_nest_name, tex_w, tex_h, nestmap_nam
     return (nestmap_index, splitted_objects)
 
 
-MAX_CACHED = 32
-
 def cache_get(cache, image_path):
-    # Purge any non-Image entries for this path
-    cache[:] = [
-        (p, rec) for (p, rec) in cache
-        if not (p == image_path and not isinstance(rec[1], bpy.types.Image))
-    ]
+    """Load/cache an image without evicting images that may still be in use.
 
-    # If we already loaded it, return it
+    Images are released explicitly by cache_release() once the caller knows
+    that the path will not be needed again. This is important because Blender
+    GPU textures keep references to the RNA Image object until the draw is
+    finished; arbitrary LRU eviction can leave a stale Image object behind
+    and produce:
+        Expected 'Image' type found 'Image' instead
+    """
+    if image_path is None:
+        return None
+
     for p, (loaded, img) in cache:
         if p == image_path:
             return img
 
-    # Otherwise load afresh...
     loaded, img = vlm_utils.get_image_or_black(image_path, black_is_none=True)
     cache.append((image_path, (loaded, img)))
-    # …then your eviction logic
     return img
 
 
+def cache_release(cache, image_path):
+    """Release one cached image when its final use is complete."""
+    if image_path is None:
+        return
+    for index, (path, (loaded, img)) in enumerate(cache):
+        if path != image_path:
+            continue
+        cache.pop(index)
+        # Only remove images that this function actually loaded. Never remove
+        # pre-existing Blender images owned by the scene/add-on.
+        if loaded == 'loaded' and img is not None:
+            try:
+                if img.name in bpy.data.images and bpy.data.images.get(img.name) == img:
+                    bpy.data.images.remove(img)
+            except (ReferenceError, RuntimeError, TypeError):
+                pass
+        break
+
 
 def cache_clear(cache):
-    for path, (loaded, img) in cache:
-        if img and loaded == 'loaded':
-            try:
-                bpy.data.images.remove(img)
-            except RuntimeError:
-                pass
-    cache.clear()
+    """Emergency/final cleanup for all images owned by this cache."""
+    while cache:
+        path, _ = cache[-1]
+        cache_release(cache, path)
+    gc.collect()
 
 
 
 def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_index):
+    vlm_utils.set_diagnostic_stage(f'Nestmap {nestmap_index}: render_nestmap start')
+    vlm_utils.diagnostic_snapshot(f'nestmap-{nestmap_index}-start')
     padding, islands, targets, target_heights = nestmap
     n_render_groups = vlm_utils.get_n_render_groups(context)
     nestmaps = [np.zeros((len(target) * height * 4), 'f') for target, height in zip(targets, target_heights)]
@@ -609,8 +669,26 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
     full_white_mask = bpy.data.images.new('Full White', 1, 1, alpha=False)
     full_white_mask.pixels = (1.0, 1.0, 1.0, 1.0)
 
-    # Load the render masks
+    # Load render images on demand. Instead of an arbitrary LRU cache, keep
+    # exact use counts so an image is released immediately after its final
+    # island has been drawn. This bounds RAM without invalidating live Image
+    # objects used by later islands.
     image_cache = []
+    image_use_count = {}
+    for island in islands:
+        if island['place'][0] > 0:
+            continue
+        island_obj, _bm = island['source']
+        mat = island_obj.data.materials[island['mat_index']]
+        render_path = vlm_utils.get_packmap_bakepath(context, mat)
+        image_use_count[render_path] = image_use_count.get(render_path, 0) + 1
+        if mat.get('VLM.HasNormalMap', False) and not mat.get('VLM.IsLightmap', True):
+            normal_path = vlm_utils.get_packmap_normalmappath(context, mat)
+            image_use_count[normal_path] = image_use_count.get(normal_path, 0) + 1
+        render_id = island_obj.data.materials[island['mat_index']].get('VLM.Render')
+        if isinstance(render_id, int):
+            mask_image_path = f'{mask_path}Mask - Group {render_id}.png'
+            image_use_count[mask_image_path] = image_use_count.get(mask_image_path, 0) + 1
     with_normalmap = False
     for obj_name in sorted(list({obj.name for (obj, _, _, _) in selection}), key=lambda x:bpy.data.objects[x].vlmSettings.bake_lighting):
         obj = bpy.data.objects[obj_name]
@@ -618,6 +696,8 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
         if not obj.vlmSettings.is_lightmap and obj.vlmSettings.bake_hdr_range > 1.0:
             msg = f'. WARNING: Darkening to avoid LDR overflow (darkening factor is HDR range)'
         logger.info(f'. Copying renders (HDR range={obj.vlmSettings.bake_hdr_range:>7.2f}) for object {obj.name} from {obj.vlmSettings.bake_lighting} renders{msg}')
+        vlm_utils.set_diagnostic_stage(f'Nestmap {nestmap_index}: copying renders for {obj.name}')
+        vlm_utils.diagnostic_snapshot(f'copy-{obj.name}')
 
         # Render to the packed nest map
         for island in islands:
@@ -756,25 +836,53 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                     render_shader.uniform_sampler("render", gpu.texture.from_image(island_normalmap))
                     render_batch.draw(render_shader)
 
+            # All GPU draws for this island are complete. Release only images
+            # whose final use has been consumed; never evict live images.
+            paths_used = [vlm_utils.get_packmap_bakepath(context, mat)]
+            if has_normalmap:
+                paths_used.append(vlm_utils.get_packmap_normalmappath(context, mat))
+            if isinstance(render_id, int):
+                paths_used.append(f'{mask_path}Mask - Group {render_id}.png')
+            for used_path in paths_used:
+                if used_path in image_use_count:
+                    image_use_count[used_path] -= 1
+                    if image_use_count[used_path] <= 0:
+                        cache_release(image_cache, used_path)
+                        del image_use_count[used_path]
+
     logger.info(f'. Saving nestmap')
+    vlm_utils.set_diagnostic_stage(f'Nestmap {nestmap_index}: preparing save / freeing source images')
+    vlm_utils.diagnostic_snapshot(f'pre-save-cleanup-{nestmap_index}')
 
     # Cleanup loaded images
     cache_clear(image_cache)
     bpy.data.images.remove(full_white_mask)
+    gc.collect()
 
-    # Save the rendered nestmaps
+    # Save the rendered nestmaps.
+    # Keep the EXR path strictly linear/RAW.  LDR WebP is consumed by VPX as
+    # an sRGB texture, so its intermediate PNG must be written through Blender
+    # Standard view transform (linear -> sRGB).  This changes only the LDR
+    # color texture export; UVs, HDR EXR data and alpha are untouched.
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
+    nestmap_is_hdr = any(
+        block.obj.vlmSettings.is_lightmap and block.obj.vlmSettings.bake_hdr_range > 1.0
+        for block in selection
+    )
     base_filepath = f'{vlm_utils.get_bakepath(context, type="EXPORT")}{nestmap_name} {nestmap_index}'
     for i, target in enumerate(targets):
         target_w = len(target)
         target_h = target_heights[i]
 
+        vlm_utils.set_diagnostic_stage(f'Nestmap {nestmap_index}: reading color target {i + 1}/{len(targets)}')
+        vlm_utils.diagnostic_snapshot(f'color-read-{i}')
         image_data = offscreen_renders[i].texture_color.read()
         image_data.dimensions = target_w * target_h * 4
         pack_image = bpy.data.images.new(f'Nest {i}', target_w, target_h, alpha=has_alpha[i], float_buffer=True)
         pack_image.pixels = [v for v in image_data]
+        del image_data
         
         if len(targets) > 1:
             path_exr = bpy.path.abspath(f'{base_filepath} {i}.exr')
@@ -788,13 +896,31 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
         scene.render.image_settings.file_format = 'OPEN_EXR'
         scene.render.image_settings.exr_codec = 'DWAA'
         scene.render.image_settings.color_depth = '16'
+        scene.view_settings.view_transform = 'Raw'
+        scene.view_settings.look = 'None'
+        vlm_utils.set_diagnostic_stage(f'Nestmap {nestmap_index}: saving color EXR target {i + 1}/{len(targets)}')
+        vlm_utils.diagnostic_snapshot(f'color-exr-save-{i}')
         pack_image.save_render(path_exr, scene=scene)
-        # Saving through save_render would save a linear PNG, not an sRGB one which is required by VPX
-        pack_image.filepath_raw = path_png
-        pack_image.file_format = 'PNG'
-        pack_image.save()
+        vlm_utils.diagnostic_snapshot(f'color-exr-saved-{i}')
+
+        if nestmap_is_hdr:
+            # HDR nestmaps are consumed as EXR.  Keep the auxiliary PNG linear.
+            pack_image.filepath_raw = path_png
+            pack_image.file_format = 'PNG'
+            pack_image.save()
+        else:
+            # LDR nestmaps are consumed by VPX as sRGB WebP.  Encode the linear
+            # bake values to sRGB when producing the intermediate PNG.
+            scene.view_settings.view_transform = 'Standard'
+            scene.view_settings.look = 'None'
+            scene.render.image_settings.file_format = 'PNG'
+            pack_image.save_render(path_png, scene=scene)
+            scene.view_settings.view_transform = 'Raw'
+            scene.view_settings.look = 'None'
+
         bpy.data.images.remove(pack_image)
-        Image.open(path_png).save(path_webp, format = "WebP", lossless = True)
+        with Image.open(path_png) as png_image:
+            png_image.save(path_webp, format='WebP', lossless=True)
 
         filled = 0
         for x in range(target_w):
@@ -805,6 +931,8 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
     
     # Save the normalmap nestmaps
     if with_normalmap:
+        vlm_utils.set_diagnostic_stage(f'Nestmap {nestmap_index}: saving normal maps')
+        vlm_utils.diagnostic_snapshot(f'normal-save-start-{nestmap_index}')
         base_filepath = f'{vlm_utils.get_bakepath(context, type="EXPORT")}{nestmap_name} {nestmap_index} - NM'
         for i, target in enumerate(targets):
             target_w = len(target)
@@ -814,6 +942,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
             image_data.dimensions = target_w * target_h * 4
             pack_image = bpy.data.images.new(f'Nest {i}', target_w, target_h, alpha=has_alpha[i], float_buffer=True)
             pack_image.pixels = [v for v in image_data]
+            del image_data
             
             if len(targets) > 1:
                 path_exr = bpy.path.abspath(f'{base_filepath} {i}.exr')
@@ -833,9 +962,18 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
             pack_image.file_format = 'PNG'
             pack_image.save()
             bpy.data.images.remove(pack_image)
-            Image.open(path_png).save(path_webp, format = "WebP", lossless = True)
+            with Image.open(path_png) as png_image:
+                png_image.save(path_webp, format='WebP', lossless=True)
     
+    for off in offscreen_renders + offscreen_normalmaps:
+        try:
+            off.free()
+        except Exception:
+            pass
+    gc.collect()
     bpy.data.scenes.remove(scene)
+    vlm_utils.set_diagnostic_stage(f'Nestmap {nestmap_index}: render/save complete')
+    vlm_utils.diagnostic_snapshot(f'nestmap-{nestmap_index}-complete')
     logger.info(f'. Nestmap rendered and saved to {base_filepath}')
 
 

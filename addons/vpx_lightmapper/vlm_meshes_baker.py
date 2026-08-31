@@ -48,11 +48,9 @@ def get_material(light_name, is_lightmap, is_group, has_normalmap, render_id):
     mat['VLM.HasNormalMap'] = has_normalmap
     if is_lightmap:
         mat.blend_method = 'BLEND'
-        mat.shadow_method = 'NONE'
         mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
     else:
         mat.blend_method = 'OPAQUE'
-        mat.shadow_method = 'HASHED'
         mat.node_tree.nodes["PackMap"].inputs[2].default_value = 0.0
     return mat
 
@@ -721,21 +719,11 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, 
     for xy in range(w * h):
         if vmaps[xy] and gmap[4 * xy + 1] > lm_threshold: # prune by max channel
             hdr_range = max(hdr_range, gmap[4 * xy + 1]) # HDR Range is maximum of channels
-            
-    # Scale threshold relative to the HDR peak so visually black pixels are pruned
-    effective_threshold = lm_threshold * max(1.0, hdr_range)
-
-    for xy in range(w * h):
-        if vmaps[xy] and gmap[4 * xy + 1] > effective_threshold:
             for face_index in vmaps[xy]:
                 face = bm.faces[face_index]
                 imap = imaps.get(ids[face.material_index])
-                if imap is not None:
-                    if imap[4 * xy] > effective_threshold:
-                        face.tag = True
-                else:
-                    if gmap[4 * xy] > effective_threshold:
-                        face.tag = True
+                if imap is not None and imap[4 * xy] > lm_threshold:
+                    face.tag = True
     if False:
         # Basic pruning: just remove the face under a lighting threshold
         faces = [face for face in bm.faces if not face.tag]
@@ -759,12 +747,6 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, 
                     for loop in vert.link_loops:
                         loop[color_layer] = (1, 1, 1, 1)
             bmesh.ops.delete(bm, geom=delete_faces, context='FACES')
-        else:
-            # All faces are kept (no pruning needed) — still initialize vertex colors
-            # to opaque white so the lightmap renders correctly in the nestmap.
-            for face in bm.faces:
-                for loop in face.loops:
-                    loop[color_layer] = (1, 1, 1, 1)
     bmesh.update_edit_mesh(bake_instance_mesh)
     bpy.ops.object.mode_set(mode='OBJECT')
     return hdr_range
