@@ -16,9 +16,9 @@
 bl_info = {
     "name": "Visual Pinball X Light Mapper",
     "author": "Vincent Bousquet",
-    "version": (0, 0, 7),
+    "version": (1, 0, 0),
     "blender": (3, 2, 0),
-    "description": "Import/Export Visual Pinball X tables with automated light baking",
+    "description": "VPX Light Mapper — FINAL 1.0 | HDR Auto/Custom 0.1–100, stable mesh/UV/nesting, memory safety, checkpoint/resume, complete export, diagnostics",
     "warning": "Requires installation of external dependencies",
     "wiki_url": "",
     "tracker_url": "",
@@ -181,7 +181,11 @@ class VLM_Scene_props(PropertyGroup):
         name='Texture size', description="Size of the exported texture in which rendered/baked parts will be nested (Should be greater than render size to avoid too much splitting)",
         default='256'
     )
-    # Exporter options
+    
+    # HDR control. Auto preserves the original GitHub per-bake HDR calculation.
+    hdr_auto: BoolProperty(name="HDR Auto", description="Use the original GitHub automatic HDR range calculation", default=True)
+    hdr_custom_range: FloatProperty(name="Custom HDR Range", description="Custom HDR range used when HDR Auto is disabled (0.1–100)", default=1.0, min=0.1, max=100.0, soft_min=0.1, soft_max=10.0, precision=3)
+# Exporter options
     export_mode: EnumProperty(
         items=[
             ('default', 'Default', 'Add bakes and lightmap to the table', '', 0),
@@ -924,6 +928,14 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         # Nest properties
         layout.prop(vlmProps, "tex_size")
         layout.prop(vlmProps, "padding")
+        layout.prop(vlmProps, "hdr_auto")
+        row = layout.row()
+        row.enabled = not vlmProps.hdr_auto
+        row.prop(vlmProps, "hdr_custom_range")
+        if vlmProps.hdr_auto:
+            layout.label(text="HDR mode: Auto (GitHub)")
+        else:
+            layout.label(text=f"HDR mode: Custom ({vlmProps.hdr_custom_range:.3f})")
         layout.separator()
         # Export properties
         layout.prop(vlmProps, "export_mode")
@@ -941,6 +953,7 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         row = layout.row()
         row.scale_y = 1.5
         row.operator(VLM_OT_render_nestmaps.bl_idname, icon='TEXTURE_DATA', text='Nestmaps')
+        row.operator(VLM_OT_clear_nesting_checkpoint.bl_idname, icon='FILE_REFRESH', text='Clear Checkpoint')
         row.operator(VLM_OT_export_vpx.bl_idname, icon='EXPORT', text='Export')
         row.operator(VLM_OT_batch_bake.bl_idname)
         row = layout.row()
@@ -1326,6 +1339,22 @@ class VLM_PT_Props_warning_panel(bpy.types.Panel):
             layout.label(text=line)
 
 
+class VLM_OT_clear_nesting_checkpoint(Operator):
+    bl_idname = "vlm.clear_nesting_checkpoint"
+    bl_label = "Clear Nesting Checkpoint"
+    bl_description = "Discard the saved nesting resume state and reset nestmap assignments so the next nesting run starts from scratch"
+
+    def execute(self, context):
+        try:
+            from . import vlm_nestmap_baker
+            vlm_nestmap_baker.clear_nesting_checkpoint(context, reset_assignments=True)
+            self.report({'INFO'}, 'Nesting checkpoint cleared. Next Nestmaps run will start from Nestmap 0.')
+            return {'FINISHED'}
+        except Exception as err:
+            self.report({'ERROR'}, f'Could not clear nesting checkpoint: {err}')
+            return {'CANCELLED'}
+
+
 class VLM_OT_install_dependencies(bpy.types.Operator):
     bl_idname = "vlm.install_dependencies"
     bl_label = "Install dependencies"
@@ -1356,6 +1385,10 @@ class VLM_preferences(bpy.types.AddonPreferences):
 
     def draw(self, context):
         layout = self.layout
+        box = layout.box()
+        box.label(text="VPX Light Mapper 1.0.4")
+        box.label(text="Safe checkpoint/resume + reset button")
+        box.label(text="Memory protection + complete export + diagnostics")
         layout.operator(VLM_OT_install_dependencies.bl_idname, icon="CONSOLE")
 
 
@@ -1378,6 +1411,7 @@ classes = (
     VLM_OT_render_all_groups,
     VLM_OT_create_bake_meshes,
     VLM_OT_render_nestmaps,
+     VLM_OT_clear_nesting_checkpoint,
     VLM_OT_batch_bake,
     VLM_OT_state_import_mesh,
     VLM_OT_state_import_transform,
@@ -1410,6 +1444,13 @@ def register():
         registered_classes.append(cls)
     dependencies_installed = vlm_dependencies.import_dependencies(dependencies)
     if dependencies_installed:
+        # Initialize persistent diagnostics as early as possible.  This also
+        # imports a recent Blender native crash report (e.g. SF2.crash.txt)
+        # from the previous session to the Desktop diagnostics folder.
+        try:
+            vlm_utils.init_diagnostics()
+        except Exception:
+            pass
         for cls in classes:
             bpy.utils.register_class(cls)
             registered_classes.append(cls)

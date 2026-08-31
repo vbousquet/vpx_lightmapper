@@ -27,6 +27,12 @@ import string
 import unicodedata
 import logging
 import logging.handlers
+import traceback
+import shutil
+import threading
+import tempfile
+import ctypes
+import ctypes.wintypes
 from mathutils import Vector
 from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
@@ -35,6 +41,246 @@ from . import biff_io
 
 logger = logging.getLogger('vlm')
 logger.setLevel(logging.DEBUG)
+
+# -----------------------------------------------------------------------------
+# Diagnostics / crash-safe logging
+# -----------------------------------------------------------------------------
+# The normal vlm.log is written next to the current .blend file.  For difficult
+# crashes (especially native OpenEXR/GPU crashes) that file may be inaccessible
+# or hard to find, so we additionally keep a small, persistent diagnostic log
+# on the Windows Desktop.  The last known stage is written before critical
+# operations, which lets us identify where a native crash happened.
+_DIAG_LOCK = threading.RLock()
+_DIAG_STAGE = 'Addon startup'
+_DIAG_SESSION = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+_DIAG_DIR = None
+_DIAG_PATH = None
+_DIAG_HANDLER = None
+_DIAG_STAGE_PATH = None
+
+
+def _desktop_path():
+    candidates = []
+    userprofile = os.environ.get('USERPROFILE')
+    if userprofile:
+        candidates.extend([
+            os.path.join(userprofile, 'Desktop'),
+            os.path.join(userprofile, 'OneDrive', 'Desktop'),
+        ])
+    candidates.append(os.path.join(os.path.expanduser('~'), 'Desktop'))
+    for path in candidates:
+        try:
+            if os.path.isdir(path):
+                return path
+        except Exception:
+            pass
+    return os.path.expanduser('~')
+
+
+def get_diagnostics_dir():
+    global _DIAG_DIR
+    if _DIAG_DIR is None:
+        base = os.path.join(_desktop_path(), 'VPX Lightmapper Logs')
+        try:
+            os.makedirs(base, exist_ok=True)
+            _DIAG_DIR = base
+        except Exception:
+            _DIAG_DIR = _desktop_path()
+    return _DIAG_DIR
+
+
+def get_diagnostics_path():
+    global _DIAG_PATH
+    if _DIAG_PATH is None:
+        _DIAG_PATH = os.path.join(get_diagnostics_dir(), f'VLM_session_{_DIAG_SESSION}.log')
+    return _DIAG_PATH
+
+
+def get_diagnostic_stage_path():
+    global _DIAG_STAGE_PATH
+    if _DIAG_STAGE_PATH is None:
+        _DIAG_STAGE_PATH = os.path.join(get_diagnostics_dir(), 'VLM_current_stage.txt')
+    return _DIAG_STAGE_PATH
+
+
+def set_diagnostic_stage(stage):
+    global _DIAG_STAGE
+    with _DIAG_LOCK:
+        _DIAG_STAGE = str(stage)
+        try:
+            with open(get_diagnostic_stage_path(), 'w', encoding='utf-8', errors='replace') as f:
+                f.write(f'{_DIAG_STAGE}\n')
+                f.flush()
+        except Exception:
+            pass
+        _write_diagnostic_line(f'--- STAGE: {_DIAG_STAGE} ---')
+
+
+def _write_diagnostic_line(text):
+    try:
+        with _DIAG_LOCK:
+            with open(get_diagnostics_path(), 'a', encoding='utf-8', errors='replace') as f:
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                f.write(f'[{timestamp}] {text}\n')
+                f.flush()
+    except Exception:
+        pass
+
+
+def _process_memory_mb():
+    """Return (process_working_set_mb, system_available_mb) on Windows."""
+    try:
+        class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ('cb', ctypes.wintypes.DWORD), ('PageFaultCount', ctypes.wintypes.DWORD),
+                ('PeakWorkingSetSize', ctypes.c_size_t), ('WorkingSetSize', ctypes.c_size_t),
+                ('QuotaPeakPagedPoolUsage', ctypes.c_size_t), ('QuotaPagedPoolUsage', ctypes.c_size_t),
+                ('QuotaPeakNonPagedPoolUsage', ctypes.c_size_t), ('QuotaNonPagedPoolUsage', ctypes.c_size_t),
+                ('PagefileUsage', ctypes.c_size_t), ('PeakPagefileUsage', ctypes.c_size_t),
+            ]
+        pmc = PROCESS_MEMORY_COUNTERS()
+        pmc.cb = ctypes.sizeof(pmc)
+        psapi = ctypes.WinDLL('psapi.dll')
+        psapi.GetProcessMemoryInfo.argtypes = [ctypes.wintypes.HANDLE, ctypes.c_void_p, ctypes.wintypes.DWORD]
+        psapi.GetProcessMemoryInfo.restype = ctypes.wintypes.BOOL
+        process_mb = None
+        if psapi.GetProcessMemoryInfo(ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+            process_mb = pmc.WorkingSetSize / (1024 * 1024)
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [('dwLength', ctypes.wintypes.DWORD), ('dwMemoryLoad', ctypes.wintypes.DWORD),
+                        ('ullTotalPhys', ctypes.c_ulonglong), ('ullAvailPhys', ctypes.c_ulonglong),
+                        ('ullTotalPageFile', ctypes.c_ulonglong), ('ullAvailPageFile', ctypes.c_ulonglong),
+                        ('ullTotalVirtual', ctypes.c_ulonglong), ('ullAvailVirtual', ctypes.c_ulonglong),
+                        ('sullAvailExtendedVirtual', ctypes.c_ulonglong)]
+        mem = MEMORYSTATUSEX()
+        mem.dwLength = ctypes.sizeof(mem)
+        available_mb = None
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem)):
+            available_mb = mem.ullAvailPhys / (1024 * 1024)
+        return process_mb, available_mb
+    except Exception:
+        return None, None
+
+
+def diagnostic_snapshot(label=None):
+    """Write a compact state snapshot useful after a crash."""
+    with _DIAG_LOCK:
+        process_mb, available_mb = _process_memory_mb()
+        parts = [f'stage={_DIAG_STAGE}']
+        if label:
+            parts.append(f'label={label}')
+        if process_mb is not None:
+            parts.append(f'process_ram={process_mb:.1f}MB')
+        if available_mb is not None:
+            parts.append(f'system_available={available_mb:.1f}MB')
+        try:
+            parts.append(f'images={len(bpy.data.images)}')
+            parts.append(f'scenes={len(bpy.data.scenes)}')
+            parts.append(f'objects={len(bpy.data.objects)}')
+            scene = bpy.context.scene
+            parts.append(f'resolution={scene.render.resolution_x}x{scene.render.resolution_y}')
+            parts.append(f'blend={bpy.data.filepath or "<unsaved>"}')
+        except Exception:
+            pass
+        _write_diagnostic_line('MEMORY ' + ' | '.join(parts))
+
+
+def _find_recent_blender_crash_logs():
+    """Find recent Blender crash logs without depending on a fixed username."""
+    roots = []
+    localappdata = os.environ.get('LOCALAPPDATA')
+    if localappdata:
+        roots.append(os.path.join(localappdata, 'Temp'))
+    roots.append(os.path.join(tempfile.gettempdir())) if 'tempfile' in globals() else None
+    found = []
+    for root in roots:
+        if not root or not os.path.isdir(root):
+            continue
+        try:
+            for name in os.listdir(root):
+                if name.lower().endswith('.crash.txt') or name.lower() == 'sf2.crash.txt':
+                    path = os.path.join(root, name)
+                    if os.path.isfile(path):
+                        found.append(path)
+        except Exception:
+            pass
+    return sorted(set(found), key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0, reverse=True)
+
+
+def collect_previous_crash_logs():
+    """Copy a recent Blender native crash report to the Desktop log folder."""
+    try:
+        now = datetime.datetime.now().timestamp()
+        for src in _find_recent_blender_crash_logs():
+            mtime = os.path.getmtime(src)
+            # Only copy recent crash reports. This avoids repeatedly copying an
+            # old SF2.crash.txt on every Blender startup.
+            if now - mtime > 24 * 3600:
+                continue
+            dst = os.path.join(get_diagnostics_dir(), f'Blender_crash_{datetime.datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")}.txt')
+            if not os.path.exists(dst):
+                shutil.copy2(src, dst)
+                _write_diagnostic_line(f'PREVIOUS BLENDER CRASH COPIED: {src} -> {dst}')
+                return dst
+    except Exception as e:
+        _write_diagnostic_line(f'Crash-log collection failed: {e!r}')
+    return None
+
+
+def init_diagnostics():
+    """Initialize the desktop logger and recover the last native crash report."""
+    global _DIAG_HANDLER
+    try:
+        path = get_diagnostics_path()
+        if _DIAG_HANDLER is None:
+            _DIAG_HANDLER = logging.handlers.RotatingFileHandler(path, maxBytes=(1024 * 1024 * 16), backupCount=2, encoding='utf-8')
+            _DIAG_HANDLER.setLevel(logging.DEBUG)
+            _DIAG_HANDLER.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s %(message)s', '%Y-%m-%d %H:%M:%S'))
+            logger.addHandler(_DIAG_HANDLER)
+        _write_diagnostic_line('=== VLM DIAGNOSTICS SESSION START ===')
+        _write_diagnostic_line(f'Blender version: {bpy.app.version_string}')
+        _write_diagnostic_line(f'Python version: {__import__("sys").version.split()[0]}')
+        set_diagnostic_stage('Addon initialized')
+        collect_previous_crash_logs()
+        diagnostic_snapshot('startup')
+    except Exception:
+        pass
+
+
+def write_failure_report(exc=None):
+    """Write a detailed Python failure report; native crashes are recovered next startup."""
+    try:
+        set_diagnostic_stage('PYTHON EXCEPTION')
+        diagnostic_snapshot('exception')
+        if exc is not None:
+            _write_diagnostic_line('EXCEPTION: ' + repr(exc))
+            _write_diagnostic_line('TRACEBACK:\n' + traceback.format_exc())
+        _write_diagnostic_line(f'Diagnostic log: {get_diagnostics_path()}')
+    except Exception:
+        pass
+
+
+def run_with_logger(op):
+    #file_handler = logging.FileHandler(bpy.path.abspath('//vlm.log'))
+    file_handler = logging.handlers.RotatingFileHandler(bpy.path.abspath('//vlm.log'), maxBytes=(1024*1024*4), backupCount=3)
+    stream_handler = logging.StreamHandler()
+    try:
+        init_diagnostics()
+        logger.addHandler(file_handler)
+        logger.addHandler(stream_handler)
+        diagnostic_snapshot('operator-start')
+        result = op()
+        diagnostic_snapshot('operator-finished')
+        return result
+    except Exception as e:
+        logger.exception(e)
+        write_failure_report(e)
+        return {'CANCELLED'}
+    finally:
+        logger.removeHandler(file_handler)
+        logger.removeHandler(stream_handler)
+
 
 def get_global_scale(context):
     if context.scene.vlmSettings.units_mode == 'vpx':

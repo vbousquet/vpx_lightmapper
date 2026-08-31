@@ -733,65 +733,147 @@ def render_all_groups(op, context):
         dup.data.uv_layers['UVMap'].active = True 
 
         render_path_nm = f'{bakepath}NormalMap - Bake - {obj.name}.exr'
-        if opt_force_render or not os.path.exists(bpy.path.abspath(render_path_nm)):
+        normalmap_enabled = bool(dup.vlmSettings.bake_normalmap)
+
+        # Normal maps are persistent cached bake assets.  If the EXR already
+        # exists, load it and NEVER run the NORMAL bake again unless forced.
+        if normalmap_enabled:
+            abs_normal_path = bpy.path.abspath(render_path_nm)
+            if not opt_force_render and os.path.exists(abs_normal_path):
+                try:
+                    bake_img_normal = bpy.data.images.load(abs_normal_path, check_existing=True)
+                    for mat in dup.data.materials:
+                        ti_normal = mat.node_tree.nodes.get("VLM_NormalImage")
+                        if ti_normal:
+                            ti_normal.image = bake_img_normal
+                    logger.info(f"Baking {obj.name} normal map. - Skipped: cached EXR exists")
+                    n_existing += 1
+                except Exception as e:
+                    logger.warning(f"Could not load cached normal map '{abs_normal_path}', rebuilding it: {e}")
+                    need_normal_bake = True
+                else:
+                    need_normal_bake = False
+            else:
+                need_normal_bake = True
+
+            if need_normal_bake:
+                elapsed = time.time() - start_time
+                msg = f". Baking '{obj.name}' normal map. Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+                if elapsed > 0 and n_render_performed > 0:
+                    elapsed_per_render = elapsed / n_render_performed
+                    remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
+                    msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
+                logger.info(msg)
+                if bake_info_group and 'IsNormalMap' in bake_info_group.nodes:
+                    bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 1.0
+                scene.render.filepath = render_path_nm
+                scene.render.image_settings.file_format = 'OPEN_EXR'
+                scene.render.image_settings.color_mode = 'RGB'
+                scene.render.image_settings.exr_codec = 'ZIP'
+                scene.render.image_settings.color_depth = '16'
+
+                with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
+                    bpy.ops.object.bake(
+                        type='NORMAL',
+                        normal_space='OBJECT',
+                        normal_r='POS_X',
+                        normal_g='NEG_Y',
+                        normal_b='NEG_Z',
+                        margin=context.scene.vlmSettings.padding,
+                        use_selected_to_active=False,
+                        use_clear=True
+                    )
+
+                # Persist the actual baked image buffer to the Renders cache.
+                # Image.save_render can target the render buffer in some Blender versions;
+                # for baked images use the image datablock's own save() API explicitly.
+                os.makedirs(os.path.dirname(abs_normal_path), exist_ok=True)
+                bake_img_normal.filepath_raw = abs_normal_path
+                bake_img_normal.file_format = 'OPEN_EXR'
+                bake_img_normal.save()
+                if not os.path.isfile(abs_normal_path):
+                    raise RuntimeError(f"Normal map bake completed but file was not created: {abs_normal_path}")
+
+                logger.info(f"Saved normal map: {abs_normal_path}")
+                n_render_performed += 1
+                if bake_info_group and 'IsNormalMap' in bake_info_group.nodes:
+                    bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 0.0
+        else:
+            logger.info(f"Baking {obj.name} normal map. - Skipped: bake_normalmap is disabled")
+
+        render_path_diffuse = f'{bakepath}DiffuseColor - Bake - {obj.name}.exr'
+        abs_diffuse_path = bpy.path.abspath(render_path_diffuse)
+
+        # Albedo is intentionally controlled by the same "Bake Normal" option.
+        # If Bake Normal is disabled, do NOT load, bake, or save an albedo map.
+        # This prevents the diffuse/albedo bake from running independently.
+        if not normalmap_enabled:
+            logger.info(f"Baking {obj.name} diffuse color (albedo). - Skipped: bake_normalmap is disabled")
+            need_diffuse_bake = False
+        # Albedo is also a persistent bake asset. Reuse the cached EXR instead
+        # of baking it again when a render is resumed.
+        elif not opt_force_render and os.path.exists(abs_diffuse_path):
+            try:
+                bake_img_albedo = bpy.data.images.load(abs_diffuse_path, check_existing=True)
+                for mat in dup.data.materials:
+                    ti_albedo = mat.node_tree.nodes.get("VLM_AlbedoImage")
+                    if ti_albedo:
+                        ti_albedo.image = bake_img_albedo
+                logger.info(f"Baking {obj.name} diffuse color (albedo). - Skipped: cached EXR exists")
+                n_existing += 1
+            except Exception as e:
+                logger.warning(f"Could not load cached albedo '{abs_diffuse_path}', rebuilding it: {e}")
+                need_diffuse_bake = True
+            else:
+                need_diffuse_bake = False
+        else:
+            need_diffuse_bake = True
+
+        if need_diffuse_bake:
             elapsed = time.time() - start_time
-            msg = f". Baking '{obj.name}' normal map. Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+            msg = f". Baking '{obj.name}' diffuse color (albedo). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
             if elapsed > 0 and n_render_performed > 0:
                 elapsed_per_render = elapsed / n_render_performed
                 remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
                 msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
             logger.info(msg)
-            if bake_info_group and 'IsNormalMap' in bake_info_group.nodes: bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 1.0
-            scene.render.filepath = render_path_nm
+
+            if bake_info_group and 'IsDiffuse' in bake_info_group.nodes:
+                bake_info_group.nodes['IsDiffuse'].outputs["Value"].default_value = 1.0
+
+            scene.render.filepath = render_path_diffuse
             scene.render.image_settings.file_format = 'OPEN_EXR'
             scene.render.image_settings.color_mode = 'RGB'
-            scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
+            scene.render.image_settings.exr_codec = 'ZIP'
             scene.render.image_settings.color_depth = '16'
-            # context needs an active, linked, not hidden, mesh
+
+            for mat in dup.data.materials:
+                mat.node_tree.nodes.active = mat.node_tree.nodes.get("VLM_AlbedoImage")
+
             with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
-                bpy.ops.object.bake(type='NORMAL', normal_space='OBJECT', normal_r='POS_X', normal_g='NEG_Y', normal_b='NEG_Z', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
-                if dup.vlmSettings.bake_normalmap:
-                    bake_img_normal.save_render(bpy.path.abspath(render_path_nm), scene=scene)
+                bpy.context.view_layer.use_pass_diffuse_color = True
+                bpy.ops.object.bake(
+                    type='DIFFUSE',
+                    pass_filter={'COLOR'},
+                    use_selected_to_active=False,
+                    use_clear=True,
+                    margin=context.scene.vlmSettings.padding
+                )
+
+            # Persist the actual baked image buffer to the Renders cache.
+            os.makedirs(os.path.dirname(abs_diffuse_path), exist_ok=True)
+            bake_img_albedo.filepath_raw = abs_diffuse_path
+            bake_img_albedo.file_format = 'OPEN_EXR'
+            bake_img_albedo.save()
+            if not os.path.isfile(abs_diffuse_path):
+                raise RuntimeError(f"Albedo bake completed but file was not created: {abs_diffuse_path}")
+
+            logger.info(f"Saved albedo: {abs_diffuse_path}")
             logger.info('\n')
             n_render_performed += 1
-            if bake_info_group and 'IsNormalMap' in bake_info_group.nodes: bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 0.0
-        else:
-            logger.info(f'Baking {obj.name} normal map. - Skipped since it is already rendered and cached')
-            n_existing += 1
 
-        render_path_diffuse = f'{bakepath}DiffuseColor - Bake - {obj.name}.exr'
-    
-        elapsed = time.time() - start_time
-        msg = f". Baking '{obj.name}' diffuse color (albedo). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
-        if elapsed > 0 and n_render_performed > 0:
-            elapsed_per_render = elapsed / n_render_performed
-            remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
-            msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
-        logger.info(msg)
-        
-        if bake_info_group and 'IsDiffuse' in bake_info_group.nodes: 
-            bake_info_group.nodes['IsDiffuse'].outputs["Value"].default_value = 1.0
-        
-        scene.render.filepath = render_path_diffuse
-        scene.render.image_settings.file_format = 'OPEN_EXR'
-        scene.render.image_settings.color_mode = 'RGB'
-        scene.render.image_settings.exr_codec = 'ZIP'  # Lossless compression
-        scene.render.image_settings.color_depth = '16'
-        
-        for mat in dup.data.materials:
-            mat.node_tree.nodes.active = mat.node_tree.nodes.get("VLM_AlbedoImage")
-
-        with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
-            bpy.context.view_layer.use_pass_diffuse_color = True
-            bpy.ops.object.bake(type='DIFFUSE', pass_filter={'COLOR'}, use_selected_to_active=False, use_clear=True, margin=context.scene.vlmSettings.padding)
-        
-        logger.info('\n')
-        n_render_performed += 1
-        
-        # Reset Bake Info Group after bake if applicable
-        if bake_info_group and 'IsDiffuse' in bake_info_group.nodes: 
-            bake_info_group.nodes['IsDiffuse'].outputs["Value"].default_value = 0.0
-
+            if bake_info_group and 'IsDiffuse' in bake_info_group.nodes:
+                bake_info_group.nodes['IsDiffuse'].outputs["Value"].default_value = 0.0
 
         for mat in dup.data.materials:
             mat.node_tree.nodes.active = mat.node_tree.nodes.get("VLM_BakeImage")

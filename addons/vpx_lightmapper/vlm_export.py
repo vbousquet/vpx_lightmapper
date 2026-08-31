@@ -542,14 +542,27 @@ def export_vpx(op, context):
         n_read_images = n_read_images + 1
 
     # Add new bake/lightmap textures
-    nestmap_index = 0
-    while True:
+    # IMPORTANT: Drive export from the files that were actually produced, not only
+    # from bake_nestmap object assignments. Split/checkpoint workflows can leave
+    # perfectly valid Nestmap N files even when no remaining object carries index N.
+    nestmap_files = {}
+    export_dir = bpy.path.abspath(f'{bakepath}Export')
+    if os.path.isdir(export_dir):
+        for filename in os.listdir(export_dir):
+            m = re.fullmatch(r'Nestmap (\d+)\.(exr|webp)', filename, re.IGNORECASE)
+            if m:
+                nestmap_files[int(m.group(1))] = os.path.join(export_dir, filename)
+
+    object_nest_indices = {int(obj.vlmSettings.bake_nestmap) for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap >= 0}
+    nestmap_indices = sorted(set(nestmap_files) | object_nest_indices)
+
+    for nestmap_index in nestmap_indices:
         objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap == nestmap_index]
-        if not objects:
-            break
-        is_hdr = next( (o for o in objects if o.vlmSettings.is_lightmap and o.vlmSettings.bake_hdr_range > 1.0), None) is not None
+        is_hdr = next((o for o in objects if o.vlmSettings.is_lightmap and o.vlmSettings.bake_hdr_range > 1.0), None) is not None
         base_path = bpy.path.abspath(f'{bakepath}Export/Nestmap {nestmap_index}')
-        nestmap_path = f'{base_path}.exr' if is_hdr else f'{base_path}.webp'
+        preferred_path = f'{base_path}.exr' if is_hdr else f'{base_path}.webp'
+        alternate_path = f'{base_path}.webp' if is_hdr else f'{base_path}.exr'
+        nestmap_path = preferred_path if os.path.exists(preferred_path) else alternate_path
         if not os.path.exists(nestmap_path):
             logger.error(f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
             op.report({"ERROR"}, f'Error missing pack file {nestmap_path}. Create nestmaps before exporting')
@@ -584,11 +597,16 @@ def export_vpx(op, context):
 
 
     # Add new normalmap textures
-    nestmap_index = 0
-    while True:
+    normalmap_files = {}
+    if os.path.isdir(export_dir):
+        for filename in os.listdir(export_dir):
+            m = re.fullmatch(r'Nestmap (\d+) - NM\.webp', filename, re.IGNORECASE)
+            if m:
+                normalmap_files[int(m.group(1))] = os.path.join(export_dir, filename)
+
+    normalmap_indices = sorted(set(normalmap_files) | object_nest_indices)
+    for nestmap_index in normalmap_indices:
         objects = [obj for obj in result_col.all_objects if obj.vlmSettings.bake_nestmap == nestmap_index]
-        if not objects:
-            break
         has_nm = False
         for obj in objects:
             has_nm = has_nm or (next((mat for mat in obj.data.materials if mat.get('VLM.HasNormalMap') == True and mat['VLM.IsLightmap'] == False), None) is not None)
@@ -625,7 +643,7 @@ def export_vpx(op, context):
             dst_stream.Write(writer.get_data())
             logger.info(f'. Adding NestNormalMap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
             n_images += 1
-        nestmap_index += 1
+
 
 
     # Copy all other data from reference file, adjusting version and game data on the fly
