@@ -34,6 +34,8 @@ import math
 import mathutils
 import importlib
 import subprocess
+import hashlib
+import json
 from bpy_extras.io_utils import (ImportHelper, axis_conversion)
 from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty, FloatVectorProperty, EnumProperty, PointerProperty)
 from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, Collection)
@@ -158,7 +160,14 @@ class VLM_Scene_props(PropertyGroup):
     bevel_plastics: FloatProperty(name="Bevel plastics", description="Bevel converted plastics", default = 1.0)
     # Baker options
     force_open_console: BoolProperty(name="Console on bake", description="Force open a console on bake if not already present", default = True)
-    batch_inc_group: BoolProperty(name="Perform Group", description="Perform Group step when batching", default = True)
+    # Batch pipeline selection.  Each step can be enabled/disabled in the Batch All dialog.
+    batch_step_groups: BoolProperty(name="Groups", description="Evaluate render groups", default=True)
+    batch_step_render: BoolProperty(name="Render", description="Render lighting scenarios", default=True)
+    batch_step_meshes: BoolProperty(name="Meshes", description="Create bake meshes", default=True)
+    batch_step_nestmaps: BoolProperty(name="Nestmaps", description="Create/nest lightmaps", default=True)
+    batch_step_export: BoolProperty(name="Export", description="Export the updated VPX table", default=True)
+    # Kept for backwards compatibility with older saved .blend files.
+    batch_inc_group: BoolProperty(name="Perform Group", description="Legacy alias for the Groups batch step", default=True)
     batch_shutdown: BoolProperty(name="Shutdown", description="Shutdown computer after batch", default = False)
     render_height: IntProperty(
         name="PF Render Height", description="Render height of the playfield used to define projective baking render size",
@@ -531,7 +540,7 @@ class VLM_OT_export_vpx(Operator):
 class VLM_OT_batch_bake(Operator):
     bl_idname = "vlm.batch_bake_operator"
     bl_label = "Batch All"
-    bl_description = "Performs all the bake steps in a batch, then export an updated VPX table (lengthy operation)"
+    bl_description = "Select which bake steps to perform, then run them in order"
     bl_options = {"REGISTER", "UNDO"}
 
     def do_shutdown(self, context, result):
@@ -539,15 +548,13 @@ class VLM_OT_batch_bake(Operator):
             vlm_utils.run_with_logger(lambda : logger.info('\n>> Shutting down'))
             os.system("shutdown /s /t 1")
         return result
-    
+
     def spawn_console(self):
         # This will only spawn a console window if one does not already exist.
         try:
             import win32gui, bpy
         except:
-            #ghetto guard for windows use only, as it will need completely different methods to query windows on other platforms
             return
-            
         def get_window_titles():
             ret = []
             def winEnumHandler(hwnd, ctx):
@@ -557,50 +564,290 @@ class VLM_OT_batch_bake(Operator):
                         ret.append((hwnd,txt))
             win32gui.EnumWindows(winEnumHandler, None)
             return ret
-
         all_titles = get_window_titles()
         window_ends = lambda title: [(hwnd,full_title) for (hwnd,full_title) in all_titles if full_title.endswith(title)]
-        all_matching_windows = window_ends('blender.exe') # a slightly broad assumption that only the console window ends with blender.exr in the title but works
-        if len(all_matching_windows) == 0:
+        if len(window_ends('blender.exe')) == 0:
             bpy.ops.wm.console_toggle()
-            
+
+    # ------------------------------------------------------------------
+    # Batch validation / resume support
+    # ------------------------------------------------------------------
+    # A simple "file exists" test is not enough for resume: an old cache can
+    # belong to a different table, render setup, light setup or mesh state.
+    # Every successfully completed batch step therefore stores a signature of
+    # the inputs that produced it.  The signature is kept in the .blend file
+    # and is checked again before a later batch is allowed to skip that step.
+
+    def _hash_update(self, h, value):
+        h.update(repr(value).encode('utf-8', 'replace'))
+
+    def _scene_signature(self, context, step):
+        h = hashlib.sha256()
+        scene = context.scene
+        self._hash_update(h, ('blend', os.path.abspath(context.blend_data.filepath)))
+        self._hash_update(h, ('step', step))
+        props = scene.vlmSettings
+        for name in (
+            'table_file', 'render_height', 'render_ratio', 'padding',
+            'tex_size', 'remove_backface', 'keep_pf_reflection_faces',
+            'denoise_prefilter', 'max_lighting', 'hdr_auto',
+            'hdr_custom_range', 'export_mode', 'export_prefix'
+        ):
+            if hasattr(props, name):
+                self._hash_update(h, (name, getattr(props, name)))
+
+        cam = scene.camera
+        if cam:
+            self._hash_update(h, ('camera', cam.name, tuple(round(x, 7) for row in cam.matrix_world for x in row)))
+
+        bake_col = vlm_collections.get_collection(scene.collection, 'VLM.Bake', create=False)
+        if bake_col:
+            for obj in sorted(bake_col.all_objects, key=lambda o: o.name):
+                self._hash_update(h, ('obj', obj.name, obj.type))
+                if obj.type == 'MESH' and obj.data:
+                    mesh = obj.data
+                    self._hash_update(h, ('mesh', len(mesh.vertices), len(mesh.edges), len(mesh.polygons), len(mesh.loops)))
+                    # Topology/geometry is important for mesh/render cache validity.
+                    for v in mesh.vertices:
+                        self._hash_update(h, tuple(round(c, 6) for c in v.co))
+                for name in ('render_group', 'indirect_only', 'use_bake', 'bake_normalmap',
+                             'is_lightmap', 'is_movable', 'hide_from_others'):
+                    if hasattr(obj.vlmSettings, name):
+                        self._hash_update(h, (name, getattr(obj.vlmSettings, name)))
+                self._hash_update(h, ('world_matrix', tuple(round(x, 7) for row in obj.matrix_world for x in row)))
+
+        light_col = vlm_collections.get_collection(scene.collection, 'VLM.Lights', create=False)
+        if light_col:
+            for col in sorted(light_col.children, key=lambda c: c.name):
+                if col.hide_render:
+                    continue
+                self._hash_update(h, ('lightcol', col.name, col.vlmSettings.light_mode))
+                for obj in sorted(col.all_objects, key=lambda o: o.name):
+                    self._hash_update(h, ('light', obj.name, obj.type))
+                    if obj.type == 'LIGHT':
+                        self._hash_update(h, ('energy', getattr(obj.data, 'energy', None), 'color', tuple(getattr(obj.data, 'color', (0,0,0)))))
+                    self._hash_update(h, ('matrix', tuple(round(x, 7) for row in obj.matrix_world for x in row)))
+
+        return h.hexdigest()
+
+    def _manifest_path(self, context):
+        return bpy.path.abspath(f"{vlm_utils.get_bakepath(context)}batch_manifest.json")
+
+    def _read_manifest(self, context):
+        path = self._manifest_path(context)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_manifest(self, context, step):
+        path = self._manifest_path(context)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data = self._read_manifest(context)
+        data[step] = {
+            'signature': self._scene_signature(context, step),
+            'time': time.time(),
+        }
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+
+    def _manifest_valid(self, context, step):
+        entry = self._read_manifest(context).get(step)
+        return bool(entry and entry.get('signature') == self._scene_signature(context, step))
+
+    def _groups_complete(self, context):
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+        if not bake_col or not context.scene.camera or context.blend_data.filepath == '':
+            return False
+        relevant = [o for o in bake_col.all_objects if not o.vlmSettings.indirect_only and not o.vlmSettings.use_bake]
+        if not relevant or not all(o.vlmSettings.render_group >= 0 for o in relevant):
+            return False
+        n_groups = vlm_utils.get_n_render_groups(context)
+        if n_groups <= 0:
+            return False
+        mask_path = vlm_utils.get_bakepath(context, type='MASKS')
+        for i in range(n_groups):
+            for suffix in (f'Mask - Group {i}.png', f'Mask - Group {i} (Padded LD).png'):
+                if not os.path.isfile(bpy.path.abspath(f'{mask_path}{suffix}')):
+                    return False
+        return self._manifest_valid(context, 'groups')
+
+    def _render_cache_complete(self, context):
+        if not self._manifest_valid(context, 'render'):
+            return False
+        bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
+        bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
+        if not bake_col or not context.scene.camera or not os.path.isdir(bpy.path.abspath(bakepath)):
+            return False
+        scenarios = vlm_utils.get_lightings(context)
+        n_groups = vlm_utils.get_n_render_groups(context)
+        # A valid render step must have at least one cached artifact for every
+        # render group and every baked object. This avoids treating an empty
+        # Renders directory as a successful render.
+        for group_index in range(n_groups):
+            if not any(os.path.isfile(bpy.path.abspath(f'{bakepath}{sc[0]} - Group {group_index}.exr')) for sc in scenarios):
+                return False
+        for obj in bake_col.all_objects:
+            if not obj.vlmSettings.use_bake:
+                continue
+            artifacts = [os.path.isfile(bpy.path.abspath(f'{bakepath}{sc[0]} - Bake - {obj.name}.exr')) for sc in scenarios]
+            if not any(artifacts):
+                return False
+            if obj.vlmSettings.bake_normalmap and not os.path.isfile(bpy.path.abspath(f'{bakepath}NormalMap - Bake - {obj.name}.exr')):
+                return False
+            if obj.vlmSettings.bake_normalmap and not os.path.isfile(bpy.path.abspath(f'{bakepath}DiffuseColor - Bake - {obj.name}.exr')):
+                return False
+        return True
+
+    def _meshes_complete(self, context):
+        if not self._manifest_valid(context, 'meshes'):
+            return False
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        if not result_col or len(result_col.all_objects) == 0:
+            return False
+        for obj in result_col.all_objects:
+            if obj.type != 'MESH' or not obj.data or len(obj.data.vertices) == 0:
+                return False
+            if not obj.data.uv_layers.get('UVMap'):
+                return False
+        return True
+
+    def _nestmaps_complete(self, context):
+        if not self._manifest_valid(context, 'nestmaps'):
+            return False
+        result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
+        if not result_col or len(result_col.all_objects) == 0:
+            return False
+        export_path = vlm_utils.get_bakepath(context, type='EXPORT')
+        if not os.path.isdir(bpy.path.abspath(export_path)):
+            return False
+        for obj in result_col.all_objects:
+            if not obj.data or not obj.data.uv_layers.get('UVMap Nested'):
+                return False
+        return any(name.lower().startswith('nestmap') for name in os.listdir(bpy.path.abspath(export_path)))
+
+    def _export_valid(self, context):
+        if not self._manifest_valid(context, 'export'):
+            return False
+        if not VLM_OT_export_vpx.poll(context):
+            return False
+        expected = bpy.path.abspath(f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - VLM.vpx")
+        return os.path.isfile(expected) and os.path.getsize(expected) > 0
+
+    def _selected(self, props):
+        return [
+            ('groups', props.batch_step_groups, 'Groups'),
+            ('render', props.batch_step_render, 'Render'),
+            ('meshes', props.batch_step_meshes, 'Meshes'),
+            ('nestmaps', props.batch_step_nestmaps, 'Nestmaps'),
+            ('export', props.batch_step_export, 'Export'),
+        ]
+
+    def _validate_selection(self, context):
+        props = context.scene.vlmSettings
+        steps = self._selected(props)
+        selected = {name for name, enabled, _ in steps if enabled}
+        if not selected:
+            return False, "Select at least one batch step."
+
+        # Dependencies: if a prerequisite is not selected, it must already be valid.
+        deps = {
+            'render': [('groups', 'Render needs completed render groups')],
+            'meshes': [('render', 'Meshes need completed render caches')],
+            'nestmaps': [('meshes', 'Nestmaps need completed bake meshes')],
+            'export': [('nestmaps', 'Export needs completed nestmaps')],
+        }
+        for step, enabled, label in steps:
+            if not enabled:
+                continue
+            for dep, msg in deps.get(step, []):
+                if dep not in selected and not self._status(context, dep):
+                    return False, msg + ". Enable the prerequisite or finish it first."
+        return True, ""
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.vlmSettings
+        layout.label(text="Select batch steps:", icon='SORT_ASC')
+        box = layout.box()
+        for step, prop_name, label, icon in [
+            ('groups', 'batch_step_groups', '1. Groups', 'GROUP_VERTEX'),
+            ('render', 'batch_step_render', '2. Render', 'RENDER_RESULT'),
+            ('meshes', 'batch_step_meshes', '3. Meshes', 'MESH_MONKEY'),
+            ('nestmaps', 'batch_step_nestmaps', '4. Nestmaps', 'TEXTURE_DATA'),
+            ('export', 'batch_step_export', '5. Export', 'EXPORT'),
+        ]:
+            row = box.row(align=True)
+            row.prop(props, prop_name, text=label)
+            row.label(text="✓ Completed" if self._status(context, step) else "○ Not completed", icon='CHECKMARK' if self._status(context, step) else 'DOT')
+        layout.separator()
+        layout.prop(props, "batch_shutdown")
+        layout.label(text="Skipped steps need a verified checkpoint from this version.", icon='INFO')
+        layout.label(text="Older caches are rebuilt once to establish a checkpoint.", icon='INFO')
+
+    def invoke(self, context, event):
+        # Keep the legacy setting in sync for old .blend files.
+        if not hasattr(context.scene.vlmSettings, 'batch_step_groups'):
+            context.scene.vlmSettings.batch_step_groups = context.scene.vlmSettings.batch_inc_group
+        return context.window_manager.invoke_props_dialog(self, width=430)
+
     def execute(self, context):
+        valid, message = self._validate_selection(context)
+        if not valid:
+            self.report({'ERROR'}, message)
+            return {'CANCELLED'}
+
+        props = context.scene.vlmSettings
         if context.scene.vlmSettings.force_open_console:
             self.spawn_console()
         start_time = time.time()
-        vlm_utils.run_with_logger(lambda : logger.info(f"\nStarting complete bake batch..."))
-        if context.scene.vlmSettings.batch_inc_group:
-            result = vlm_utils.run_with_logger(lambda : vlm_group_baker.compute_render_groups(self, context))
-            if 'FINISHED' not in result: return self.do_shutdown(context, result)
-            try:
-                bpy.ops.wm.save_mainfile()
-            except Exception as e:
-                logger.warning(f'Autosave after group computation failed: {e}')
-        result = vlm_utils.run_with_logger(lambda : vlm_render_baker.render_all_groups(self, context))
-        if 'FINISHED' not in result: return self.do_shutdown(context, result)
-        try:
-            bpy.ops.wm.save_mainfile()
-        except Exception as e:
-            logger.warning(f'Autosave after render failed: {e}')
-        result = vlm_utils.run_with_logger(lambda : vlm_meshes_baker.create_bake_meshes(self, context))
-        if 'FINISHED' not in result: return self.do_shutdown(context, result)
-        try:
-            bpy.ops.wm.save_mainfile()
-        except Exception as e:
-            logger.warning(f'Autosave after mesh creation failed: {e}')
-        result = vlm_utils.run_with_logger(lambda : vlm_nestmap_baker.render_nestmaps(self, context))
-        if 'FINISHED' not in result: return self.do_shutdown(context, result)
-        try:
-            bpy.ops.wm.save_mainfile()
-        except Exception as e:
-            logger.warning(f'Autosave after nestmap generation failed: {e}')
-        result = vlm_utils.run_with_logger(lambda : vlm_export.export_vpx(self, context))
-        if 'FINISHED' not in result: return self.do_shutdown(context, result)
-        try:
-            bpy.ops.wm.save_mainfile()
-        except Exception as e:
-            logger.warning(f'Autosave after export failed: {e}')
-        vlm_utils.run_with_logger(lambda : logger.info(f"\nBatch baking performed in {vlm_utils.format_time(time.time() - start_time)}"))
+        vlm_utils.run_with_logger(lambda : logger.info("\nStarting selected bake batch..."))
+
+        selected = {name for name, enabled, _ in self._selected(props) if enabled}
+        ordered = [('groups', 'Groups'), ('render', 'Render'), ('meshes', 'Meshes'), ('nestmaps', 'Nestmaps'), ('export', 'Export')]
+        operations = {
+            'groups': lambda: vlm_group_baker.compute_render_groups(self, context),
+            'render': lambda: vlm_render_baker.render_all_groups(self, context),
+            'meshes': lambda: vlm_meshes_baker.create_bake_meshes(self, context),
+            'nestmaps': lambda: vlm_nestmap_baker.render_nestmaps(self, context),
+            'export': lambda: vlm_export.export_vpx(self, context),
+        }
+        autosave_after = {'groups', 'render', 'meshes', 'nestmaps', 'export'}
+        result = {'FINISHED'}
+        for step, label in ordered:
+            if step not in selected:
+                vlm_utils.run_with_logger(lambda label=label: logger.info(f"\nSkipping batch step: {label}"))
+                continue
+            vlm_utils.run_with_logger(lambda label=label: logger.info(f"\nBatch step: {label}"))
+            result = vlm_utils.run_with_logger(operations[step])
+            if 'FINISHED' not in result:
+                return self.do_shutdown(context, result)
+
+            # Record the current inputs only after the operator has completed,
+            # then validate the actual outputs/state. If validation fails the
+            # marker is removed, so this step can never be falsely skipped later.
+            self._write_manifest(context, step)
+            if not self._status(context, step):
+                data = self._read_manifest(context)
+                data.pop(step, None)
+                try:
+                    with open(self._manifest_path(context), 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2, sort_keys=True)
+                except Exception:
+                    pass
+                self.report({'ERROR'}, f'{label} finished but validation failed. The batch was stopped.')
+                vlm_utils.run_with_logger(lambda label=label: logger.error(f'\n{label} reported FINISHED, but its outputs/state are not valid. Batch stopped.'))
+                return self.do_shutdown(context, {'CANCELLED'})
+
+            if step in autosave_after:
+                try:
+                    bpy.ops.wm.save_mainfile()
+                except Exception as e:
+                    logger.warning(f'Autosave after {label.lower()} failed: {e}')
+
+        vlm_utils.run_with_logger(lambda : logger.info(f"\nSelected batch performed in {vlm_utils.format_time(time.time() - start_time)}"))
         return self.do_shutdown(context, result)
 
 
@@ -944,25 +1191,27 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         # Denoise Prefilter
         layout.prop(vlmProps, 'denoise_prefilter')
         layout.separator()
-        # Actions buttons
+        # Actions: one process per row for a clearer pipeline view.
+        layout.label(text='Pipeline', icon='SORT_ASC')
+        for op_id, icon, text in [
+            (VLM_OT_compute_render_groups.bl_idname, 'GROUP_VERTEX', '1. Groups'),
+            (VLM_OT_render_all_groups.bl_idname, 'RENDER_RESULT', '2. Render'),
+            (VLM_OT_create_bake_meshes.bl_idname, 'MESH_MONKEY', '3. Meshes'),
+            (VLM_OT_render_nestmaps.bl_idname, 'TEXTURE_DATA', '4. Nestmaps'),
+            (VLM_OT_export_vpx.bl_idname, 'EXPORT', '5. Export'),
+        ]:
+            row = layout.row()
+            row.scale_y = 1.35
+            row.operator(op_id, icon=icon, text=text)
         row = layout.row()
-        row.scale_y = 1.5
-        row.operator(VLM_OT_compute_render_groups.bl_idname, icon='GROUP_VERTEX', text='Groups')
-        row.operator(VLM_OT_render_all_groups.bl_idname, icon='RENDER_RESULT', text='Renders')
-        row.operator(VLM_OT_create_bake_meshes.bl_idname, icon='MESH_MONKEY', text='Meshes')
-        row = layout.row()
-        row.scale_y = 1.5
-        row.operator(VLM_OT_render_nestmaps.bl_idname, icon='TEXTURE_DATA', text='Nestmaps')
-        row.operator(VLM_OT_clear_nesting_checkpoint.bl_idname, icon='FILE_REFRESH', text='Clear Checkpoint')
-        row.operator(VLM_OT_export_vpx.bl_idname, icon='EXPORT', text='Export')
-        row.operator(VLM_OT_batch_bake.bl_idname)
+        row.scale_y = 1.6
+        row.operator(VLM_OT_batch_bake.bl_idname, icon='PLAY', text='Batch All...')
         row = layout.row()
         row.use_property_split = False
         row.alignment = 'CENTER'
-        row.label(text='Batch:')
-        row.prop(vlmProps, "force_open_console", expand=True)        
-        row.prop(vlmProps, "batch_inc_group", expand=True)
-        row.prop(vlmProps, "batch_shutdown", expand=True)
+        row.label(text='Batch options:')
+        row.prop(vlmProps, "force_open_console", text='Console')
+        row.prop(vlmProps, "batch_shutdown", text='Shutdown')
 
 
 class VLM_PT_Col_Props(bpy.types.Panel):
