@@ -34,6 +34,38 @@ import win32cryptcon
 from win32com import storagecon
 
 
+def build_matr_block(name, base, glossy, clearcoat, wrap_lighting, roughness, glossy_image_lerp, thickness, edge, edge_alpha, opacity, is_metal, opacity_active, elasticity, elasticity_falloff, friction, scatter_angle, refraction_tint=0xFFFFFF):
+    """Build a standalone VPX 10.8+ 'MATR' material record (see VPX's Material::Save).
+    Since 10.8, VPX saves each material twice: once in the legacy fixed-size MASI/MATE/PHMA arrays
+    (kept for backward compatibility) and once as a self-contained MATR record. On load, VPX discards
+    the legacy entries in favor of the MATR records as soon as their counts match, so any material
+    appended to the legacy arrays must also get one of these or it silently disappears on load.
+    """
+    inner = biff_io.BIFF_writer()
+    inner.write_tagged_32(b'TYPE', 1 if is_metal else 0)
+    inner.write_tagged_string(b'NAME', name)
+    inner.write_tagged_float(b'WLIG', wrap_lighting)
+    inner.write_tagged_float(b'ROUG', roughness)
+    inner.write_tagged_float(b'GIML', glossy_image_lerp)
+    inner.write_tagged_float(b'THCK', thickness)
+    inner.write_tagged_float(b'EDGE', edge)
+    inner.write_tagged_float(b'EALP', edge_alpha)
+    inner.write_tagged_float(b'OPAC', opacity)
+    inner.write_tagged_u32(b'BASE', base)
+    inner.write_tagged_u32(b'GLOS', glossy)
+    inner.write_tagged_u32(b'COAT', clearcoat)
+    inner.write_tagged_u32(b'RTNT', refraction_tint)
+    inner.write_tagged_bool(b'EOPA', opacity_active)
+    inner.write_tagged_float(b'ELAS', elasticity)
+    inner.write_tagged_float(b'ELFO', elasticity_falloff)
+    inner.write_tagged_float(b'FRIC', friction)
+    inner.write_tagged_float(b'SCAT', scatter_angle)
+    inner.close(write_endb=True)
+    inner_data = inner.get_data()
+    # Skippable BIFF sub-object: record size covers the 'MATR' id plus the whole nested content (matching BiffWriter::EndObject)
+    return struct.pack('<I', 4 + len(inner_data)) + b'MATR' + inner_data
+
+
 def export_name(object_name):
     export_prefix = bpy.context.scene.vlmSettings.export_prefix
     return export_prefix + object_name.replace(".", "_").replace(" ", "_").replace("-", "_")
@@ -190,9 +222,10 @@ def export_vpx(op, context):
     n_read_item = n_game_items = 0
     used_images = {}
     removed_images = {}
-    prefix = ['Wall', 'Flipper', 'Timer', 'Plunger', 'Text', 'Bumper', 'Trigger', 'Light', 'Kicker', '', 'Gate', 'Spinner', 'Ramp', 
-        'Table', 'LightCenter', 'DragPoint', 'Collection', 'DispReel', 'LightSeq', 'Prim', 'Flasher', 'Rubber', 'Target']
+    prefix = ['Wall', 'Flipper', 'Timer', 'Plunger', 'Text', 'Bumper', 'Trigger', 'Light', 'Kicker', '', 'Gate', 'Spinner', 'Ramp',
+        'Table', 'LightCenter', 'DragPoint', 'Collection', 'DispReel', 'LightSeq', 'Prim', 'Flasher', 'Rubber', 'Target', 'Ball', 'PartGroup']
     needs_playfield_physics = True
+    existing_group_names = set() # VPX 10.8.1+ hierarchical PartGroups (see FID(GRUP)), used to place newly baked objects in an unused layer slot
     while src_storage.exists(f'GameStg/GameItem{n_read_item}'):
         data = src_storage.openstream(f'GameStg/GameItem{n_read_item}').read()
         data = bytearray(data)
@@ -218,6 +251,8 @@ def export_vpx(op, context):
                 is_baked_light = name in baked_vpx_lights
                 break
             item_data.skip_tag()
+        if item_type == 24: # PartGroup (VPX 10.8.1+ hierarchical groups replacing simple layers)
+            existing_group_names.add(name)
         item_data = biff_io.BIFF_reader(data)
         item_type = item_data.get_32()
         layer_name = ''
@@ -503,8 +538,10 @@ def export_vpx(op, context):
         writer.write_tagged_bool(b'LOCK', True)
         writer.write_tagged_bool(b'LVIS', True)
         writer.write_tagged_bool(b'ZMSK', False if (is_lightmap or (obj == pfobj) or not col.vlmSettings.is_opaque) else True)
-        writer.write_tagged_u32(b'LAYR', 0)
-        writer.write_tagged_string(b'LANR', f'VLM.{export_prefix}Lightmaps' if is_lightmap else f'VLM.{export_prefix}Visuals')
+        group_name = f'VLM.{export_prefix}Lightmaps' if is_lightmap else f'VLM.{export_prefix}Visuals'
+        writer.write_tagged_u32(b'LAYR', min(len(existing_group_names) + (1 if is_lightmap else 0), 11)) # avoid colliding with an existing top-level PartGroup's legacy layer slot
+        writer.write_tagged_string(b'LANR', group_name)
+        writer.write_tagged_string(b'GRUP', group_name) # VPX 10.8.1+ hierarchical group (see FID(GRUP) in ieditable.cpp); mirrors LANR since our groups are always top-level
         if is_lightmap:
             sync_light, _ = get_vpx_sync_light(obj, context, light_col)
             writer.write_tagged_string(b'LMAP', sync_light if sync_light else '')
@@ -688,7 +725,7 @@ def export_vpx(op, context):
                     phma_pos = br.pos
                 elif br.tag == "CODE":
                     code_pos = br.pos
-                    code = br.get_string()
+                    code = br.get_raw_string() # not get_string(): script source may contain an embedded NUL byte, which must not truncate the read
                     br.pos = code_pos
                     br.delete_bytes(len(code) + 4) # Remove the actual len-prepended code string
                     new_code = ""
@@ -714,10 +751,13 @@ def export_vpx(op, context):
                     br.insert_data(wr.get_data())
                 else:
                     br.skip_tag()
+            # Position right before GameData's closing ENDB tag, used below to append new 10.8+ MATR material records
+            endb_insert_pos = br.pos - 8
             # modify existing data to add missing VLM materials
             n_material_to_add = 0
             wr = biff_io.BIFF_writer()
             pr = biff_io.BIFF_writer()
+            matr_blocks = []
             if not has_solid_bake_mat:
                 n_material_to_add += 1
                 wr.write_data(b'VLM.Bake.Solid\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
@@ -737,6 +777,9 @@ def export_vpx(op, context):
                 pr.write_float(0.0)
                 pr.write_float(0.0)
                 pr.write_float(0.0)
+                matr_blocks.append(build_matr_block('VLM.Bake.Solid', 0x7F7F7F, 0x000000, 0x000000,
+                    wrap_lighting=0.0, roughness=0.0, glossy_image_lerp=1.0, thickness=12/255, edge=0.0, edge_alpha=0.0, opacity=1.0,
+                    is_metal=False, opacity_active=False, elasticity=0.0, elasticity_falloff=0.0, friction=0.0, scatter_angle=0.0))
             if not has_active_bake_mat:
                 n_material_to_add += 1
                 wr.write_data(b'VLM.Bake.Active\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
@@ -756,6 +799,9 @@ def export_vpx(op, context):
                 pr.write_float(0.0)
                 pr.write_float(0.0)
                 pr.write_float(0.0)
+                matr_blocks.append(build_matr_block('VLM.Bake.Active', 0x7F7F7F, 0x000000, 0x000000,
+                    wrap_lighting=0.0, roughness=0.0, glossy_image_lerp=1.0, thickness=12/255, edge=0.0, edge_alpha=0.0, opacity=1.0,
+                    is_metal=False, opacity_active=True, elasticity=0.0, elasticity_falloff=0.0, friction=0.0, scatter_angle=0.0))
             if not has_light_mat:
                 n_material_to_add += 1
                 wr.write_data(b'VLM.Lightmap\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
@@ -775,6 +821,9 @@ def export_vpx(op, context):
                 pr.write_float(0.0)
                 pr.write_float(0.0)
                 pr.write_float(0.0)
+                matr_blocks.append(build_matr_block('VLM.Lightmap', 0x7F7F7F, 0x000000, 0x000000,
+                    wrap_lighting=0.0, roughness=0.0, glossy_image_lerp=1.0, thickness=12/255, edge=0.0, edge_alpha=0.0, opacity=1.0,
+                    is_metal=False, opacity_active=True, elasticity=0.0, elasticity_falloff=0.0, friction=0.0, scatter_angle=0.0))
             logger.info(f'. Adding {n_material_to_add} materials')
             br.pos = masi_pos
             br.put_u32(n_materials + n_material_to_add)
@@ -788,6 +837,12 @@ def export_vpx(op, context):
             br.put_u32((n_materials + n_material_to_add) * 48 + 4)
             for i, d in enumerate(pr.get_data()):
                 br.data.insert(phma_pos + i, d)
+            if matr_blocks:
+                # New materials must also get a 10.8+ MATR record (see build_matr_block), appended just before GameData's closing ENDB.
+                # mate_pos/phma_pos are before endb_insert_pos in the stream, so both insertions above shift it forward.
+                endb_insert_pos += len(wr.get_data()) + len(pr.get_data())
+                matr_data = b''.join(matr_blocks)
+                br.data[endb_insert_pos:endb_insert_pos] = matr_data
             data = bytes(br.data)
         if hashed:
             if mode == 0:

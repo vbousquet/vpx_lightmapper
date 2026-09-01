@@ -443,7 +443,7 @@ def read_vpx(op, context, filepath):
             elif game_data.tag == 'CODE':
                 code_pos = game_data.pos
                 code_size = game_data.get_u32()
-                code = game_data.get_string()
+                code = game_data.get_raw_str(code_size) # not get_string(): the length was already read above, and script source may contain an embedded NUL byte
                 game_data.pos = code_pos
                 game_data.skip(code_size)
                 movables = {match[0] for match in re.compile(r'([a-zA-Z][[a-zA-Z0-9_]+)\.(rotx-zz|rotandtra0-9|transx-z|objrotx-z|size_x-z)').findall(code.lower())}

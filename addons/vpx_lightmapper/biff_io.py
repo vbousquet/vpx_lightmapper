@@ -82,7 +82,18 @@ class BIFF_reader:
     
     def get_string(self):
         return self.get_str(self.get_u32())
-    
+
+    def get_raw_str(self, count):
+        # Like get_str, but does not truncate at an embedded NUL byte. Needed for content that is not a
+        # fixed-size NUL-padded buffer (e.g. table script source, which may legitimately contain a stray \x00).
+        i = str(struct.unpack("%ds" % count, self.data[self.pos:self.pos+count])[0], 'latin_1')
+        self.pos = self.pos + count
+        self.bytes_in_record_remaining = self.bytes_in_record_remaining - count
+        return i
+
+    def get_raw_string(self):
+        return self.get_raw_str(self.get_u32())
+
     def get_wide_string(self):
         count = self.get_u32()
         i = str(self.data[self.pos:self.pos+count], 'utf-16-le')
