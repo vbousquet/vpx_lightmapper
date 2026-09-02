@@ -19,6 +19,7 @@ import math
 import mathutils
 import time
 from . import vlm_utils
+from .vlm_compat52 import set_compositing_enabled, set_eevee_engine
 from . import vlm_collections
 from PIL import Image # External dependency
 
@@ -77,10 +78,7 @@ def compute_render_groups(op, context):
     scene = bpy.data.scenes.new('VLM.Tmp Scene')
     scene.collection.objects.link(camera_object)
     scene.camera = camera_object
-    if bpy.app.version < (4, 2, 0): 
-        scene.render.engine = 'BLENDER_EEVEE'
-    else:
-        scene.render.engine = 'BLENDER_EEVEE_NEXT'
+    set_eevee_engine(scene)
     scene.render.film_transparent = True
     scene.render.resolution_y = opt_mask_size
     scene.render.resolution_x = int(opt_mask_size * opt_ar)
@@ -88,12 +86,13 @@ def compute_render_groups(op, context):
     scene.render.image_settings.file_format = "PNG"
     scene.render.image_settings.color_mode = 'RGBA'
     scene.render.image_settings.color_depth = '8'
-    scene.eevee.taa_render_samples = 1
+    if hasattr(scene.eevee, 'taa_render_samples'):
+        scene.eevee.taa_render_samples = 1
     scene.eevee.volumetric_samples = 1
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
     scene.world = None
-    scene.use_nodes = False
+    set_compositing_enabled(scene, False)
 
     modelview_matrix = camera_object.matrix_world.inverted()
     projection_matrix = camera_object.calc_matrix_camera(context.evaluated_depsgraph_get(),

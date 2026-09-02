@@ -134,6 +134,8 @@ def export_vpx(op, context):
         op.report({'ERROR'}, "No 'VLM.Result' collection to process")
         return {'CANCELLED'}
 
+    vlm_utils.set_diagnostic_stage('Export: preparing VPX')
+    vlm_utils.diagnostic_snapshot('export-start')
     bakepath = vlm_utils.get_bakepath(context)
     vlm_utils.mkpath(f"{bakepath}Export/")
     export_mode = context.scene.vlmSettings.export_mode
@@ -833,6 +835,8 @@ def export_vpx(op, context):
     logger.info(f'. Images marked as used: {list(used_images.keys())}')
     logger.info(f'. Images marked as deletable: {list(removed_images.keys())}')
 
+    vlm_utils.set_diagnostic_stage('Export complete')
+    vlm_utils.diagnostic_snapshot('export-complete')
     logger.info(f'\nExport finished.')
     return {"FINISHED"}
     

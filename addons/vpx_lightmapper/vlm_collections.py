@@ -17,14 +17,36 @@ import bpy
 
 
 def find_layer_collection(root_layer_collection, col):
-    found = None
+    """Find the LayerCollection wrapper for a datablock Collection.
+
+    Blender's scene collection is represented by the root LayerCollection
+    itself, so check the root before recursively searching its children.
+    """
+    if root_layer_collection is None or col is None:
+        return None
+    if root_layer_collection.collection == col:
+        return root_layer_collection
     for sub in root_layer_collection.children:
-        if sub.collection == col:
-            return sub
         found = find_layer_collection(sub, col)
         if found is not None:
             return found
-    return found
+    return None
+
+
+def get_layer_collection(scene, col):
+    """Return a LayerCollection for *col* in the supplied scene.
+
+    Always use the scene's own ViewLayer hierarchy.  This is important for
+    temporary render scenes where bpy.context.view_layer may refer to another
+    scene/view layer.
+    """
+    if scene is None or col is None:
+        return None
+    for view_layer in scene.view_layers:
+        lc = find_layer_collection(view_layer.layer_collection, col)
+        if lc is not None:
+            return lc
+    return None
 
 
 def create_collection(context, name, parent, create = True):
@@ -53,6 +75,8 @@ def unlink_collection(col):
 
 
 def get_collection(parent_col, col_name, create=True):
+    if parent_col is None:
+        return None
     if col_name in parent_col.children:
         return parent_col.children[col_name]
     if create:
@@ -69,8 +93,9 @@ def push_state(root_col=None):
     if not root_col: root_col = get_collection('ROOT', False)
     if root_col:
         for col in root_col.children:
-            lc = find_layer_collection(bpy.context.view_layer.layer_collection, col)
-            state.append((col.name, col, lc.exclude, lc.indirect_only, col.hide_render, col.hide_viewport))
+            lc = get_layer_collection(bpy.context.scene, col)
+            if lc is not None:
+                state.append((col.name, col, lc.exclude, lc.indirect_only, col.hide_render, col.hide_viewport))
             state.extend(push_state(col))
     return state
 
@@ -78,9 +103,10 @@ def push_state(root_col=None):
 def pop_state(state):
     for name, col, exclude, indirect_only, hide_render, hide_viewport in state:
         if name in bpy.data.collections:
-            lc = find_layer_collection(bpy.context.view_layer.layer_collection, col)
-            lc.exclude = exclude
-            lc.indirect_only = indirect_only
+            lc = get_layer_collection(bpy.context.scene, col)
+            if lc is not None:
+                lc.exclude = exclude
+                lc.indirect_only = indirect_only
             col.hide_render = hide_render
             col.hide_viewport = hide_viewport
 
@@ -123,7 +149,9 @@ def exclude_all(context, root_col, exclude=True):
 
 def hide_all(context, root_col, exclude=True):
     rlc = context.view_layer.layer_collection
-    find_layer_collection(rlc, root_col).hide_viewport = exclude
+    root_view_layer = find_layer_collection(rlc, root_col)
+    if root_view_layer is not None:
+        root_view_layer.hide_viewport = exclude
     for col in root_col.children:
         hide_all(context, col, exclude)
     

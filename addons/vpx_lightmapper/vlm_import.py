@@ -28,6 +28,7 @@ from bpy_extras.io_utils import axis_conversion
 from . import biff_io
 from . import vlm_utils
 from . import vlm_collections
+from . import vlm_compat52
 
 # Dependencies which need a custom install (not included in the Blender install)
 from PIL import Image
@@ -2003,10 +2004,7 @@ def read_vpx(op, context, filepath):
     # Purge unlinked datas
     bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
 
-    try:
-        context.scene.vlmSettings.table_file = bpy.path.relpath(filepath)
-    except:
-        context.scene.vlmSettings.table_file = filepath
+    context.scene.vlmSettings.table_file = vlm_compat52.safe_relpath(filepath)
     
     context.scene.vlmSettings.playfield_width = (playfield_width / global_scale) * (1.0625 / 50.0) # convert to inches
     context.scene.vlmSettings.playfield_height = (playfield_height / global_scale) * (1.0625 / 50.0) # convert to inches

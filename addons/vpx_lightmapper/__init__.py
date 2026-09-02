@@ -16,9 +16,9 @@
 bl_info = {
     "name": "Visual Pinball X Light Mapper",
     "author": "Vincent Bousquet",
-    "version": (1, 0, 0),
-    "blender": (3, 2, 0),
-    "description": "VPX Light Mapper — FINAL 1.0 | HDR Auto/Custom 0.1–100, stable mesh/UV/nesting, memory safety, checkpoint/resume, complete export, diagnostics",
+    "version": (3, 0, 21),
+    "blender": (4, 5, 0),
+    "description": "VPX Light Mapper 3.0.21 | Blender 4.5–5.2 compatibility with Blender 5.2 compositor migration, HDR Auto/Custom 0.1–100, stable mesh/UV/nesting, memory safety, checkpoint/resume, complete export, diagnostics",
     "warning": "Requires installation of external dependencies",
     "wiki_url": "",
     "tracker_url": "",
@@ -26,6 +26,7 @@ bl_info = {
     "category": "Import-Export"}
 
 import bpy
+import bmesh
 import os
 import sys
 import glob
@@ -40,6 +41,16 @@ from bpy_extras.io_utils import (ImportHelper, axis_conversion)
 from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty, FloatVectorProperty, EnumProperty, PointerProperty)
 from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, Collection)
 from rna_prop_ui import PropertyPanel
+
+# Load the Blender-version compatibility layer first.
+# The module name is intentionally unique (vlm_compat52) so a stale cached
+# vlm_compat module from an older installed addon cannot be mixed with the
+# current render baker during Blender extension/addon installation.
+importlib.invalidate_caches()
+if "vlm_compat52" in locals():
+    importlib.reload(vlm_compat52)
+else:
+    from . import vlm_compat52
 
 # Use import.reload for all submodule to allow iterative development using bpy.ops.script.reload()
 if "vlm_dependencies" in locals():
@@ -642,7 +653,23 @@ class VLM_OT_batch_bake(Operator):
         except Exception:
             return {}
 
+    def _invalidate_batch_status_cache(self, *steps):
+        # Batch status is also queried while drawing the popup. Those values can
+        # become stale as soon as a batch operation changes the scene/files.
+        # Never reuse a pre-operation status during post-operation validation.
+        cache = getattr(self, '_batch_status_cache', None)
+        if cache is None:
+            return
+        if steps:
+            for step in steps:
+                cache.pop(step, None)
+        else:
+            cache.clear()
+
     def _write_manifest(self, context, step):
+        # The operation may have changed render groups, meshes, files, etc.
+        # Invalidate any status that was calculated while the dialog was drawn.
+        self._invalidate_batch_status_cache(step)
         path = self._manifest_path(context)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         data = self._read_manifest(context)
@@ -729,12 +756,61 @@ class VLM_OT_batch_bake(Operator):
         return any(name.lower().startswith('nestmap') for name in os.listdir(bpy.path.abspath(export_path)))
 
     def _export_valid(self, context):
+        # The exporter names the generated VPX from the selected VPX template,
+        # not from the current .blend file.  These can legitimately have
+        # different names (e.g. SF2.blend -> V1 - VLM.vpx).
         if not self._manifest_valid(context, 'export'):
             return False
         if not VLM_OT_export_vpx.poll(context):
             return False
-        expected = bpy.path.abspath(f"//{os.path.splitext(bpy.path.basename(context.blend_data.filepath))[0]} - VLM.vpx")
-        return os.path.isfile(expected) and os.path.getsize(expected) > 0
+        try:
+            input_path = bpy.path.abspath(context.scene.vlmSettings.table_file)
+            if not os.path.isfile(input_path):
+                return False
+            expected = bpy.path.abspath(
+                f"//{os.path.splitext(bpy.path.basename(input_path))[0]} - VLM.vpx"
+            )
+            return os.path.isfile(expected) and os.path.getsize(expected) > 0
+        except (TypeError, ValueError, OSError):
+            return False
+
+    def _status(self, context, step):
+        """Return whether a batch step has a valid completed state.
+
+        This method is intentionally kept separate from the UI drawing code.
+        Batch All previously referenced ``self._status`` without defining it,
+        which caused Blender to abort the popup after drawing the first row.
+        The visible symptom was that only ``Groups`` appeared in the dialog.
+
+        Results are cached for the lifetime of this operator instance because
+        the dialog may query the same status several times while drawing.
+        The actual validators still verify the manifest signature and outputs.
+        """
+        cache = getattr(self, '_batch_status_cache', None)
+        if cache is None:
+            cache = {}
+            self._batch_status_cache = cache
+        if step in cache:
+            return cache[step]
+
+        validators = {
+            'groups': self._groups_complete,
+            'render': self._render_cache_complete,
+            'meshes': self._meshes_complete,
+            'nestmaps': self._nestmaps_complete,
+            'export': self._export_valid,
+        }
+        validator = validators.get(step)
+        if validator is None:
+            cache[step] = False
+            return False
+        try:
+            result = bool(validator(context))
+        except Exception as exc:
+            logger.warning(f'Batch status check for {step} failed: {exc}')
+            result = False
+        cache[step] = result
+        return result
 
     def _selected(self, props):
         return [
@@ -783,9 +859,11 @@ class VLM_OT_batch_bake(Operator):
             row.prop(props, prop_name, text=label)
             row.label(text="✓ Completed" if self._status(context, step) else "○ Not completed", icon='CHECKMARK' if self._status(context, step) else 'DOT')
         layout.separator()
-        layout.prop(props, "batch_shutdown")
+        row = layout.row(align=True)
+        row.prop(props, "batch_shutdown")
+        row.operator("vlm.reset_batch_state", icon='FILE_REFRESH', text="Reset Batch State")
         layout.label(text="Skipped steps need a verified checkpoint from this version.", icon='INFO')
-        layout.label(text="Older caches are rebuilt once to establish a checkpoint.", icon='INFO')
+        layout.label(text="Reset clears batch validation/resume state but keeps cached files.", icon='INFO')
 
     def invoke(self, context, event):
         # Keep the legacy setting in sync for old .blend files.
@@ -825,6 +903,10 @@ class VLM_OT_batch_bake(Operator):
             if 'FINISHED' not in result:
                 return self.do_shutdown(context, result)
 
+            # The popup may have cached the step as incomplete before execution.
+            # Force a fresh validation against the state produced by this operation.
+            self._invalidate_batch_status_cache(step)
+
             # Record the current inputs only after the operator has completed,
             # then validate the actual outputs/state. If validation fails the
             # marker is removed, so this step can never be falsely skipped later.
@@ -838,7 +920,9 @@ class VLM_OT_batch_bake(Operator):
                 except Exception:
                     pass
                 self.report({'ERROR'}, f'{label} finished but validation failed. The batch was stopped.')
-                vlm_utils.run_with_logger(lambda label=label: logger.error(f'\n{label} reported FINISHED, but its outputs/state are not valid. Batch stopped.'))
+                vlm_utils.run_with_logger(lambda label=label, step=step: logger.error(
+                    f'\n{label} reported FINISHED, but its outputs/state are not valid. '
+                    f'Fresh post-operation validation for step={step} failed; batch stopped.'))
                 return self.do_shutdown(context, {'CANCELLED'})
 
             if step in autosave_after:
@@ -1114,7 +1198,7 @@ class VLM_OT_select_table_file(Operator, ImportHelper):
     )
 
     def execute(self, context):
-        context.scene.vlmSettings.table_file = bpy.path.relpath(self.filepath)
+        context.scene.vlmSettings.table_file = vlm_compat52.safe_relpath(self.filepath)
         return {'FINISHED'} 
 
 
@@ -1316,6 +1400,28 @@ class VLM_PT_3D_VPX_Light(bpy.types.Panel):
 
 from itertools import pairwise
 
+
+
+def _get_selected_uv_edge_indices(mesh, uv_layer_name='UVMap'):
+    """Return edge indices selected in a UV map using Blender 5.x BMesh UV data."""
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(mesh)
+        bm.edges.ensure_lookup_table()
+        uv_layer = bm.loops.layers.uv.get(uv_layer_name)
+        if uv_layer is None:
+            return set()
+        selected = set()
+        for edge in bm.edges:
+            for loop in edge.link_loops:
+                if loop[uv_layer].select_edge:
+                    selected.add(edge.index)
+                    break
+        return selected
+    finally:
+        bm.free()
+
+
 class VLM_OT_calc_bake_size(Operator):
     bl_idname = "vlm.calc_bake_size"
     bl_label = "Fit Bake Size"
@@ -1332,6 +1438,13 @@ class VLM_OT_calc_bake_size(Operator):
     def execute(self, context):
         camera = context.scene.camera
         uv_unwrapped_layer = context.active_object.data.uv_layers['UVMap']
+        selected_uv_edges = _get_selected_uv_edge_indices(context.active_object.data, uv_unwrapped_layer.name) if bpy.app.version >= (5, 0, 0) else None
+
+        def uv_edge_is_selected(loop_idx):
+            if selected_uv_edges is not None:
+                return context.active_object.data.loops[loop_idx].edge_index in selected_uv_edges
+            return uv_unwrapped_layer.edge_selection[loop_idx].value
+
         uv_projected_layer = context.active_object.data.uv_layers.new()
         proj_ar = vlm_utils.get_render_proj_ar(context)
         render_size = vlm_utils.get_render_size(context)
@@ -1342,7 +1455,7 @@ class VLM_OT_calc_bake_size(Operator):
         print('Trying to fit to user selected orthogonal UV edges:')
         for face in context.active_object.data.polygons:
             for loop_idx0, loop_idx1 in pairwise(list(face.loop_indices) + [face.loop_indices[0]]):
-                if uv_unwrapped_layer.edge_selection[loop_idx0].value:
+                if uv_edge_is_selected(loop_idx0):
                     uv_u = uv_unwrapped_layer.uv[loop_idx1].vector - uv_unwrapped_layer.uv[loop_idx0].vector
                     l_u = uv_u.length
                     if l_u >= minimum_length_u:
@@ -1361,7 +1474,7 @@ class VLM_OT_calc_bake_size(Operator):
             bake_ar = context.active_object.vlmSettings.bake_height / context.active_object.vlmSettings.bake_width
             for face in context.active_object.data.polygons:
                 for loop_idx0, loop_idx1 in pairwise(list(face.loop_indices) + [face.loop_indices[0]]):
-                    if uv_unwrapped_layer.edge_selection[loop_idx0].value:
+                    if uv_edge_is_selected(loop_idx0):
                         uv_u = uv_unwrapped_layer.uv[loop_idx1].vector - uv_unwrapped_layer.uv[loop_idx0].vector
                         uv_u[1] = uv_u[1] * bake_ar
                         l_u = uv_u.length
@@ -1588,6 +1701,46 @@ class VLM_PT_Props_warning_panel(bpy.types.Panel):
             layout.label(text=line)
 
 
+class VLM_OT_reset_batch_state(Operator):
+    bl_idname = "vlm.reset_batch_state"
+    bl_label = "Reset Batch State"
+    bl_description = "Clear Batch All validation/resume state without deleting cached render or export files"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        removed_manifest = False
+        try:
+            manifest_path = bpy.path.abspath(
+                f"{vlm_utils.get_bakepath(context)}batch_manifest.json"
+            )
+            if os.path.isfile(manifest_path):
+                os.remove(manifest_path)
+                removed_manifest = True
+
+            # Also clear the nesting resume marker and reset nestmap assignments
+            # so a subsequent Batch All cannot resume an interrupted nesting run.
+            vlm_nestmap_baker.clear_nesting_checkpoint(context, reset_assignments=True)
+
+            props = context.scene.vlmSettings
+            props.batch_step_groups = True
+            props.batch_step_render = True
+            props.batch_step_meshes = True
+            props.batch_step_nestmaps = True
+            props.batch_step_export = True
+            props.batch_inc_group = True
+
+            self.report(
+                {'INFO'},
+                'Batch state reset. Cached files were kept; the next Batch All will validate steps again.'
+                if removed_manifest
+                else 'Batch state reset. Cached files were kept.'
+            )
+            return {'FINISHED'}
+        except Exception as err:
+            self.report({'ERROR'}, f'Could not reset batch state: {err}')
+            return {'CANCELLED'}
+
+
 class VLM_OT_clear_nesting_checkpoint(Operator):
     bl_idname = "vlm.clear_nesting_checkpoint"
     bl_label = "Clear Nesting Checkpoint"
@@ -1660,7 +1813,8 @@ classes = (
     VLM_OT_render_all_groups,
     VLM_OT_create_bake_meshes,
     VLM_OT_render_nestmaps,
-     VLM_OT_clear_nesting_checkpoint,
+    VLM_OT_reset_batch_state,
+    VLM_OT_clear_nesting_checkpoint,
     VLM_OT_batch_bake,
     VLM_OT_state_import_mesh,
     VLM_OT_state_import_transform,

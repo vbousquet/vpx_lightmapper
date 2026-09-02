@@ -17,6 +17,7 @@ import bpy
 import time
 from . import vlm_collections
 from . import vlm_utils
+from .vlm_compat52 import get_compositor_tree, set_compositing_enabled
 
 logger = vlm_utils.logger
 
@@ -60,25 +61,32 @@ def select_occluded(op, context):
     scene.cycles.samples = 1
     scene.cycles.use_denoising = False
     scene.world = None #bpy.data.worlds["VPX.Env.Black"]
-    scene.use_nodes = True
+    set_compositing_enabled(scene, True)
     scene.view_layers[0].use_pass_combined = False
     scene.view_layers[0].use_pass_z = False
     scene.view_layers[0].use_pass_object_index = True
     
-    nodes = scene.node_tree.nodes
-    links = scene.node_tree.links
+    tree = get_compositor_tree(scene, create=True, clear=True)
+    nodes = tree.nodes
+    links = tree.links
     nodes.clear()
     links.clear()
     rl = nodes.new("CompositorNodeRLayers")
     rl.scene = scene
     rl.location.x = -200
-    out = nodes.new("CompositorNodeComposite")
-    out.location.x = 200
+    out = None
+    if bpy.app.version < (5, 0, 0):
+        out = nodes.new("CompositorNodeComposite")
+        out.location.x = 200
+    index_output = rl.outputs.get('IndexOB')
+    if index_output is None:
+        raise RuntimeError("VPX Lightmapper: Cycles Object Index render pass 'IndexOB' is unavailable in the occlusion scene.")
     vn = nodes.new("CompositorNodeViewer")
     vn.location.x = 200
     vn.location.y = -200
-    links.new(rl.outputs[2], out.inputs[0])
-    links.new(rl.outputs[2], vn.inputs[0])
+    if out is not None:
+        links.new(index_output, out.inputs[0])
+    links.new(index_output, vn.inputs[0])
 
     bake_objects = []
     for col in bake_col.children:

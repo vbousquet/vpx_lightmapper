@@ -29,6 +29,7 @@ import gpu
 from collections import namedtuple
 from gpu_extras.batch import batch_for_shader
 from . import vlm_utils
+from .vlm_compat52 import create_shader, ensure_gpu_backend
 from PIL import Image # External dependency
 
 logger = vlm_utils.logger
@@ -537,6 +538,7 @@ def cache_clear(cache):
 
 
 def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nestmap_index):
+    ensure_gpu_backend()
     vlm_utils.set_diagnostic_stage(f'Nestmap {nestmap_index}: render_nestmap start')
     vlm_utils.diagnostic_snapshot(f'nestmap-{nestmap_index}-start')
     padding, islands, targets, target_heights = nestmap
@@ -642,7 +644,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                }
             }
         }'''
-    render_shader = gpu.types.GPUShader(render_vs, render_fs)
+    render_shader = create_shader(render_vs, render_fs)
     render_batch = batch_for_shader(render_shader, 'TRIS', { "pos": ((0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)) }, )
         
     # Offscreen surface where we render the seam fading mask for lightmaps
@@ -664,7 +666,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
         { 
             FragColor = colInterp; 
         }'''
-    seams_shader = gpu.types.GPUShader(seams_vs, seams_fs)
+    seams_shader = create_shader(seams_vs, seams_fs)
 
     full_white_mask = bpy.data.images.new('Full White', 1, 1, alpha=False)
     full_white_mask.pixels = (1.0, 1.0, 1.0, 1.0)
@@ -978,6 +980,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
 
 
 def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, tex_h):
+    ensure_gpu_backend()
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     bm.faces.ensure_lookup_table()
@@ -995,7 +998,7 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
     offscreen = None
     vertex_shader = 'in vec2 pos; uniform vec2 ofs; void main() { gl_Position = vec4(2.0 * (pos + ofs) - vec2(1.0), 0.0, 1.0); }'
     fragment_shader = 'out vec4 FragColor; void main() { FragColor = vec4(1.0); }'
-    shader_draw = gpu.types.GPUShader(vertex_shader, fragment_shader)
+    shader_draw = create_shader(vertex_shader, fragment_shader)
     gpu.state.blend_set('NONE')
     total_pix_count = 0
     islands_to_skip = []

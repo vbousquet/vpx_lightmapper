@@ -238,6 +238,8 @@ def render_nestmaps(op, context):
     for obj in selected_objects:
         obj.select_set(True)
         context.view_layer.objects.active = obj
+    vlm_utils.set_diagnostic_stage(f'Nesting complete ({n_nestmaps} nestmaps)')
+    vlm_utils.diagnostic_snapshot('nesting-complete')
     logger.info(f'\nNestmap generation finished ({n_nestmaps} nestmaps generated for {len(to_nest)} objects) in {str(datetime.timedelta(seconds=time.time() - start_time))}.')
     # Diagnostic: any object still at -1 here is genuinely unexpected (empty-UV objects are
     # now assigned nestmap_offset by nest(), so -1 means something went wrong during preparation)

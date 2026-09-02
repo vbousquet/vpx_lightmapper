@@ -36,6 +36,7 @@ import ctypes.wintypes
 from mathutils import Vector
 from gpu_extras.presets import draw_texture_2d
 from gpu_extras.batch import batch_for_shader
+from .vlm_compat52 import create_shader, set_compositing_enabled, ensure_gpu_backend
 from . import vlm_collections
 from . import biff_io
 
@@ -400,7 +401,7 @@ def project_uv(camera, obj, ar, uv_layer = None):
     
     
 def fixSlash(filepath: str) -> str:
-    """convert \\\+ to /"""
+    r"""convert \\+ to /"""
     filepath = re.sub(r"\\+", "/", filepath)
     filepath = re.sub(r"\/+", "/", filepath)
     return filepath
@@ -464,7 +465,7 @@ def push_render_settings(set_raw):
                 bpy.context.scene.render.pixel_aspect_x, bpy.context.scene.render.pixel_aspect_y,
                 bpy.context.scene.render.engine,
                 bpy.context.scene.render.film_transparent,
-                bpy.context.scene.eevee.taa_render_samples,
+                getattr(bpy.context.scene.eevee, 'taa_render_samples', None),
                 bpy.context.scene.render.image_settings.file_format,
                 bpy.context.scene.render.image_settings.color_mode,
                 bpy.context.scene.render.image_settings.color_depth,
@@ -473,7 +474,7 @@ def push_render_settings(set_raw):
                 bpy.context.scene.render.image_settings.exr_codec,
                 bpy.context.scene.render.bake.use_clear,
                 bpy.context.scene.render.bake.use_selected_to_active,
-                bpy.context.scene.use_nodes,
+                bpy.context.scene.render.use_compositing,
                 bpy.context.scene.render.resolution_x,
                 bpy.context.scene.render.resolution_y,
                 bpy.context.view_layer.use_pass_combined,
@@ -501,7 +502,8 @@ def pop_render_settings(state):
     bpy.context.scene.render.pixel_aspect_y = state[9]
     bpy.context.scene.render.engine = state[10]
     bpy.context.scene.render.film_transparent = state[11]
-    bpy.context.scene.eevee.taa_render_samples = state[12]
+    if state[12] is not None and hasattr(bpy.context.scene.eevee, 'taa_render_samples'):
+        bpy.context.scene.eevee.taa_render_samples = state[12]
     bpy.context.scene.render.image_settings.file_format = state[13]
     bpy.context.scene.render.image_settings.color_mode = state[14]
     bpy.context.scene.render.image_settings.color_depth = state[15]
@@ -510,7 +512,7 @@ def pop_render_settings(state):
     bpy.context.scene.render.image_settings.exr_codec = state[18]
     bpy.context.scene.render.bake.use_clear = state[19]
     bpy.context.scene.render.bake.use_selected_to_active = state[20]
-    bpy.context.scene.use_nodes = state[21]
+    set_compositing_enabled(bpy.context.scene, state[21])
     bpy.context.scene.render.resolution_x = state[22]
     bpy.context.scene.render.resolution_y = state[23]
     bpy.context.view_layer.use_pass_combined = state[24]
@@ -662,6 +664,7 @@ def get_n_render_groups(context):
 
 
 def render_mask(context, width, height, target_image, view_matrix, projection_matrix):
+    ensure_gpu_backend()
     """Uses Blender's internal renderer to render the active scene as an opacity mask
     to the given image (not saved)
     """
@@ -716,7 +719,7 @@ def render_mask(context, width, height, target_image, view_matrix, projection_ma
                 FragColor = vec4(0.0, 0.0, 0.0, 2.1 * t.r);
             }
         '''
-        bw_shader = gpu.types.GPUShader(vertex_shader, bw_fragment_shader)
+        bw_shader = create_shader(vertex_shader, bw_fragment_shader)
         bw_shader.bind()
         bw_shader.uniform_sampler("image", offscreen.texture_color)
         batch_for_shader(
@@ -744,6 +747,7 @@ def render_mask(context, width, height, target_image, view_matrix, projection_ma
 
 
 def render_blueprint(context, height, is_solid):
+    ensure_gpu_backend()
     image_name = 'blueprint'
     playfield_width = context.scene.vlmSettings.playfield_width * (2.54 / 100.0)
     playfield_height = context.scene.vlmSettings.playfield_height * (2.54 / 100.0)
