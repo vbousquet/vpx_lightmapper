@@ -27,6 +27,15 @@ from math import radians
 from mathutils import Vector
 from gpu_extras.batch import batch_for_shader
 from . import vlm_utils
+from .vlm_compat52 import (
+    get_compositor_tree,
+    set_compositing_enabled,
+    set_eevee_engine,
+    configure_file_output_node_52,
+    configure_denoise_node_52,
+    set_material_surface_render_method,
+    set_diffuse_color_pass_enabled,
+)
 from . import vlm_collections
 from PIL import Image # External dependency
 
@@ -291,15 +300,41 @@ def render_all_groups(op, context):
     scene.render.film_transparent = True
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
-    scene.view_layers[0].use_pass_z = False
-    scene.use_nodes = False
-
-    # Setup the scene with all the bake objects with indirect render influence
+    # Setup the scene with all the bake objects with indirect render influence.
+    #
+    # Blender stores collection render flags (including `indirect_only`) on the
+    # ViewLayer's LayerCollection, not on the datablock Collection itself.  In
+    # Blender 5.x a ViewLayer created together with a temporary Scene can retain
+    # a stale LayerCollection hierarchy after collections are linked.  Build the
+    # temporary collections first, then recreate the ViewLayer so its hierarchy
+    # is guaranteed to contain them.
     indirect_col = bpy.data.collections.new('Indirect')
     render_col = bpy.data.collections.new('Render')
     scene.collection.children.link(indirect_col)
     scene.collection.children.link(render_col)
-    vlm_collections.find_layer_collection(scene.view_layers[0].layer_collection, indirect_col).indirect_only = True
+
+    # Build a fresh ViewLayer AFTER the temporary collections are linked.
+    # Blender always requires at least one ViewLayer, so create the replacement
+    # first and only then remove the automatically-created one.  This guarantees
+    # that the new layer receives the current scene collection hierarchy.
+    if len(scene.view_layers) == 0:
+        render_view_layer = scene.view_layers.new(name='ViewLayer')
+    else:
+        old_view_layer = scene.view_layers[0]
+        render_view_layer = scene.view_layers.new(name='VLM Render')
+        scene.view_layers.remove(old_view_layer)
+
+    render_view_layer.use_pass_z = False
+    set_compositing_enabled(scene, False)
+
+    indirect_lc = vlm_collections.get_layer_collection(scene, indirect_col)
+    if indirect_lc is None:
+        raise RuntimeError(
+            "VPX Lightmapper: Blender 5.2 did not create a LayerCollection for "
+            "the temporary 'Indirect' collection."
+        )
+    indirect_lc.indirect_only = True
+
     for obj in bake_col.all_objects:
         if not obj.vlmSettings.hide_from_others:
             indirect_col.objects.link(obj)
@@ -373,12 +408,13 @@ def render_all_groups(op, context):
             prev_world = scene.world
             render_world = None
             n_scenarios = 0
-            scene.use_nodes = True
-            scene.view_layers[0].cycles.denoising_store_passes = True
+            set_compositing_enabled(scene, True)
+            render_view_layer.cycles.denoising_store_passes = True
             scene.render.use_file_extension = False
 
-            nodes = scene.node_tree.nodes
-            links = scene.node_tree.links
+            tree = get_compositor_tree(scene, create=True, clear=True)
+            nodes = tree.nodes
+            links = tree.links
             nodes.clear()
             links.clear()
             rl = nodes.new("CompositorNodeRLayers")
@@ -430,7 +466,7 @@ def render_all_groups(op, context):
                     influence = scenario_influence
 
                 # Append scenario to render scene and batch
-                scene.view_layers[0].lightgroups.add(name=name.replace(".","_"))
+                render_view_layer.lightgroups.add(name=name.replace(".","_"))
                 initial_state = (0, None)
                 if vlm_utils.is_rgb_led(lights):
                     colored_lights = [o for o in lights if o.type=='LIGHT']
@@ -441,7 +477,7 @@ def render_all_groups(op, context):
                     light.lightgroup = name.replace(".","_")
                     render_col.objects.link(light)
                 denoise = nodes.new("CompositorNodeDenoise")
-                denoise.prefilter = denoise_prefilter
+                configure_denoise_node_52(denoise, denoise_prefilter) if bpy.app.version >= (5, 0, 0) else setattr(denoise, 'prefilter', denoise_prefilter)
                 denoise.location.x = 200
                 denoise.location.y = -(i-dec) * 200
                 links.new(rl.outputs['Denoising Normal'], denoise.inputs['Normal'])
@@ -449,15 +485,17 @@ def render_all_groups(op, context):
                 out = nodes.new("CompositorNodeOutputFile")
                 out.location.x = 600
                 out.location.y = -(i-dec) * 200
+                if bpy.app.version >= (5, 0, 0):
+                    configure_file_output_node_52(out, socket_name='Image')
                 if is_lightmap:
-                    links.new(denoise.outputs['Image'], out.inputs['Image'])
+                    links.new(denoise.outputs['Image'], out.inputs[0])
                 else:
                     alpha = nodes.new("CompositorNodeSetAlpha")
                     alpha.location.x = 400
                     alpha.location.y = -(i-dec) * 200
                     links.new(denoise.outputs['Image'], alpha.inputs['Image'])
                     links.new(rl.outputs['Alpha'], alpha.inputs['Alpha'])
-                    links.new(alpha.outputs['Image'], out.inputs['Image'])
+                    links.new(alpha.outputs['Image'], out.inputs[0])
                 batch.append((scenario, denoise, out, initial_state, scenario_influence))
 
                 # Sort remaining scenarios to priorize the ones that will lead to the smaller render area, or if the result is the same area, choose the smallest ones
@@ -479,13 +517,26 @@ def render_all_groups(op, context):
             for scenario, denoise, out, initial_state, scenario_influence in batch:
                 name, is_lightmap, light_col, lights = scenario
                 links.new(rl.outputs[f'Combined_{name.replace(".","_")}'], denoise.inputs[0])
-                out.base_path = f'{bakepath}'
-                out.file_slots[0].path = f'{name} - Group {group_index}.exr'
-                out.file_slots[0].use_node_format = True
-                out.format.file_format = 'OPEN_EXR'
-                out.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
-                out.format.exr_codec = 'ZIP' # Lossless compression
-                out.format.color_depth = '16'
+                if bpy.app.version >= (5, 0, 0):
+                    configure_file_output_node_52(
+                        out,
+                        socket_name='Image',
+                        directory=bakepath,
+                        file_name=f'{name} - Group {group_index}.exr',
+                        file_format='OPEN_EXR',
+                        color_mode='RGB' if is_lightmap else 'RGBA',
+                        color_depth='16',
+                        exr_codec='ZIP',
+                        use_file_extension=False,
+                    )
+                else:
+                    out.base_path = f'{bakepath}'
+                    out.file_slots[0].path = f'{name} - Group {group_index}.exr'
+                    out.file_slots[0].use_node_format = True
+                    out.format.file_format = 'OPEN_EXR'
+                    out.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
+                    out.format.exr_codec = 'ZIP' # Lossless compression
+                    out.format.color_depth = '16'
                 logger.info(f'. Scenario {name} selected, render area: {scenario_influence}')
             
             elapsed = time.time() - start_time
@@ -507,17 +558,112 @@ def render_all_groups(op, context):
             else:
                 scene.render.use_border = False
             
-            bpy.ops.render.render(write_still=False, scene=scene.name)
-            n_render_performed += len(batch)
+            # Blender 5.x File Output always appends a frame number (and may also
+            # include the socket name) to compositor output filenames. The old
+            # implementation assumed the exact legacy pattern ``name.exr0001``
+            # and therefore failed to recognize some valid Blender 5.2 outputs.
+            # Snapshot the directory so only files produced/changed by this render
+            # are considered; never rename or delete unrelated cached files.
+            batch_output_dir = bpy.path.abspath(f'{bakepath}')
+            batch_output_before = {}
+            try:
+                for entry in os.scandir(batch_output_dir):
+                    if entry.is_file():
+                        try:
+                            stat = entry.stat()
+                            batch_output_before[entry.name] = (stat.st_mtime_ns, stat.st_size)
+                        except OSError:
+                            pass
+            except OSError:
+                batch_output_before = {}
 
-            # Rename files since blender will append a render index number to the filename
-            for file in os.listdir(bpy.path.abspath(f'{bakepath}')):
-                match = re.fullmatch(r"(.*exr)\d\d\d\d", file)
-                if match:
-                    outRenderFileName = bpy.path.abspath(f'{bakepath}{match[1]}')
-                    if os.path.exists(outRenderFileName):
-                        os.remove(outRenderFileName)
-                    os.rename(bpy.path.abspath(f'{bakepath}{file}'), outRenderFileName)
+            bpy.ops.render.render(write_still=False, scene=scene.name)
+
+            # Collect files that were created or modified by this compositor render.
+            batch_output_after = {}
+            try:
+                for entry in os.scandir(batch_output_dir):
+                    if entry.is_file():
+                        try:
+                            stat = entry.stat()
+                            batch_output_after[entry.name] = (stat.st_mtime_ns, stat.st_size)
+                        except OSError:
+                            pass
+            except OSError:
+                batch_output_after = {}
+
+            batch_output_changed = {
+                name for name, state in batch_output_after.items()
+                if name not in batch_output_before or batch_output_before[name] != state
+            }
+
+            # Resolve each compositor output back to the stable VLM cache path.
+            # Blender 5.2 can produce variants such as:
+            #   <file_name>0001.exr
+            #   <file_name>Image0001.exr
+            #   <file_name>0001
+            # depending on File Output node settings.
+            for scenario, denoise, out, initial_state, scenario_influence in batch:
+                name = scenario[0]
+                target_name = f'{name} - Group {group_index}.exr'
+                target_path = os.path.join(batch_output_dir, target_name)
+                if os.path.isfile(target_path):
+                    continue
+
+                node_file_name = os.path.basename(getattr(out, 'file_name', '') or target_name)
+                node_stem = os.path.splitext(node_file_name)[0]
+                target_stem = os.path.splitext(target_name)[0]
+
+                candidates = []
+                for filename in batch_output_changed:
+                    lower = filename.lower()
+                    # File Output can omit the extension when
+                    # use_file_extension=False, so accept extensionless files too.
+                    # Reject clearly unrelated image formats.
+                    if lower.endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp')):
+                        continue
+                    if filename == target_name:
+                        continue
+                    # Prefer the exact node filename prefix, then the stable VLM
+                    # target prefix without extension.
+                    score = None
+                    if filename.startswith(node_file_name):
+                        score = 0
+                    elif filename.startswith(node_stem):
+                        score = 1
+                    elif filename.startswith(target_name):
+                        score = 2
+                    elif filename.startswith(target_stem):
+                        score = 3
+                    if score is not None:
+                        candidates.append((score, filename))
+
+                if candidates:
+                    candidates.sort(key=lambda item: (item[0], len(item[1])))
+                    source_name = candidates[0][1]
+                    source_path = os.path.join(batch_output_dir, source_name)
+                    try:
+                        if os.path.isfile(target_path):
+                            os.remove(target_path)
+                        os.replace(source_path, target_path)
+                        logger.info(f'. Batch compositor output normalized: {source_name} -> {target_name}')
+                    except OSError as output_error:
+                        logger.warning(f'. Could not normalize batch compositor output {source_name} -> {target_name}: {output_error}')
+                else:
+                    logger.warning(
+                        f'. Batch compositor output for {target_name} was not found. '
+                        f'Changed files: {sorted(batch_output_changed)}'
+                    )
+
+            # Count only batch renders that actually produced their expected cache
+            # files. If an output is missing, the normal rendering pass below will
+            # retry that scenario instead of falsely marking it as complete.
+            batch_completed = 0
+            for scenario, denoise, out, initial_state, scenario_influence in batch:
+                target_path = bpy.path.abspath(f'{bakepath}{scenario[0]} - Group {group_index}.exr')
+                if os.path.isfile(target_path):
+                    batch_completed += 1
+            n_render_performed += batch_completed
 
             for scenario, denoise, out, initial_state, scenario_influence in batch:
                 name, is_lightmap, light_col, lights = scenario
@@ -529,9 +675,9 @@ def render_all_groups(op, context):
                     bpy.ops.scene.view_layer_remove_lightgroup()
             nodes.clear()
             links.clear()
-            scene.use_nodes = False
+            set_compositing_enabled(scene, False)
             scene.world = prev_world
-            scene.view_layers[0].cycles.denoising_store_passes = False
+            render_view_layer.cycles.denoising_store_passes = False
             scene.render.use_border = False
         
             scenarios_to_process = remaining_scenarios
@@ -583,9 +729,8 @@ def render_all_groups(op, context):
     # Create temp render scene for rendering object masks & influence map & denoising
 
     temp_denoise_scene = bpy.data.scenes.new(name="VLM.Tmp Denoise Scene")
-    temp_denoise_scene.use_nodes = True
-    temp_denoise_scene.render.use_compositing = True
-    denoise_nodetree = temp_denoise_scene.node_tree
+    set_compositing_enabled(temp_denoise_scene, True)
+    denoise_nodetree = get_compositor_tree(temp_denoise_scene, create=True, clear=True)
     denoise_nodes = denoise_nodetree.nodes
     denoise_links = denoise_nodetree.links
     denoise_nodes.clear()
@@ -596,16 +741,29 @@ def render_all_groups(op, context):
     denoise_albedo_map_node = denoise_nodes.new(type="CompositorNodeImage")
     denoise_albedo_map_node.location = (0, 600)
     denoise_node = denoise_nodes.new(type="CompositorNodeDenoise")
-    denoise_node.prefilter = denoise_prefilter
+    configure_denoise_node_52(denoise_node, denoise_prefilter) if bpy.app.version >= (5, 0, 0) else setattr(denoise_node, 'prefilter', denoise_prefilter)
     denoise_node.location = (300, 0)
     denoise_viewer_node = denoise_nodes.new(type="CompositorNodeViewer")
     denoise_viewer_node.location = (600, 0)
     denoise_file_output_node = denoise_nodes.new(type="CompositorNodeOutputFile")
     denoise_file_output_node.location = (600, -300)
-    denoise_file_output_node.base_path = bpy.path.abspath("")
-    denoise_file_output_node.format.file_format = 'OPEN_EXR'
-    denoise_file_output_node.format.exr_codec = 'ZIP'
-    denoise_file_output_node.format.color_depth = '16'
+    if bpy.app.version >= (5, 0, 0):
+        configure_file_output_node_52(
+            denoise_file_output_node,
+            socket_name='Image',
+            directory='',
+            file_name='',
+            file_format='OPEN_EXR',
+            color_mode='RGBA',
+            color_depth='16',
+            exr_codec='ZIP',
+            use_file_extension=False,
+        )
+    else:
+        denoise_file_output_node.base_path = bpy.path.abspath("")
+        denoise_file_output_node.format.file_format = 'OPEN_EXR'
+        denoise_file_output_node.format.exr_codec = 'ZIP'
+        denoise_file_output_node.format.color_depth = '16'
     denoise_links.new(denoise_image_node.outputs['Image'], denoise_node.inputs['Image'])
     denoise_links.new(denoise_node.outputs['Image'], denoise_viewer_node.inputs['Image'])
     denoise_links.new(denoise_node.outputs['Image'], denoise_file_output_node.inputs[0])
@@ -618,18 +776,16 @@ def render_all_groups(op, context):
     mask_scene = bpy.data.scenes.new('VLM.Tmp Mask Scene')
     mask_scene.collection.objects.link(camera_object)
     mask_scene.camera = camera_object
-    if bpy.app.version < (4, 2, 0): 
-        mask_scene.render.engine = 'BLENDER_EEVEE'
-    else:
-        mask_scene.render.engine = 'BLENDER_EEVEE_NEXT'
+    set_eevee_engine(mask_scene)
     mask_scene.render.film_transparent = True
     mask_scene.render.pixel_aspect_x = context.scene.render.pixel_aspect_x
     mask_scene.render.image_settings.color_depth = '8'
-    mask_scene.eevee.taa_render_samples = 1
+    if hasattr(mask_scene.eevee, 'taa_render_samples'):
+        mask_scene.eevee.taa_render_samples = 1
     mask_scene.view_settings.view_transform = 'Raw'
     mask_scene.view_settings.look = 'None'
     mask_scene.world = None
-    mask_scene.use_nodes = False
+    set_compositing_enabled(mask_scene, False)
 
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
@@ -851,7 +1007,7 @@ def render_all_groups(op, context):
                 mat.node_tree.nodes.active = mat.node_tree.nodes.get("VLM_AlbedoImage")
 
             with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
-                bpy.context.view_layer.use_pass_diffuse_color = True
+                set_diffuse_color_pass_enabled(bpy.context.view_layer, True)
                 bpy.ops.object.bake(
                     type='DIFFUSE',
                     pass_filter={'COLOR'},
@@ -938,8 +1094,21 @@ def render_all_groups(op, context):
                         denoise_normal_map_node.image = bake_img_normal
                         denoise_albedo_map_node.image = bake_img_albedo
 
-                        denoise_file_output_node.base_path = os.path.dirname(bpy.path.relpath(render_path_denoise))
-                        denoise_file_output_node.file_slots[0].path = os.path.basename(bpy.path.relpath(render_path_denoise))
+                        if bpy.app.version >= (5, 0, 0):
+                            configure_file_output_node_52(
+                                denoise_file_output_node,
+                                socket_name='Image',
+                                directory=os.path.dirname(bpy.path.abspath(render_path_denoise)),
+                                file_name=os.path.basename(render_path_denoise),
+                                file_format='OPEN_EXR',
+                                color_mode='RGB' if is_lightmap else 'RGBA',
+                                color_depth='16',
+                                exr_codec='ZIP',
+                                use_file_extension=False,
+                            )
+                        else:
+                            denoise_file_output_node.base_path = os.path.dirname(bpy.path.relpath(render_path_denoise))
+                            denoise_file_output_node.file_slots[0].path = os.path.basename(bpy.path.relpath(render_path_denoise))
                         bpy.ops.render.render(use_viewport=False, write_still=False)
                         os.rename(bpy.path.abspath(f'{render_path_denoise}0001.exr'), bpy.path.abspath(f'{render_path_denoise}.exr'))
                         
@@ -969,7 +1138,7 @@ def render_all_groups(op, context):
                     links.new(node_emission.outputs[0], node_add.inputs[0])
                     links.new(node_transparent.outputs[0], node_add.inputs[1])
                     links.new(node_add.outputs[0], node_output.inputs[0])
-                    mat.blend_method = 'BLEND'
+                    set_material_surface_render_method(mat, 'BLEND')
                     dup2.data.materials.append(mat)
                     mask_scene.render.filepath = influence_path
                     mask_scene.collection.objects.link(dup2)
@@ -1026,12 +1195,30 @@ def render_all_groups(op, context):
             bpy.ops.object.delete()
 
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 0.0
+    compositor_trees = []
+    for temp_scene in (scene, mask_scene, temp_denoise_scene):
+        tree = getattr(temp_scene, 'compositing_node_group', None) if bpy.app.version >= (5, 0, 0) else getattr(temp_scene, 'node_tree', None)
+        if tree is not None:
+            compositor_trees.append(tree)
     bpy.data.scenes.remove(scene)
     bpy.data.scenes.remove(mask_scene)
     bpy.data.scenes.remove(temp_denoise_scene)
-    bpy.data.collections.remove(bpy.data.collections['Indirect'])
-    bpy.data.collections.remove(bpy.data.collections['Render'])
+    # Blender 5.x stores compositor trees as separate node-group datablocks.
+    # Remove only orphaned trees belonging to these temporary scenes.
+    if bpy.app.version >= (5, 0, 0):
+        for tree in dict.fromkeys(compositor_trees):
+            if tree.name in bpy.data.node_groups and tree.users == 0:
+                bpy.data.node_groups.remove(tree)
+    # Remove exactly the temporary collections created by this render run.
+    # Do not look them up by global name, because a user project may already
+    # contain collections named 'Indirect' or 'Render'.
+    if indirect_col and indirect_col.name in bpy.data.collections:
+        bpy.data.collections.remove(indirect_col)
+    if render_col and render_col.name in bpy.data.collections:
+        bpy.data.collections.remove(render_col)
     length = time.time() - start_time
+    vlm_utils.set_diagnostic_stage('Rendering complete')
+    vlm_utils.diagnostic_snapshot('rendering-complete')
     logger.info(f"\nRendering finished in a total time of {vlm_utils.format_time(length)}")
     if n_existing > 0: logger.info(f". {n_existing:>3} renders were skipped since they were already existing")
     if n_skipped > 0: logger.info(f". {n_skipped:>3} renders were skipped since objects were outside of lights influence")

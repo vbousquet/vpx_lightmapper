@@ -1,4 +1,4 @@
-# VPX Light Mapper FINAL 1.0
+# VPX Light Mapper 3.0.16 — Blender 4.5–5.2
 
 ## HDR Auto / Custom
 **HDR Auto** (default ON) uses the original GitHub automatic per-bake HDR range calculation.
@@ -15,3 +15,7 @@ The custom value is applied at the nesting/render-scaling stage only. Mesh pruni
 - Clear checkpoint
 - Complete nestmap export
 - Diagnostics/crash logging
+
+
+## Blender 5.2 compatibility
+This release contains the audited Blender 5.0+ GPU/compositor migration, Blender 5.2 GPU backend initialization, Blender 5.x material surface-render-method compatibility, UV editor edge-selection compatibility, and the current OBJ exporter API. See `BLENDER_5.2_COMPATIBILITY_AUDIT.md` for the audit summary.

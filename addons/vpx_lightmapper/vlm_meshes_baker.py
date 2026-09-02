@@ -28,6 +28,7 @@ from mathutils import Vector
 from mathutils import Matrix
 from gpu_extras.batch import batch_for_shader
 from . import vlm_utils
+from .vlm_compat52 import create_shader, set_material_surface_render_method, ensure_gpu_backend
 from . import vlm_collections
 from PIL import Image # External dependency
 
@@ -47,10 +48,10 @@ def get_material(light_name, is_lightmap, is_group, has_normalmap, render_id):
     mat['VLM.IsLightmap'] = is_lightmap
     mat['VLM.HasNormalMap'] = has_normalmap
     if is_lightmap:
-        mat.blend_method = 'BLEND'
+        set_material_surface_render_method(mat, 'BLEND')
         mat.node_tree.nodes["PackMap"].inputs[2].default_value = 1.0
     else:
-        mat.blend_method = 'OPAQUE'
+        set_material_surface_render_method(mat, 'OPAQUE')
         mat.node_tree.nodes["PackMap"].inputs[2].default_value = 0.0
     return mat
 
@@ -585,6 +586,7 @@ def build_visibility_map(bake_name, bake_instance_mesh, n_render_groups, width, 
 
 
 def build_influence_map(render_path, name, w, h):
+    ensure_gpu_backend()
     """ Build influence maps by loading all renders, scaling them down using a max filter, then reducing to BW.
         A global (maximum of all light groups) influence map as well as one per render group.
         The red channel is the brightness. The blue channel contains the maximum of all render channel for HDR level evaluation.
@@ -616,7 +618,7 @@ def build_influence_map(render_path, name, w, h):
     '''
     # Rescale with a max filter, convert to black and white, apply alpha, in a single pass per image on the GPU
     gpu.state.blend_set('NONE')
-    bw_shader = gpu.types.GPUShader(vertex_shader, bw_fragment_shader)
+    bw_shader = create_shader(vertex_shader, bw_fragment_shader)
     offscreen = gpu.types.GPUOffScreen(w, h, format='RGBA32F')
     offscreen2 = gpu.types.GPUOffScreen(w, h, format='RGBA32F')
     offscreen3 = gpu.types.GPUOffScreen(w, h, format='RGBA32F')
