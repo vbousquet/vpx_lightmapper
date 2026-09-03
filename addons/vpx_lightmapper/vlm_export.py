@@ -707,7 +707,10 @@ def export_vpx(op, context):
                             # Old arrays: just remove them
                             in_old_arrays = 1
                         else:
-                            new_code += line
+                            # Strip any embedded NUL: harmless in the BIFF stream itself (see get_raw_string above),
+                            # but VPX's script editor treats the text as NUL-terminated and silently truncates the
+                            # display (and a save from that state would drop everything past it, arrays included).
+                            new_code += line.replace('\x00', '')
                             new_code += '\n'
                     if in_old_arrays < 2:
                         new_code += '\n' + get_script_arrays(bake_col, result_col)
