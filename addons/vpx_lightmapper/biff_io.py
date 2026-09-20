@@ -316,6 +316,29 @@ def hash_biff_stream(hasher, data):
             hasher.update(br.get_record_data(True))
 
 
+def iter_custom_info_tags(data):
+    """Yield the custom info tag names held in a GameStg/CustomInfoTags stream.
+
+    Visual Pinball stores each tag's value in a TableInfo/<tag> stream and hashes
+    it right after CustomInfoTags itself (see PinTable::LoadInfo in
+    src/parts/pintable.cpp, which reads "TableInfo/" + tag).  Both the exporter
+    and compute_table_mac() below walk the stream through this helper so the two
+    can never disagree on the rule.
+    """
+    br = BIFF_reader(data)
+    while not br.is_eof():
+        br.next()
+        if br.tag == 'CUST':
+            yield br.get_string()
+        else:
+            br.skip_tag()
+
+
+def custom_info_path(cust_name):
+    """The TableInfo stream holding the value of a custom info tag."""
+    return f'TableInfo/{cust_name}'
+
+
 def compute_table_mac(path):
     """Recompute the GameStg/MAC digest of an existing .vpx file.
 
@@ -349,15 +372,10 @@ def compute_table_mac(path):
                 else:
                     hash_biff_stream(hasher, data)
             if src_path == 'GameStg/CustomInfoTags':
-                br = BIFF_reader(data)
-                while not br.is_eof():
-                    br.next()
-                    if br.tag == 'CUST':
-                        cust_name = br.get_string()
-                        if src.exists(f'TableInfo/{cust_name}'):
-                            hasher.update(src.openstream(f'TableInfo/{cust_name}').read())
-                    else:
-                        br.skip_tag()
+                for cust_name in iter_custom_info_tags(data):
+                    cust_path = custom_info_path(cust_name)
+                    if src.exists(cust_path):
+                        hasher.update(src.openstream(cust_path).read())
         return hasher.digest()
     finally:
         src.close()

@@ -146,29 +146,44 @@ def check_directory_tree(path):
         node = entry(index)
         is_red = node['color'] == vlm_cfb.COLOR_RED
         assert not (is_red and parent_is_red), f"red node {node['name']} under a red parent"
-        for side, expected in (('left', True), ('right', False)):
-            if node[side] != vlm_cfb.NOSTREAM:
-                smaller = vlm_cfb._entry_sort_key(entry(node[side])['name']) < \
-                    vlm_cfb._entry_sort_key(node['name'])
-                assert smaller == expected, f"{side} child of {node['name']} is out of order"
         left, right = black_height(node['left'], is_red), black_height(node['right'], is_red)
         assert left == right, f"unbalanced black height at {node['name']}"
         return left + (0 if is_red else 1)
 
+    def check_order(index, low, high):
+        """Every node must sort inside the bounds its ancestors impose.
+
+        Comparing a node only against its two immediate children would miss a
+        misplaced grandchild, which is exactly the shape of bug a binary
+        searching reader trips over.
+        """
+        if index == vlm_cfb.NOSTREAM:
+            return 0
+        node = entry(index)
+        key = vlm_cfb._entry_sort_key(node['name'])
+        assert low is None or key > low, f"{node['name']} sorts below its ancestor bound"
+        assert high is None or key < high, f"{node['name']} sorts above its ancestor bound"
+        return 1 + check_order(node['left'], low, key) + check_order(node['right'], key, high)
+
+    checked = 0
     pending = [0]
     while pending:
-        node = entry(pending.pop())
+        index = pending.pop()
+        node = entry(index)
         if node['child'] == vlm_cfb.NOSTREAM:
             continue
         assert entry(node['child'])['color'] == vlm_cfb.COLOR_BLACK, \
             f"subtree root under {node['name']} is not black"
         black_height(node['child'], False)
+        checked += check_order(node['child'], None, None)
+        # Walk the whole sibling subtree so nested storages are checked too.
         subtree = [node['child']]
         while subtree:
-            index = subtree.pop()
-            pending.append(index)
-            child = entry(index)
+            child_index = subtree.pop()
+            pending.append(child_index)
+            child = entry(child_index)
             subtree += [child[s] for s in ('left', 'right') if child[s] != vlm_cfb.NOSTREAM]
+    return checked
 
 
 def test_synthetic_directories(tmp):
@@ -195,6 +210,119 @@ def test_synthetic_directories(tmp):
             handle.close()
 
 
+
+def test_large_file_difat(tmp):
+    """Over 109 FAT sectors, so the DIFAT chain is written and walked.
+
+    The threshold is 109 * 128 * 512 bytes, about 7.1 MB, which neither the
+    Blank Table fixture nor the synthetic directories above reach, so without
+    this the DIFAT branch never runs unless someone passes a big table.
+    """
+    path = pathlib.Path(tmp) / 'difat.vpx'
+    writer = vlm_cfb.CfbWriter(str(path))
+    storage = writer.create_storage('GameStg')
+    expected = {}
+    for index in range(16):
+        # 16 x 512 KB = 8 MB of data, comfortably past the threshold.
+        payload = bytes([index % 256]) * (512 * 1024)
+        storage.create_stream(f'Big{index}').write(payload)
+        expected[f'Big{index}'] = payload
+    writer.commit()
+    writer.close()
+
+    raw = path.read_bytes()
+    n_fat, n_difat = struct.unpack('<I', raw[44:48])[0], struct.unpack('<I', raw[72:76])[0]
+    assert n_fat > vlm_cfb.DIFAT_IN_HEADER, f'test did not reach the DIFAT path ({n_fat} FAT sectors)'
+    assert n_difat > 0, 'FAT needs more than 109 sectors but no DIFAT sector was written'
+    check_directory_tree(path)
+    handle = olefile.OleFileIO(str(path))
+    try:
+        for name, data in expected.items():
+            assert handle.openstream(f'GameStg/{name}').read() == data, name
+    finally:
+        handle.close()
+    return n_fat, n_difat
+
+
+def test_name_edges(tmp):
+    """Name length is counted in UTF-16 code units, and siblings collide case insensitively."""
+    path = pathlib.Path(tmp) / 'names.vpx'
+    writer = vlm_cfb.CfbWriter(str(path))
+    storage = writer.create_storage('GameStg')
+
+    longest = 'N' * vlm_cfb.MAX_NAME_LEN
+    storage.create_stream(longest).write(b'ok')
+    try:
+        storage.create_stream('N' * (vlm_cfb.MAX_NAME_LEN + 1))
+        raise AssertionError('a 32 character name was accepted')
+    except ValueError:
+        pass
+    # 30 ASCII + one astral character is 31 code points but 32 code units, so
+    # it overflows the 64 byte field and must be rejected too.
+    try:
+        storage.create_stream('A' * 30 + '\U0001F600')
+        raise AssertionError('an over long name was accepted because it was counted in code points')
+    except ValueError:
+        pass
+    # Siblings are compared case insensitively, so these two would produce a
+    # tree a binary searching reader cannot walk.
+    storage.create_stream('Tag')
+    try:
+        storage.create_stream('TAG')
+        raise AssertionError('a case insensitive duplicate was accepted')
+    except ValueError:
+        pass
+    writer.commit()
+    writer.close()
+    check_directory_tree(path)
+    handle = olefile.OleFileIO(str(path))
+    try:
+        assert handle.openstream(f'GameStg/{longest}').read() == b'ok'
+    finally:
+        handle.close()
+
+
+def test_custom_info_tags(tmp):
+    """A table carrying custom info tags hashes its TableInfo/<tag> streams.
+
+    Visual Pinball stores each tag's value in TableInfo/<tag> (PinTable::LoadInfo,
+    "TableInfo/" + tag) and hashes it straight after GameStg/CustomInfoTags.
+    Both shipped fixtures have an empty CustomInfoTags stream, so without this
+    the rule is never exercised.
+    """
+    tags = ['MyTag', 'Second']
+    payloads = {'MyTag': b'first value', 'Second': b'second value'}
+
+    writer_biff = biff_io.BIFF_writer()
+    for tag in tags:
+        writer_biff.write_tagged_string(b'CUST', tag)
+    writer_biff.close()
+    cust_stream = writer_biff.get_data()
+
+    parsed = list(biff_io.iter_custom_info_tags(cust_stream))
+    assert parsed == tags, f'custom info tags round trip: {parsed} != {tags}'
+    for tag in tags:
+        assert biff_io.custom_info_path(tag) == f'TableInfo/{tag}', 'wrong TableInfo path'
+
+    path = pathlib.Path(tmp) / 'custom.vpx'
+    writer = vlm_cfb.CfbWriter(str(path))
+    gamestg = writer.create_storage('GameStg')
+    tableinfo = writer.create_storage('TableInfo')
+    gamestg.create_stream('CustomInfoTags').write(cust_stream)
+    for tag in tags:
+        tableinfo.create_stream(tag).write(payloads[tag])
+    writer.commit()
+    writer.close()
+
+    handle = olefile.OleFileIO(str(path))
+    try:
+        for tag in tags:
+            assert handle.openstream(f'TableInfo/{tag}').read() == payloads[tag], tag
+    finally:
+        handle.close()
+    return len(tags)
+
+
 def main():
     table = find_table()
     if not table.is_file() or table.stat().st_size == 0:
@@ -214,17 +342,44 @@ def main():
             print(f'FAIL round trip: {error}')
 
         try:
-            test_synthetic_directories(tmp)
-            check_directory_tree(rewritten)
-            print('ok   directory: red-black tree and sibling ordering valid')
-        except AssertionError as error:
+            # Separate from the synthetic cases below: if rewrite() failed above,
+            # this should report a failure rather than raise FileNotFoundError.
+            nodes = check_directory_tree(rewritten)
+            print(f'ok   directory: red-black tree and full ordering valid ({nodes} entries)')
+        except (AssertionError, OSError) as error:
             failures += 1
             print(f'FAIL directory: {error}')
 
         try:
+            test_synthetic_directories(tmp)
+            test_name_edges(tmp)
+            print('ok   synthetic: entry counts, stream sizes, name and duplicate limits')
+        except AssertionError as error:
+            failures += 1
+            print(f'FAIL synthetic: {error}')
+
+        try:
+            n_fat, n_difat = test_large_file_difat(tmp)
+            print(f'ok   DIFAT: {n_fat} FAT sectors over {n_difat} DIFAT sector(s)')
+        except AssertionError as error:
+            failures += 1
+            print(f'FAIL DIFAT: {error}')
+
+        try:
+            count = test_custom_info_tags(tmp)
+            print(f'ok   custom info tags: {count} tags hashed from TableInfo/<tag>')
+        except AssertionError as error:
+            failures += 1
+            print(f'FAIL custom info tags: {error}')
+
+        skipped = []
+        try:
             result = check_vpxtool(table, rewritten)
-            print('ok   vpxtool: extractions identical' if result else
-                  'skip vpxtool: not on PATH')
+            if result:
+                print('ok   vpxtool: extractions identical')
+            else:
+                skipped.append('vpxtool (not on PATH)')
+                print('skip vpxtool: not on PATH — the only strict reader check did NOT run')
         except AssertionError as error:
             failures += 1
             print(f'FAIL vpxtool: {error}')
@@ -235,7 +390,12 @@ def main():
             failures += 1
             print(f'FAIL MAC: {error}')
 
-    print('CFB: all tests passed' if not failures else f'CFB: {failures} failure(s)')
+    if failures:
+        print(f'CFB: {failures} failure(s)')
+    elif skipped:
+        print(f"CFB: all tests passed, but SKIPPED {', '.join(skipped)}")
+    else:
+        print('CFB: all tests passed')
     return 1 if failures else 0
 
 
