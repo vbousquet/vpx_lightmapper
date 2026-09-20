@@ -64,6 +64,21 @@ TYPE_ROOT = 5
 COLOR_RED = 0
 COLOR_BLACK = 1
 
+def _default_file_mode():
+    """What a plain open(path, 'wb') would have produced here.
+
+    os.umask is process wide and Blender is threaded, so probe it once at
+    import rather than inside commit(), where another thread creating a file
+    in the same window would get the raw mode.
+    """
+    umask = os.umask(0)
+    os.umask(umask)
+    return 0o666 & ~umask
+
+
+DEFAULT_FILE_MODE = _default_file_mode()
+
+
 MAX_NAME_LEN = 31  # 32 UTF-16 code units including the null terminator
 
 
@@ -82,6 +97,14 @@ def _entry_sort_key(name):
     upper = ''.join(c.upper() if len(c.upper()) == 1 else c for c in name)
     upper_units = upper.encode('utf-16-le')
     return (len(units) // 2, struct.unpack(f'<{len(upper_units) // 2}H', upper_units))
+
+
+class DuplicateEntryError(ValueError):
+    """A sibling with the same name, case insensitively, already exists.
+
+    A ValueError for backwards compatibility, but its own type so a caller can
+    tolerate a duplicate without also swallowing, say, an over long name.
+    """
 
 
 class Stream:
@@ -167,7 +190,8 @@ class CfbWriter(Storage):
         # comparator, which a binary searching reader can fail to walk.
         key = _entry_sort_key(name)
         if key in siblings:
-            raise ValueError(f'Duplicate entry {name!r} in compound file storage {parent.name!r}')
+            raise DuplicateEntryError(
+                f'Duplicate entry {name!r} in compound file storage {parent.name!r}')
         # Build the entry before reserving the name: _Entry rejects an over long
         # name, and a name that was never accepted must not block a later retry.
         entry = _Entry(name, type_)
@@ -197,9 +221,7 @@ class CfbWriter(Storage):
             try:
                 os.chmod(tmp_path, stat.S_IMODE(os.stat(target).st_mode))
             except OSError:
-                umask = os.umask(0)
-                os.umask(umask)
-                os.chmod(tmp_path, 0o666 & ~umask)
+                os.chmod(tmp_path, DEFAULT_FILE_MODE)
             os.replace(tmp_path, target)
         except BaseException:
             try:

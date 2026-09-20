@@ -840,7 +840,7 @@ def export_vpx(op, context):
                     # that case; creating it twice would abort the export.
                     try:
                         dst_stream = dst_tableinfo.create_stream(cust_name)
-                    except ValueError:
+                    except vlm_cfb.DuplicateEntryError:
                         logger.info(f'Custom information block {cust_name} already written, skipping')
                         continue
                     dst_stream.write(data)
