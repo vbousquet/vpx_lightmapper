@@ -74,9 +74,21 @@ with MD2, which used to be done through the Windows COM `IStorage` API and the
 CryptoAPI via pywin32. Both are now implemented in pure Python
 (`vlm_cfb.py` and `vlm_md2.py`), so **pywin32 is no longer required** and
 `olefile` plus `Pillow` are the only external dependencies. On Windows with
-pywin32 still installed, the original COM writer keeps being used, so exported
-files there are unchanged; set `VLM_PURE_PYTHON_CFB=1` to force the pure Python
-writer instead.
+pywin32 still installed, the original COM writer keeps being used; set
+`VLM_PURE_PYTHON_CFB=1` to force the pure Python writer instead.
+
+Two differences are worth knowing about, both on every platform:
+
+* A table carrying custom info tags now exports with its `TableInfo/<tag>`
+  streams and a MAC that accounts for them. The old code looked them up under
+  the wrong name, so it dropped them and produced a MAC Visual Pinball
+  rejects. Output for such a table therefore differs from previous versions,
+  and is the correct one.
+* The pure Python writer builds the table in a temporary file and renames it
+  into place, so an interrupted export leaves the previous file untouched
+  rather than truncated. The renamed file is a new inode, so a hard link to
+  the old table keeps the old content; symlinks are followed and the target's
+  permissions are preserved.
 
 Tests that do not need Blender live in `tests/` and run with a plain python3:
 

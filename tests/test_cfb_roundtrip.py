@@ -263,20 +263,28 @@ def test_name_edges(tmp):
         raise AssertionError('a 32 character name was accepted')
     except ValueError:
         pass
-    # 30 ASCII + one astral character is 31 code points but 32 code units, so
-    # it overflows the 64 byte field and must be rejected too.
-    try:
-        storage.create_stream('A' * 30 + '\U0001F600')
-        raise AssertionError('an over long name was accepted because it was counted in code points')
-    except ValueError:
-        pass
+    # 30 ASCII + one astral character is 31 code points but 32 code units, so it
+    # overflows the 64 byte field and must be rejected too (checked below, twice).
+    # A name rejected for its length must not reserve anything, so retrying the
+    # same name reports the same problem rather than a phantom duplicate.
+    for attempt in range(2):
+        try:
+            storage.create_stream('A' * 30 + '\U0001F600')
+            raise AssertionError('an over long name was accepted on retry')
+        except vlm_cfb.DuplicateEntryError:
+            raise AssertionError(
+                'a rejected name reserved its slot: retry reported a duplicate '
+                f'instead of a length error (attempt {attempt + 1})')
+        except ValueError:
+            pass
+    storage.create_stream('A' * 30 + 'x').write(b'retry')
     # Siblings are compared case insensitively, so these two would produce a
     # tree a binary searching reader cannot walk.
     storage.create_stream('Tag')
     try:
         storage.create_stream('TAG')
         raise AssertionError('a case insensitive duplicate was accepted')
-    except ValueError:
+    except vlm_cfb.DuplicateEntryError:
         pass
     writer.commit()
     writer.close()
@@ -284,6 +292,7 @@ def test_name_edges(tmp):
     handle = olefile.OleFileIO(str(path))
     try:
         assert handle.openstream(f'GameStg/{longest}').read() == b'ok'
+        assert handle.openstream(f'GameStg/{"A" * 30}x').read() == b'retry'
     finally:
         handle.close()
 
@@ -368,6 +377,120 @@ def test_custom_info_tags(tmp):
     return len(tags)
 
 
+def test_mac_file_structure(tmp):
+    """Every entry of MAC_FILE_STRUCTURE: its path, mode and hashed flag, in order.
+
+    Neither shipped fixture carries an AuthorName, ReleaseDate, AuthorEmail,
+    TableBlurb, TableRules or a Screenshot, so a wrong mode, a wrong hashed
+    flag, a path typo or a reordering in those entries would otherwise go
+    unnoticed - which is exactly the class of bug the Screenshot mode was.
+    Build a table holding every one of them and check the digest against one
+    rolled by hand in Visual Pinball's order.
+    """
+    # Raw bytes, deliberately not valid BIFF, so hashing them as records would
+    # produce a different digest (a real screenshot is a JPEG or PNG blob).
+    shot = bytes(range(256)) * 7
+    values = {
+        'GameStg/Version': b'\x0a\x00\x00\x00',
+        'TableInfo/TableName': b'a table',
+        'TableInfo/AuthorName': b'an author',
+        'TableInfo/TableVersion': b'1.2.3',
+        'TableInfo/ReleaseDate': b'2026-09-20',
+        'TableInfo/AuthorEmail': b'nobody@example.com',
+        'TableInfo/AuthorWebSite': b'https://example.com',
+        'TableInfo/TableBlurb': b'a blurb',
+        'TableInfo/TableDescription': b'a description',
+        'TableInfo/TableRules': b'the rules',
+        'TableInfo/TableSaveDate': b'a save date',   # present but NOT hashed
+        'TableInfo/TableSaveRev': b'7',              # present but NOT hashed
+        'TableInfo/Screenshot': shot,
+        'GameStg/CustomInfoTags': empty_biff,
+        'GameStg/GameData': empty_biff,
+    }
+    # This test's own ground truth, read from Visual Pinball rather than from the
+    # table under test: PinTable::SaveInfo (pintable.cpp:3325-3356) writes each
+    # TableInfo value with BiffWriter::WriteBytes, which hashes raw bytes with no
+    # record framing (media/fileio.cpp:191); TableSaveDate and TableSaveRev pass a
+    # NULL hash; CustomInfoTags and GameData are BIFF streams.  Deriving this from
+    # MAC_FILE_STRUCTURE instead would make the test circular, passing whenever a
+    # wrong mode or flag changed the expected digest to match.
+    expected_structure = (
+        ('GameStg/Version', 0, True),
+        ('TableInfo/TableName', 0, True),
+        ('TableInfo/AuthorName', 0, True),
+        ('TableInfo/TableVersion', 0, True),
+        ('TableInfo/ReleaseDate', 0, True),
+        ('TableInfo/AuthorEmail', 0, True),
+        ('TableInfo/AuthorWebSite', 0, True),
+        ('TableInfo/TableBlurb', 0, True),
+        ('TableInfo/TableDescription', 0, True),
+        ('TableInfo/TableRules', 0, True),
+        ('TableInfo/TableSaveDate', 0, False),
+        ('TableInfo/TableSaveRev', 0, False),
+        ('TableInfo/Screenshot', 0, True),
+        ('GameStg/CustomInfoTags', 1, True),
+        ('GameStg/GameData', 1, True),
+    )
+    assert tuple(biff_io.MAC_FILE_STRUCTURE) == expected_structure, (
+        'MAC_FILE_STRUCTURE no longer matches what Visual Pinball hashes:\n'
+        f'  code: {tuple(biff_io.MAC_FILE_STRUCTURE)}\n'
+        f'  spec: {expected_structure}')
+    assert [path for path, _, _ in expected_structure] == list(values), \
+        'this test is missing a stream for one of the structure entries'
+
+    path = pathlib.Path(tmp) / 'structure.vpx'
+    writer = vlm_cfb.CfbWriter(str(path))
+    storages = {'GameStg': writer.create_storage('GameStg'),
+                'TableInfo': writer.create_storage('TableInfo')}
+    for stream_path, value in values.items():
+        parent, name = stream_path.split('/')
+        storages[parent].create_stream(name).write(value)
+    writer.commit()
+    writer.close()
+
+    expected = vlm_md2.new()
+    expected.update(b'Visual Pinball')
+    for stream_path, mode, hashed in expected_structure:
+        if not hashed:
+            continue
+        value = values[stream_path]
+        if mode == 0:
+            expected.update(value)
+        else:
+            biff_io.hash_biff_stream(expected, value)
+    computed = biff_io.compute_table_mac(str(path))
+    assert computed == expected.digest(), \
+        f'structure digest {computed.hex()} != hand rolled {expected.digest().hex()}'
+
+    # A different but still valid BIFF stream, for mutating the record based
+    # entries: appending trailing bytes would prove nothing, because hashing
+    # correctly stops at ENDB the way Visual Pinball's BiffReader::Load does.
+    other_biff = biff_io.BIFF_writer()
+    other_biff.write_tagged_string(b'CUST', 'a different record')
+    other_biff.close()
+    other_biff = other_biff.get_data()
+
+    # Each hashed value must reach the digest, and each unhashed one must not.
+    for stream_path, mode, hashed in expected_structure:
+        mutated = other_biff if mode == 1 else values[stream_path] + b'!'
+        assert mutated != values[stream_path], f'mutation for {stream_path} changed nothing'
+        altered = dict(values, **{stream_path: mutated})
+        other = pathlib.Path(tmp) / 'structure-alt.vpx'
+        alt_writer = vlm_cfb.CfbWriter(str(other))
+        alt_storages = {'GameStg': alt_writer.create_storage('GameStg'),
+                        'TableInfo': alt_writer.create_storage('TableInfo')}
+        for alt_path, value in altered.items():
+            parent, name = alt_path.split('/')
+            alt_storages[parent].create_stream(name).write(value)
+        alt_writer.commit()
+        alt_writer.close()
+        changed = biff_io.compute_table_mac(str(other)) != computed
+        assert changed == hashed, (
+            f'{stream_path} is marked hashed={hashed} but changing it '
+            f'{"did not change" if hashed else "changed"} the digest')
+    return len(values)
+
+
 def test_screenshot_hashed_raw(tmp):
     """TableInfo/Screenshot is hashed as raw bytes, not as BIFF records.
 
@@ -424,6 +547,10 @@ def test_commit_semantics(tmp):
     writer.commit()                                             # must be harmless
     writer.close()                                              # must not rewrite
     assert path.read_bytes() == joined, 'committed file differs from tobytes'
+    # A new file gets what a plain open() would have produced, not mkstemp's 0600.
+    assert stat.S_IMODE(path.stat().st_mode) == vlm_cfb.DEFAULT_FILE_MODE, (
+        f'new file mode {oct(stat.S_IMODE(path.stat().st_mode))} != '
+        f'{oct(vlm_cfb.DEFAULT_FILE_MODE)}')
 
     # An existing target keeps its permissions and stays put on failure.
     path.chmod(0o644)
@@ -517,6 +644,13 @@ def main():
         except (AssertionError, OSError, ValueError) as error:
             failures += 1
             print(f'FAIL custom info tags: {error}')
+
+        try:
+            count = test_mac_file_structure(tmp)
+            print(f'ok   MAC structure: {count} entries, modes and hashed flags verified')
+        except (AssertionError, OSError, ValueError) as error:
+            failures += 1
+            print(f'FAIL MAC structure: {error}')
 
         try:
             test_screenshot_hashed_raw(tmp)
