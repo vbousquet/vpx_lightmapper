@@ -217,6 +217,71 @@ def test_synthetic_directories(tmp):
 
 
 
+def test_mini_stream_cutoff(tmp):
+    """A stream of exactly 4096 bytes belongs in the regular FAT, not the mini stream.
+
+    [MS-CFB]: streams *smaller than* the cutoff go in the mini stream, so the
+    boundary is strict.  Both readers Visual Pinball relies on agree (POLE's
+    `size >= threshold` and olefile's `size < minisectorcutoff`), and getting it
+    wrong makes a 4096 byte stream read back as garbage.  The check needs a
+    large stream ahead of the boundary one, otherwise the mini stream starts at
+    sector 0 and a misplaced stream reads correctly by coincidence.
+    """
+    path = pathlib.Path(tmp) / 'cutoff.vpx'
+    writer = vlm_cfb.CfbWriter(str(path))
+    storage = writer.create_storage('GameStg')
+    payloads = {
+        'Ahead': b'A' * 40000,      # pushes the mini stream off sector 0
+        'Under': b'u' * 4095,       # mini stream
+        'Exact': b'e' * 4096,       # regular FAT: the boundary is strict
+        'Over': b'o' * 4097,        # regular FAT
+    }
+    for name, data in payloads.items():
+        storage.create_stream(name).write(data)
+    writer.commit()
+    writer.close()
+
+    handle = olefile.OleFileIO(str(path))
+    try:
+        for name, data in payloads.items():
+            assert handle.openstream(f'GameStg/{name}').read() == data, \
+                f'{name} ({len(data)} bytes) did not read back'
+    finally:
+        handle.close()
+
+    # Read the directory directly: reading alone would not prove placement if
+    # the mini stream happened to line up with the regular sectors.
+    raw = path.read_bytes()
+    mini_cutoff = struct.unpack('<I', raw[56:60])[0]
+    assert mini_cutoff == 4096, f'mini stream cutoff is {mini_cutoff}, expected 4096'
+    n_fat = struct.unpack('<I', raw[44:48])[0]
+    first_dir = struct.unpack('<I', raw[48:52])[0]
+    fat_sectors = list(struct.unpack(f'<{min(n_fat, 109)}I', raw[76:76 + 4 * min(n_fat, 109)]))
+    fat = struct.unpack(f'<{128 * len(fat_sectors)}I',
+                        b''.join(raw[512 + s * 512:1024 + s * 512] for s in fat_sectors))
+    directory = b''
+    sector = first_dir
+    while sector != vlm_cfb.ENDOFCHAIN:
+        directory += raw[512 + sector * 512:1024 + sector * 512]
+        sector = fat[sector]
+    for index in range(len(directory) // 128):
+        entry = directory[index * 128:(index + 1) * 128]
+        name_len = struct.unpack('<H', entry[64:66])[0]
+        name = entry[:max(name_len - 2, 0)].decode('utf-16-le')
+        if name != 'Exact':
+            continue
+        size = struct.unpack('<Q', entry[120:128])[0]
+        assert size == 4096, f'Exact is {size} bytes'
+        start = struct.unpack('<I', entry[116:120])[0]
+        # A regular sector index addresses the file directly, so the payload
+        # must be there; for a mini stream index it would not be.
+        assert raw[512 + start * 512:512 + start * 512 + 16] == b'e' * 16, \
+            'a 4096 byte stream was placed in the mini stream'
+        break
+    else:
+        raise AssertionError('Exact entry not found in the directory')
+
+
 def test_large_file_difat(tmp):
     """Over 109 FAT sectors, so the DIFAT chain is written and walked.
 
@@ -544,13 +609,25 @@ def test_commit_semantics(tmp):
     assert joined == b''.join(writer.iterbytes()), 'iterbytes differs from tobytes'
     assert joined == writer.tobytes(), 'tobytes is not repeatable'
     writer.commit()
-    writer.commit()                                             # must be harmless
-    writer.close()                                              # must not rewrite
+    writer.commit()             # an explicit second commit rewrites the same bytes
     assert path.read_bytes() == joined, 'committed file differs from tobytes'
-    # A new file gets what a plain open() would have produced, not mkstemp's 0600.
-    assert stat.S_IMODE(path.stat().st_mode) == vlm_cfb.DEFAULT_FILE_MODE, (
+    before_close = path.stat()
+    writer.close()              # close() after commit() must NOT rewrite
+    after_close = path.stat()
+    assert (after_close.st_ino, after_close.st_mtime_ns) == \
+        (before_close.st_ino, before_close.st_mtime_ns), \
+        'close() rewrote an already committed file'
+    assert path.read_bytes() == joined, 'close() changed the committed file'
+    # A new file gets what a plain open() would have produced, not mkstemp's
+    # 0600.  Compare against a file actually created that way rather than
+    # against the module's own constant, which would pass whatever it said.
+    reference = pathlib.Path(tmp) / 'reference-mode'
+    with open(reference, 'wb') as handle:
+        handle.write(b'')
+    expected_mode = stat.S_IMODE(reference.stat().st_mode)
+    assert stat.S_IMODE(path.stat().st_mode) == expected_mode, (
         f'new file mode {oct(stat.S_IMODE(path.stat().st_mode))} != '
-        f'{oct(vlm_cfb.DEFAULT_FILE_MODE)}')
+        f'{oct(expected_mode)} that open() would have produced')
 
     # An existing target keeps its permissions and stays put on failure.
     path.chmod(0o644)
@@ -630,6 +707,13 @@ def main():
         except (AssertionError, OSError, ValueError) as error:
             failures += 1
             print(f'FAIL synthetic: {error}')
+
+        try:
+            test_mini_stream_cutoff(tmp)
+            print('ok   mini stream: 4096 byte cutoff is strict')
+        except (AssertionError, OSError, ValueError) as error:
+            failures += 1
+            print(f'FAIL mini stream: {error}')
 
         try:
             n_fat, n_difat = test_large_file_difat(tmp)

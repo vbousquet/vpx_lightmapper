@@ -77,8 +77,12 @@ CryptoAPI via pywin32. Both are now implemented in pure Python
 pywin32 still installed, the original COM writer keeps being used; set
 `VLM_PURE_PYTHON_CFB=1` to force the pure Python writer instead.
 
-Two differences are worth knowing about, both on every platform:
+Three differences are worth knowing about, all on every platform:
 
+* A table carrying a screenshot (`TableInfo/Screenshot`) now exports with a MAC
+  Visual Pinball accepts. The old code hashed that stream as BIFF records,
+  where Visual Pinball hashes it as raw bytes, so any such table was rejected
+  as corrupt on load. This is the widest of the three: screenshots are common.
 * A table carrying custom info tags now exports with its `TableInfo/<tag>`
   streams and a MAC that accounts for them. The old code looked them up under
   the wrong name, so it dropped them and produced a MAC Visual Pinball

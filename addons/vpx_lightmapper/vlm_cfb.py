@@ -82,6 +82,18 @@ DEFAULT_FILE_MODE = _default_file_mode()
 MAX_NAME_LEN = 31  # 32 UTF-16 code units including the null terminator
 
 
+def _in_mini_stream(size):
+    """Whether a stream of this size lives in the mini stream.
+
+    [MS-CFB] 2.6.1: streams *smaller than* the cutoff do, so the boundary is
+    strict and a stream of exactly 4096 bytes uses the regular FAT.  Both
+    readers Visual Pinball relies on agree (POLE checks `size >= threshold`,
+    olefile `size < minisectorcutoff`).  Asking here rather than testing the
+    size in each place keeps the two allocation passes from ever disagreeing.
+    """
+    return size < MINI_STREAM_CUTOFF
+
+
 def _entry_sort_key(name):
     """Directory sibling ordering defined by [MS-CFB] 2.6.4.
 
@@ -309,9 +321,11 @@ class CfbWriter(Storage):
     def iterbytes(self):
         """Yield the file in order: header, data sectors, FAT, DIFAT.
 
-        Yielding rather than joining keeps a second full size copy of the file
-        out of memory, and each data sector is released as soon as it has been
-        handed over, so the caller can stream a large table to disk.
+        The sector list is built before the first yield, so peak memory is
+        roughly three times the table size: the stream payloads, plus their
+        copies as sectors.  What yielding avoids is tobytes()'s third copy,
+        and each sector is released once handed over, so the caller can write
+        a large table out without the whole file existing twice more.
         """
         entries = self._build_directory()
 
@@ -340,7 +354,7 @@ class CfbWriter(Storage):
             entry.size = len(entry.data)
             if entry.size == 0:
                 entry.start = ENDOFCHAIN
-            elif entry.size < MINI_STREAM_CUTOFF:
+            elif _in_mini_stream(entry.size):
                 entry.start = len(mini_stream) // MINI_SECTOR_SIZE
                 count = (entry.size + MINI_SECTOR_SIZE - 1) // MINI_SECTOR_SIZE
                 base = len(mini_fat)
@@ -350,7 +364,7 @@ class CfbWriter(Storage):
                 mini_stream += b'\0' * (count * MINI_SECTOR_SIZE - entry.size)
 
         for entry in entries:
-            if entry.type == TYPE_STREAM and entry.size >= MINI_STREAM_CUTOFF:
+            if entry.type == TYPE_STREAM and entry.size and not _in_mini_stream(entry.size):
                 entry.start = alloc(entry.data)
 
         self._root.size = len(mini_stream)
@@ -487,24 +501,47 @@ class ComStream:
     def close(self):
         pass
 
+    Write = write
+    Close = close
+
 
 class ComStorage:
     """Thin wrapper giving a COM IStorage the same API as Storage/CfbWriter."""
 
     def __init__(self, storage):
         self._storage = storage
+        self._names = set()
+
+    def _reserve(self, name):
+        # IStorage::CreateStream with STGM_CREATE replaces an existing entry
+        # instead of failing, so without this a duplicate name would silently
+        # overwrite here while raising on the pure Python writer, and the two
+        # backends would produce different files from the same input.
+        key = _entry_sort_key(name)
+        if key in self._names:
+            raise DuplicateEntryError(f'Duplicate entry {name!r} in compound file storage')
+        self._names.add(key)
 
     def create_storage(self, name):
+        self._reserve(name)
         return ComStorage(self._storage.CreateStorage(name, _COM_CHILD_FLAGS, 0, 0))
 
     def create_stream(self, name):
+        self._reserve(name)
         return ComStream(self._storage.CreateStream(name, _COM_CHILD_FLAGS, 0, 0))
 
-    def commit(self):
+    def commit(self, *args, **kwargs):
         self._storage.Commit(storagecon.STGC_DEFAULT)
 
     def close(self):
         pass
+
+    # COM cased aliases, matching Storage/CfbWriter, so either backend can be
+    # driven with either spelling.
+    CreateStorage = create_storage
+    CreateStream = create_stream
+    Commit = commit
+    Close = close
 
 
 def create_writer(path):
