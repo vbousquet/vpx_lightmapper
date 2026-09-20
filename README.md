@@ -13,6 +13,7 @@ This tool is just my attempt at building better tables. It is shared in the hope
 * [What is it ?](#what-is-it)
 * [Features](#features)
 * [Installation](#installation)
+* [Platform support](#platform-support)
 * [Overview](#overview)
 * [Import Tool](#import-tool)
 * [Camera Tool](#camera-tool)
@@ -63,6 +64,26 @@ This add-on use the Blender console for all its output. You need to enable the c
 4. This add-on requires external python dependencies that are likely not available with your default Blender installation. If so, it will show an 'install dependencies' button that you need to click before use. After installing the dependencies, Blender will not immediatly detect them: you will have to restart Blender.
 
 Depending on your security configuration, this additional dependency installation step may need to be performed from a Blender instance started with administrator rights. In this case, the installation process is somewhat more complex since you will need to install the add-on as administrator, then the dependencies, then close Blender and restart it from a normal account, and install the add-on again (the first time it was installed to your admin account, so it is not available from your normal acount, but the dependencies are installed system wide and will be available).
+
+## Platform support
+
+Windows, Linux and macOS are all supported, for import as well as export.
+
+Exporting a table means writing an OLE compound document and hashing part of it
+with MD2, which used to be done through the Windows COM `IStorage` API and the
+CryptoAPI via pywin32. Both are now implemented in pure Python
+(`vlm_cfb.py` and `vlm_md2.py`), so **pywin32 is no longer required** and
+`olefile` plus `Pillow` are the only external dependencies. On Windows with
+pywin32 still installed, the original COM writer keeps being used, so exported
+files there are unchanged; set `VLM_PURE_PYTHON_CFB=1` to force the pure Python
+writer instead.
+
+Tests that do not need Blender live in `tests/` and run with a plain python3:
+
+```
+python3 tests/test_md2.py
+python3 tests/test_cfb_roundtrip.py [some_table.vpx]
+```
 
 ### Visual Pinball X with additive blended primitives
 
