@@ -35,6 +35,7 @@ Reference: [MS-CFB] Compound File Binary File Format.
 """
 
 import os
+import stat
 import struct
 import tempfile
 
@@ -167,8 +168,10 @@ class CfbWriter(Storage):
         key = _entry_sort_key(name)
         if key in siblings:
             raise ValueError(f'Duplicate entry {name!r} in compound file storage {parent.name!r}')
-        siblings.add(key)
+        # Build the entry before reserving the name: _Entry rejects an over long
+        # name, and a name that was never accepted must not block a later retry.
         entry = _Entry(name, type_)
+        siblings.add(key)
         parent.children.append(entry)
         return entry
 
@@ -176,8 +179,11 @@ class CfbWriter(Storage):
         # Write to a temporary file next to the target and rename it into
         # place, so a failure part way through leaves the previous file intact
         # rather than a truncated one (the COM backend got this from
-        # STGM_TRANSACTED).
-        directory = os.path.dirname(os.path.abspath(self._path)) or '.'
+        # STGM_TRANSACTED).  Resolve symlinks first: writing through the link,
+        # the way a plain open() would, keeps the link intact and keeps the
+        # temporary file on the same filesystem as its real target.
+        target = os.path.realpath(self._path)
+        directory = os.path.dirname(target) or '.'
         fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.vlm-cfb-', suffix='.tmp')
         try:
             with os.fdopen(fd, 'wb') as f:
@@ -185,7 +191,16 @@ class CfbWriter(Storage):
                     f.write(chunk)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp_path, self._path)
+            # mkstemp creates 0600, and os.replace carries that onto the target.
+            # Keep the mode the file already had, or fall back to what a normal
+            # create would have produced under the current umask.
+            try:
+                os.chmod(tmp_path, stat.S_IMODE(os.stat(target).st_mode))
+            except OSError:
+                umask = os.umask(0)
+                os.umask(umask)
+                os.chmod(tmp_path, 0o666 & ~umask)
+            os.replace(tmp_path, target)
         except BaseException:
             try:
                 os.unlink(tmp_path)
