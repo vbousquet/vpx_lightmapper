@@ -36,6 +36,7 @@ Reference: [MS-CFB] Compound File Binary File Format.
 
 import os
 import struct
+import tempfile
 
 HEADER_SIGNATURE = b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'
 
@@ -73,8 +74,13 @@ def _entry_sort_key(name):
     and Windows ``StgOpenStorage``) reject files that break this rule.
     """
     units = name.encode('utf-16-le')
-    upper = name.upper().encode('utf-16-le')
-    return (len(units) // 2, struct.unpack(f'<{len(upper) // 2}H', upper))
+    # [MS-CFB] specifies a simple one to one uppercase mapping.  Python's
+    # str.upper() expands some characters ('ss' for a sharp s, 'FI' for a
+    # ligature), which would change the code unit sequence, so only fold
+    # characters whose uppercase is a single code point.
+    upper = ''.join(c.upper() if len(c.upper()) == 1 else c for c in name)
+    upper_units = upper.encode('utf-16-le')
+    return (len(units) // 2, struct.unpack(f'<{len(upper_units) // 2}H', upper_units))
 
 
 class Stream:
@@ -84,7 +90,9 @@ class Stream:
         self._entry = entry
 
     def write(self, data):
-        self._entry.data += data
+        # bytearray, so chunked writes stay linear rather than rebuilding the
+        # payload on every call.
+        self._entry.data.extend(data)
         return len(data)
 
     def close(self):
@@ -120,12 +128,16 @@ class _Entry:
     __slots__ = ('name', 'type', 'children', 'data', 'id', 'color', 'left', 'right', 'child', 'start', 'size')
 
     def __init__(self, name, type_):
-        if len(name) > MAX_NAME_LEN:
-            raise ValueError(f'Compound file entry name too long ({len(name)} > {MAX_NAME_LEN}): {name!r}')
+        # The 64 byte name field holds 32 UTF-16 code units including the
+        # terminator.  Count code units, not code points: a non BMP character
+        # is a surrogate pair and takes two of them.
+        units = len(name.encode('utf-16-le')) // 2
+        if units > MAX_NAME_LEN:
+            raise ValueError(f'Compound file entry name too long ({units} > {MAX_NAME_LEN} UTF-16 code units): {name!r}')
         self.name = name
         self.type = type_
         self.children = []
-        self.data = b''
+        self.data = bytearray()
         self.id = 0
         self.color = COLOR_BLACK
         self.left = NOSTREAM
@@ -148,17 +160,38 @@ class CfbWriter(Storage):
 
     def _add_entry(self, parent, name, type_):
         siblings = self._names.setdefault(id(parent), set())
-        if name in siblings:
+        # Siblings are ordered, and compared, case insensitively: 'Foo' and
+        # 'FOO' collide.  Keying the check on the name alone would let both in
+        # and produce a tree that is not a valid search tree under the CFB
+        # comparator, which a binary searching reader can fail to walk.
+        key = _entry_sort_key(name)
+        if key in siblings:
             raise ValueError(f'Duplicate entry {name!r} in compound file storage {parent.name!r}')
-        siblings.add(name)
+        siblings.add(key)
         entry = _Entry(name, type_)
         parent.children.append(entry)
         return entry
 
     def commit(self, *args, **kwargs):
-        data = self.tobytes()
-        with open(self._path, 'wb') as f:
-            f.write(data)
+        # Write to a temporary file next to the target and rename it into
+        # place, so a failure part way through leaves the previous file intact
+        # rather than a truncated one (the COM backend got this from
+        # STGM_TRANSACTED).
+        directory = os.path.dirname(os.path.abspath(self._path)) or '.'
+        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.vlm-cfb-', suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                for chunk in self.iterbytes():
+                    f.write(chunk)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self._path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         self._committed = True
 
     def close(self):
@@ -233,6 +266,16 @@ class CfbWriter(Storage):
         return by_index[1].id
 
     def tobytes(self):
+        """The whole file as one bytes object (tests and small files)."""
+        return b''.join(self.iterbytes())
+
+    def iterbytes(self):
+        """Yield the file in order: header, data sectors, FAT, DIFAT.
+
+        Yielding rather than joining keeps a second full size copy of the file
+        out of memory, and each data sector is released as soon as it has been
+        handed over, so the caller can stream a large table to disk.
+        """
         entries = self._build_directory()
 
         sectors = []  # 512 byte payloads, index == sector number
@@ -323,7 +366,13 @@ class CfbWriter(Storage):
             first_difat=difat_sectors[0] if difat_sectors else ENDOFCHAIN, n_difat=n_difat,
             header_difat=fat_sectors[:DIFAT_IN_HEADER])
 
-        return b''.join([header] + sectors + [fat_data, difat_data])
+        yield header
+        for i in range(len(sectors)):
+            chunk = sectors[i]
+            sectors[i] = None  # release as we go
+            yield chunk
+        yield fat_data
+        yield difat_data
 
     @staticmethod
     def _pack_header(n_fat, first_dir, first_mini_fat, n_mini_fat, first_difat, n_difat, header_difat):

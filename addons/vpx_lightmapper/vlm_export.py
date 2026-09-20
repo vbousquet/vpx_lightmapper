@@ -829,19 +829,14 @@ def export_vpx(op, context):
         dst_stream = dst_st.create_stream(src_path.split('/')[-1])
         dst_stream.write(data)
         if src_path == 'GameStg/CustomInfoTags': # process the custom info tags since they need to be hashed
-            br = biff_io.BIFF_reader(data)
-            while not br.is_eof():
-                br.next()
-                if br.tag == "CUST":
-                    cust_name = br.get_string()
-                    logger.info(f'Hashing custom information block {cust_name}')
-                    if src_storage.exists(f'TableInfo/f{cust_name}'):
-                        data = src_storage.openstream(f'TableInfo/f{cust_name}').read()
-                        data_hash.update(data)
-                        dst_stream = dst_tableinfo.create_stream(cust_name)
-                        dst_stream.write(data)
-                else:
-                    br.skip_tag()
+            for cust_name in biff_io.iter_custom_info_tags(data):
+                logger.info(f'Hashing custom information block {cust_name}')
+                cust_path = biff_io.custom_info_path(cust_name)
+                if src_storage.exists(cust_path):
+                    data = src_storage.openstream(cust_path).read()
+                    data_hash.update(data)
+                    dst_stream = dst_tableinfo.create_stream(cust_name)
+                    dst_stream.write(data)
 
 
     dst_stream = dst_gamestg.create_stream('MAC')
