@@ -835,7 +835,14 @@ def export_vpx(op, context):
                 if src_storage.exists(cust_path):
                     data = src_storage.openstream(cust_path).read()
                     data_hash.update(data)
-                    dst_stream = dst_tableinfo.create_stream(cust_name)
+                    # A tag may repeat, or collide (case insensitively) with a
+                    # standard TableInfo stream.  Visual Pinball overwrites in
+                    # that case; creating it twice would abort the export.
+                    try:
+                        dst_stream = dst_tableinfo.create_stream(cust_name)
+                    except ValueError:
+                        logger.info(f'Custom information block {cust_name} already written, skipping')
+                        continue
                     dst_stream.write(data)
 
 

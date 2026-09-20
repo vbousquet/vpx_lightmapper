@@ -292,7 +292,10 @@ MAC_FILE_STRUCTURE = (
     ('TableInfo/TableRules', 0, True),
     ('TableInfo/TableSaveDate', 0, False),
     ('TableInfo/TableSaveRev', 0, False),
-    ('TableInfo/Screenshot', 1, True),
+    # Raw bytes, not BIFF records: PinTable::SaveInfo writes the screenshot with
+    # BiffWriter::WriteBytes, which hands the bytes straight to CryptHashData with
+    # no record framing (media/fileio.cpp), and WriteRecordSize does not hash at all.
+    ('TableInfo/Screenshot', 0, True),
     ('GameStg/CustomInfoTags', 1, True),  # custom info tags are hashed just after this stream
     ('GameStg/GameData', 1, True),
 )

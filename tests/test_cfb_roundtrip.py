@@ -14,6 +14,7 @@ shipped in docs/.  Run with: python3 tests/test_cfb_roundtrip.py [table.vpx]
 
 import os
 import pathlib
+import stat
 import struct
 import shutil
 import subprocess
@@ -26,6 +27,7 @@ from _addon import ADDON_DIR, load
 
 vlm_cfb = load('vlm_cfb')
 biff_io = load('biff_io')
+vlm_md2 = load('vlm_md2')
 
 DEFAULT_TABLE = ADDON_DIR.parents[1] / 'docs' / 'Blank Table' / 'Blank Table.vpx'
 
@@ -195,7 +197,11 @@ def test_synthetic_directories(tmp):
         expected = {}
         for index in range(count):
             # Sizes straddle the 4096 byte mini stream cutoff.
-            expected[f'S{index}'] = bytes([index % 256]) * ((index * 997) % 9000)
+            # Straddle the 4096 byte mini stream cutoff, and land exactly on it.
+            boundary = (4095, 4096, 4097, 0, 512)
+            size = boundary[index % len(boundary)] if index < 2 * len(boundary) \
+                else (index * 997) % 9000
+            expected[f'S{index}'] = bytes([index % 256]) * size
             storage.create_stream(f'S{index}').write(expected[f'S{index}'])
         writer.create_stream('Empty').write(b'')
         writer.commit()
@@ -282,6 +288,16 @@ def test_name_edges(tmp):
         handle.close()
 
 
+def _empty_biff():
+    """An empty but valid BIFF stream (just the ENDB record)."""
+    writer = biff_io.BIFF_writer()
+    writer.close()
+    return writer.get_data()
+
+
+empty_biff = _empty_biff()
+
+
 def test_custom_info_tags(tmp):
     """A table carrying custom info tags hashes its TableInfo/<tag> streams.
 
@@ -304,23 +320,153 @@ def test_custom_info_tags(tmp):
     for tag in tags:
         assert biff_io.custom_info_path(tag) == f'TableInfo/{tag}', 'wrong TableInfo path'
 
-    path = pathlib.Path(tmp) / 'custom.vpx'
-    writer = vlm_cfb.CfbWriter(str(path))
-    gamestg = writer.create_storage('GameStg')
-    tableinfo = writer.create_storage('TableInfo')
-    gamestg.create_stream('CustomInfoTags').write(cust_stream)
-    for tag in tags:
-        tableinfo.create_stream(tag).write(payloads[tag])
-    writer.commit()
-    writer.close()
+    def build(values, screenshot=None):
+        path = pathlib.Path(tmp) / f'custom-{abs(hash(tuple(sorted(values.items())))) & 0xffff}.vpx'
+        writer = vlm_cfb.CfbWriter(str(path))
+        gamestg = writer.create_storage('GameStg')
+        tableinfo = writer.create_storage('TableInfo')
+        gamestg.create_stream('Version').write(b'\x0a\x00\x00\x00')
+        gamestg.create_stream('CustomInfoTags').write(cust_stream)
+        gamestg.create_stream('GameData').write(empty_biff)
+        tableinfo.create_stream('TableName').write(b'a table')
+        if screenshot is not None:
+            tableinfo.create_stream('Screenshot').write(screenshot)
+        for tag, value in values.items():
+            tableinfo.create_stream(tag).write(value)
+        writer.commit()
+        writer.close()
+        return path
 
+    path = build(payloads)
     handle = olefile.OleFileIO(str(path))
     try:
         for tag in tags:
             assert handle.openstream(f'TableInfo/{tag}').read() == payloads[tag], tag
     finally:
         handle.close()
+
+    # The values must actually reach the digest, in Visual Pinball's order:
+    # each TableInfo/<tag> straight after GameStg/CustomInfoTags.
+    expected = vlm_md2.new()
+    expected.update(b'Visual Pinball')
+    expected.update(b'\x0a\x00\x00\x00')          # GameStg/Version
+    expected.update(b'a table')                     # TableInfo/TableName
+    biff_io.hash_biff_stream(expected, cust_stream)  # GameStg/CustomInfoTags
+    for tag in tags:
+        expected.update(payloads[tag])              # TableInfo/<tag>
+    biff_io.hash_biff_stream(expected, empty_biff)   # GameStg/GameData
+    computed = biff_io.compute_table_mac(str(path))
+    assert computed == expected.digest(), \
+        f'custom info tag digest {computed.hex()} != hand rolled {expected.digest().hex()}'
+
+    # Changing a tag's value must change the digest, otherwise the values are
+    # not being hashed at all.
+    other = dict(payloads, MyTag=b'a different value')
+    assert biff_io.compute_table_mac(str(build(other))) != computed, \
+        'digest did not change when a custom info tag value changed'
+
     return len(tags)
+
+
+def test_screenshot_hashed_raw(tmp):
+    """TableInfo/Screenshot is hashed as raw bytes, not as BIFF records.
+
+    PinTable::SaveInfo writes it with BiffWriter::WriteBytes, which passes the
+    bytes straight to CryptHashData with no record framing, so treating the
+    stream as BIFF would produce a MAC Visual Pinball rejects outright
+    (APPX_E_BLOCK_HASH_INVALID).  Neither shipped fixture has a screenshot, so
+    without this the rule is never exercised.
+    """
+    # Bytes that are not valid BIFF, so a records based hash would differ (and
+    # most likely not even parse) - a real screenshot is a JPEG or PNG blob.
+    shot = bytes(range(256)) * 7
+
+    path = pathlib.Path(tmp) / 'screenshot.vpx'
+    writer = vlm_cfb.CfbWriter(str(path))
+    gamestg = writer.create_storage('GameStg')
+    tableinfo = writer.create_storage('TableInfo')
+    gamestg.create_stream('Version').write(b'\x0a\x00\x00\x00')
+    gamestg.create_stream('GameData').write(empty_biff)
+    tableinfo.create_stream('TableName').write(b'a table')
+    tableinfo.create_stream('Screenshot').write(shot)
+    writer.commit()
+    writer.close()
+
+    expected = vlm_md2.new()
+    expected.update(b'Visual Pinball')
+    expected.update(b'\x0a\x00\x00\x00')
+    expected.update(b'a table')
+    expected.update(shot)                            # raw, not hash_biff_stream
+    biff_io.hash_biff_stream(expected, empty_biff)
+    computed = biff_io.compute_table_mac(str(path))
+    assert computed == expected.digest(), \
+        f'screenshot digest {computed.hex()} != raw bytes digest {expected.digest().hex()}'
+
+    mode = [m for path_, m, hashed in biff_io.MAC_FILE_STRUCTURE
+            if path_ == 'TableInfo/Screenshot'][0]
+    assert mode == 0, 'TableInfo/Screenshot must be hashed as raw bytes (mode 0)'
+
+
+def test_commit_semantics(tmp):
+    """iterbytes matches tobytes, commit is atomic, and the target keeps its mode."""
+    def fill(writer):
+        storage = writer.create_storage('GameStg')
+        storage.create_stream('Small').write(b'x' * 100)        # mini stream
+        storage.create_stream('Large').write(b'y' * 20000)      # regular sectors
+
+    path = pathlib.Path(tmp) / 'commit.vpx'
+    writer = vlm_cfb.CfbWriter(str(path))
+    fill(writer)
+    joined = writer.tobytes()
+    assert joined == b''.join(writer.iterbytes()), 'iterbytes differs from tobytes'
+    assert joined == writer.tobytes(), 'tobytes is not repeatable'
+    writer.commit()
+    writer.commit()                                             # must be harmless
+    writer.close()                                              # must not rewrite
+    assert path.read_bytes() == joined, 'committed file differs from tobytes'
+
+    # An existing target keeps its permissions and stays put on failure.
+    path.chmod(0o644)
+    before = path.read_bytes()
+    failing = vlm_cfb.CfbWriter(str(path))
+    fill(failing)
+    original_iterbytes = failing.iterbytes
+
+    def exploding():
+        for index, chunk in enumerate(original_iterbytes()):
+            if index > 1:
+                raise RuntimeError('boom')
+            yield chunk
+
+    failing.iterbytes = exploding
+    try:
+        failing.commit()
+        raise AssertionError('commit swallowed a write failure')
+    except RuntimeError:
+        pass
+    assert path.read_bytes() == before, 'a failed commit damaged the existing file'
+    leftovers = list(pathlib.Path(tmp).glob('.vlm-cfb-*'))
+    assert not leftovers, f'temporary files left behind: {leftovers}'
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644, \
+        f'target mode changed to {oct(stat.S_IMODE(path.stat().st_mode))}'
+
+    # Committing over an existing 0644 file must preserve that mode.
+    again = vlm_cfb.CfbWriter(str(path))
+    fill(again)
+    again.commit()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644, \
+        f'commit dropped the target mode to {oct(stat.S_IMODE(path.stat().st_mode))}'
+
+    # A symlinked target is written through, not replaced.
+    real = pathlib.Path(tmp) / 'real.vpx'
+    link = pathlib.Path(tmp) / 'link.vpx'
+    real.write_bytes(b'placeholder')
+    link.symlink_to(real)
+    through = vlm_cfb.CfbWriter(str(link))
+    fill(through)
+    through.commit()
+    assert link.is_symlink(), 'commit replaced the symlink with a regular file'
+    assert real.read_bytes() == joined, 'commit did not write through the symlink'
 
 
 def main():
@@ -337,7 +483,7 @@ def main():
             streams, storages = check_streams_identical(table, rewritten)
             print(f'ok   round trip: {streams} streams byte identical, {storages} storages, '
                   f'{rewritten.stat().st_size} bytes out')
-        except AssertionError as error:
+        except (AssertionError, OSError, ValueError) as error:
             failures += 1
             print(f'FAIL round trip: {error}')
 
@@ -354,23 +500,37 @@ def main():
             test_synthetic_directories(tmp)
             test_name_edges(tmp)
             print('ok   synthetic: entry counts, stream sizes, name and duplicate limits')
-        except AssertionError as error:
+        except (AssertionError, OSError, ValueError) as error:
             failures += 1
             print(f'FAIL synthetic: {error}')
 
         try:
             n_fat, n_difat = test_large_file_difat(tmp)
             print(f'ok   DIFAT: {n_fat} FAT sectors over {n_difat} DIFAT sector(s)')
-        except AssertionError as error:
+        except (AssertionError, OSError, ValueError) as error:
             failures += 1
             print(f'FAIL DIFAT: {error}')
 
         try:
             count = test_custom_info_tags(tmp)
             print(f'ok   custom info tags: {count} tags hashed from TableInfo/<tag>')
-        except AssertionError as error:
+        except (AssertionError, OSError, ValueError) as error:
             failures += 1
             print(f'FAIL custom info tags: {error}')
+
+        try:
+            test_screenshot_hashed_raw(tmp)
+            print('ok   screenshot: hashed as raw bytes, matching Visual Pinball')
+        except (AssertionError, OSError, ValueError) as error:
+            failures += 1
+            print(f'FAIL screenshot: {error}')
+
+        try:
+            test_commit_semantics(tmp)
+            print('ok   commit: atomic, repeatable, keeps target mode and symlinks')
+        except (AssertionError, OSError, ValueError, RuntimeError) as error:
+            failures += 1
+            print(f'FAIL commit: {error}')
 
         skipped = []
         try:
@@ -380,13 +540,13 @@ def main():
             else:
                 skipped.append('vpxtool (not on PATH)')
                 print('skip vpxtool: not on PATH — the only strict reader check did NOT run')
-        except AssertionError as error:
+        except (AssertionError, OSError, ValueError) as error:
             failures += 1
             print(f'FAIL vpxtool: {error}')
 
         try:
             print(f'ok   MAC: recomputed digest matches GameStg/MAC ({check_mac(table).hex()})')
-        except AssertionError as error:
+        except (AssertionError, OSError, ValueError) as error:
             failures += 1
             print(f'FAIL MAC: {error}')
 
