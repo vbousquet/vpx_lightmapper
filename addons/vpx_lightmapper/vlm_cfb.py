@@ -322,10 +322,9 @@ class CfbWriter(Storage):
         """Yield the file in order: header, data sectors, FAT, DIFAT.
 
         The sector list is built before the first yield, so peak memory is
-        roughly three times the table size: the stream payloads, plus their
-        copies as sectors.  What yielding avoids is tobytes()'s third copy,
-        and each sector is released once handed over, so the caller can write
-        a large table out without the whole file existing twice more.
+        roughly twice the table size: the stream payloads, plus their copies
+        as sectors.  Each sector is released once handed over, so a caller
+        writing straight to disk stays there; tobytes() adds a third copy.
         """
         entries = self._build_directory()
 

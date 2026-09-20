@@ -293,8 +293,9 @@ def test_large_file_difat(tmp):
     writer = vlm_cfb.CfbWriter(str(path))
     storage = writer.create_storage('GameStg')
     expected = {}
-    for index in range(16):
-        # 16 x 512 KB = 8 MB of data, comfortably past the threshold.
+    for index in range(40):
+        # 40 x 512 KB = 20 MB, which needs more than one DIFAT sector, so the
+        # chain between them is walked rather than just the first sector.
         payload = bytes([index % 256]) * (512 * 1024)
         storage.create_stream(f'Big{index}').write(payload)
         expected[f'Big{index}'] = payload
@@ -304,7 +305,9 @@ def test_large_file_difat(tmp):
     raw = path.read_bytes()
     n_fat, n_difat = struct.unpack('<I', raw[44:48])[0], struct.unpack('<I', raw[72:76])[0]
     assert n_fat > vlm_cfb.DIFAT_IN_HEADER, f'test did not reach the DIFAT path ({n_fat} FAT sectors)'
-    assert n_difat > 0, 'FAT needs more than 109 sectors but no DIFAT sector was written'
+    assert n_difat >= 2, (
+        f'only {n_difat} DIFAT sector(s): the chain between them is the most '
+        f'reader fatal part of the format and needs to be exercised')
     check_directory_tree(path)
     handle = olefile.OleFileIO(str(path))
     try:
@@ -312,6 +315,36 @@ def test_large_file_difat(tmp):
             assert handle.openstream(f'GameStg/{name}').read() == data, name
     finally:
         handle.close()
+
+    # olefile bounds its DIFAT walk by n_fat, so it reads the file correctly even
+    # if the chain between DIFAT sectors is broken.  A stricter reader does not,
+    # so assert the structure directly: each DIFAT sector's last slot points at
+    # the next and the final one terminates, and the FAT marks them DIFSECT.
+    first_difat = struct.unpack('<I', raw[68:72])[0]
+    seen = []
+    sector = first_difat
+    while sector != vlm_cfb.ENDOFCHAIN:
+        assert sector not in seen, 'DIFAT chain loops'
+        seen.append(sector)
+        offset = 512 + sector * 512
+        sector = struct.unpack('<I', raw[offset + 508:offset + 512])[0]
+    assert len(seen) == n_difat, \
+        f'DIFAT chain visits {len(seen)} sector(s), header says {n_difat}'
+
+    # The FAT spans more than the 109 sectors the header lists, so gather the
+    # rest through the DIFAT chain we just walked.
+    fat_sectors = list(struct.unpack('<109I', raw[76:512]))[:min(n_fat, 109)]
+    for sector in seen:
+        offset = 512 + sector * 512
+        fat_sectors += [x for x in struct.unpack('<127I', raw[offset:offset + 508])
+                        if x != vlm_cfb.FREESECT]
+    assert len(fat_sectors) == n_fat, \
+        f'DIFAT lists {len(fat_sectors)} FAT sectors, header says {n_fat}'
+    fat = struct.unpack(f'<{128 * len(fat_sectors)}I',
+                        b''.join(raw[512 + s * 512:1024 + s * 512] for s in fat_sectors))
+    for sector in seen:
+        assert fat[sector] == vlm_cfb.DIFSECT, \
+            f'DIFAT sector {sector} is marked {fat[sector]:#x}, expected DIFSECT'
     return n_fat, n_difat
 
 
@@ -472,6 +505,14 @@ def test_mac_file_structure(tmp):
         'GameStg/CustomInfoTags': empty_biff,
         'GameStg/GameData': empty_biff,
     }
+    # Numbered streams, appended by compute_table_mac after the fixed table.
+    # Sounds and fonts are copied but NOT hashed; collections are hashed, last.
+    # Blank Table has none of them, so their flags are otherwise untested.
+    numbered = {
+        'GameStg/Sound0': b'not hashed, a sound',
+        'GameStg/Font0': b'not hashed, a font',
+        'GameStg/Collection0': empty_biff,
+    }
     # This test's own ground truth, read from Visual Pinball rather than from the
     # table under test: PinTable::SaveInfo (pintable.cpp:3325-3356) writes each
     # TableInfo value with BiffWriter::WriteBytes, which hashes raw bytes with no
@@ -507,7 +548,7 @@ def test_mac_file_structure(tmp):
     writer = vlm_cfb.CfbWriter(str(path))
     storages = {'GameStg': writer.create_storage('GameStg'),
                 'TableInfo': writer.create_storage('TableInfo')}
-    for stream_path, value in values.items():
+    for stream_path, value in {**values, **numbered}.items():
         parent, name = stream_path.split('/')
         storages[parent].create_stream(name).write(value)
     writer.commit()
@@ -523,6 +564,7 @@ def test_mac_file_structure(tmp):
             expected.update(value)
         else:
             biff_io.hash_biff_stream(expected, value)
+    biff_io.hash_biff_stream(expected, numbered['GameStg/Collection0'])
     computed = biff_io.compute_table_mac(str(path))
     assert computed == expected.digest(), \
         f'structure digest {computed.hex()} != hand rolled {expected.digest().hex()}'
@@ -536,10 +578,23 @@ def test_mac_file_structure(tmp):
     other_biff = other_biff.get_data()
 
     # Each hashed value must reach the digest, and each unhashed one must not.
-    for stream_path, mode, hashed in expected_structure:
-        mutated = other_biff if mode == 1 else values[stream_path] + b'!'
-        assert mutated != values[stream_path], f'mutation for {stream_path} changed nothing'
-        altered = dict(values, **{stream_path: mutated})
+    expected_numbered = (
+        ('GameStg/Sound0', 1, False),
+        ('GameStg/Font0', 1, False),
+        ('GameStg/Collection0', 1, True),
+    )
+    # A sound or font that IS hashed would change the digest, so pin the
+    # flags the same way as the fixed table above: build the hand rolled
+    # digest without them and require it to match.
+    assert not any(hashed for _, _, hashed in expected_numbered[:2]), \
+        'sounds and fonts are copied but not hashed'
+    all_values = {**values, **numbered}
+    for stream_path, mode, hashed in expected_structure + expected_numbered:
+        mutated = other_biff if mode == 1 else all_values[stream_path] + b'!'
+        if mutated == all_values[stream_path]:
+            mutated = all_values[stream_path] + b'!'
+        assert mutated != all_values[stream_path], f'mutation for {stream_path} changed nothing'
+        altered = dict(all_values, **{stream_path: mutated})
         other = pathlib.Path(tmp) / 'structure-alt.vpx'
         alt_writer = vlm_cfb.CfbWriter(str(other))
         alt_storages = {'GameStg': alt_writer.create_storage('GameStg'),
@@ -687,7 +742,7 @@ def main():
             streams, storages = check_streams_identical(table, rewritten)
             print(f'ok   round trip: {streams} streams byte identical, {storages} storages, '
                   f'{rewritten.stat().st_size} bytes out')
-        except (AssertionError, OSError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - report, never crash the run
             failures += 1
             print(f'FAIL round trip: {error}')
 
@@ -704,49 +759,49 @@ def main():
             test_synthetic_directories(tmp)
             test_name_edges(tmp)
             print('ok   synthetic: entry counts, stream sizes, name and duplicate limits')
-        except (AssertionError, OSError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - report, never crash the run
             failures += 1
             print(f'FAIL synthetic: {error}')
 
         try:
             test_mini_stream_cutoff(tmp)
             print('ok   mini stream: 4096 byte cutoff is strict')
-        except (AssertionError, OSError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - report, never crash the run
             failures += 1
             print(f'FAIL mini stream: {error}')
 
         try:
             n_fat, n_difat = test_large_file_difat(tmp)
             print(f'ok   DIFAT: {n_fat} FAT sectors over {n_difat} DIFAT sector(s)')
-        except (AssertionError, OSError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - report, never crash the run
             failures += 1
             print(f'FAIL DIFAT: {error}')
 
         try:
             count = test_custom_info_tags(tmp)
             print(f'ok   custom info tags: {count} tags hashed from TableInfo/<tag>')
-        except (AssertionError, OSError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - report, never crash the run
             failures += 1
             print(f'FAIL custom info tags: {error}')
 
         try:
             count = test_mac_file_structure(tmp)
             print(f'ok   MAC structure: {count} entries, modes and hashed flags verified')
-        except (AssertionError, OSError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - report, never crash the run
             failures += 1
             print(f'FAIL MAC structure: {error}')
 
         try:
             test_screenshot_hashed_raw(tmp)
             print('ok   screenshot: hashed as raw bytes, matching Visual Pinball')
-        except (AssertionError, OSError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - report, never crash the run
             failures += 1
             print(f'FAIL screenshot: {error}')
 
         try:
             test_commit_semantics(tmp)
             print('ok   commit: atomic, repeatable, keeps target mode and symlinks')
-        except (AssertionError, OSError, ValueError, RuntimeError) as error:
+        except Exception as error:  # noqa: BLE001 - report, never crash the run
             failures += 1
             print(f'FAIL commit: {error}')
 
@@ -758,13 +813,13 @@ def main():
             else:
                 skipped.append('vpxtool (not on PATH)')
                 print('skip vpxtool: not on PATH — the only strict reader check did NOT run')
-        except (AssertionError, OSError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - report, never crash the run
             failures += 1
             print(f'FAIL vpxtool: {error}')
 
         try:
             print(f'ok   MAC: recomputed digest matches GameStg/MAC ({check_mac(table).hex()})')
-        except (AssertionError, OSError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - report, never crash the run
             failures += 1
             print(f'FAIL MAC: {error}')
 
