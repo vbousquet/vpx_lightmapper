@@ -28,7 +28,9 @@ logger = vlm_utils.logger
 
 def validate_object_names(op, bake_col):
     """
-    Scene-wide, conservative filename preflight.
+    Conservative filename preflight for the objects that produce cache files
+    (the VLM.Bake objects and their Bake To targets; other scene objects never
+    reach a cache path).
 
     VLM is allowed to sanitize names (for example by removing #, quotes,
     apostrophes or non-ASCII characters). That sanitizing is not an error by
@@ -55,17 +57,8 @@ def validate_object_names(op, bake_col):
         seen_ptrs.add(ptr)
         relevant.append(obj)
 
-    # Check every object in the active scene, not just VLM.Bake. This includes
-    # Layer Separator objects and other helper collections that can still feed
-    # names into render/cache paths.
-    for obj in bpy.context.scene.objects:
-        add_relevant(obj)
-        try:
-            add_relevant(obj.vlmSettings.bake_to)
-        except Exception:
-            pass
-
-    # Also keep VLM.Bake and external Bake-To targets covered explicitly.
+    # Only objects that generate cache files: VLM.Bake objects and their
+    # (possibly external) Bake To targets.
     for obj in bake_col.all_objects:
         add_relevant(obj)
         try:
@@ -111,28 +104,17 @@ def validate_object_names(op, bake_col):
                  "the sanitized name exceeds 255 characters and VLM would truncate it")
             )
 
-        windows_trimmed = cleaned.rstrip(" .")
-        if windows_trimmed == "":
-            problems.append(
-                ("INVALID OBJECT NAME", original, cleaned,
-                 "the filename becomes empty after Windows trims trailing spaces/dots")
-            )
-        elif windows_trimmed != cleaned:
-            problems.append(
-                ("INVALID OBJECT NAME", original, cleaned,
-                 "Windows would trim trailing spaces/dots from the generated filename")
-            )
-
-        stem = os.path.splitext(windows_trimmed)[0]
+        # Every generated filename appends an extension after the name, so
+        # Windows never trims trailing spaces/dots; only device names matter.
+        stem = os.path.splitext(cleaned.rstrip(" ."))[0]
         if reserved_re.match(stem):
             problems.append(
                 ("INVALID OBJECT NAME", original, cleaned,
                  "the generated filename is a reserved Windows device name")
             )
 
-        # Windows/cache comparison: case-insensitive and with trailing
-        # spaces/dots normalized away.
-        key = windows_trimmed.casefold()
+        # Windows/cache comparison: case-insensitive.
+        key = cleaned.casefold()
         by_cleaned.setdefault(key, []).append((obj, original, cleaned))
 
     # Detect real cache aliases after sanitizing, e.g.
@@ -144,7 +126,8 @@ def validate_object_names(op, bake_col):
         if len(unique_ptrs) > 1:
             collisions.append(items)
 
-    # Conservative generated-path length guard. The 240-character threshold
+    # Conservative generated-path length guard (Windows only; MAX_PATH does not
+    # apply elsewhere). The 240-character threshold
     # leaves headroom for Windows/API differences and VLM's added subfolders
     # and suffixes, preventing a mid-render failure.
     try:
@@ -164,7 +147,7 @@ def validate_object_names(op, bake_col):
         "{name}.obj",
     )
 
-    if bake_root:
+    if bake_root and os.name == 'nt':
         for obj in relevant:
             cleaned = vlm_utils.clean_filename(obj.name)
             for pattern in representative_names:
@@ -181,7 +164,7 @@ def validate_object_names(op, bake_col):
     if not problems and not collisions:
         logger.info(
             f"[VLM] Object name preflight: OK "
-            f"({len(relevant)} scene objects/targets checked; "
+            f"({len(relevant)} bake objects/targets checked; "
             f"collisions, Windows filename hazards and path lengths checked)."
         )
         return True
