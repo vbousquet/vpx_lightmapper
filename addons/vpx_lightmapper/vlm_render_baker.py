@@ -888,7 +888,7 @@ def render_all_groups(op, context):
 
         dup.data.uv_layers['UVMap'].active = True 
 
-        render_path_nm = f'{bakepath}NormalMap - Bake - {obj.name}.exr'
+        render_path_nm = f'{bakepath}NormalMap - Bake - {vlm_utils.clean_filename(obj.name)}.exr'
         normalmap_enabled = bool(dup.vlmSettings.bake_normalmap)
 
         # Normal maps are persistent cached bake assets.  If the EXR already
@@ -957,7 +957,7 @@ def render_all_groups(op, context):
         else:
             logger.info(f"Baking {obj.name} normal map. - Skipped: bake_normalmap is disabled")
 
-        render_path_diffuse = f'{bakepath}DiffuseColor - Bake - {obj.name}.exr'
+        render_path_diffuse = f'{bakepath}DiffuseColor - Bake - {vlm_utils.clean_filename(obj.name)}.exr'
         abs_diffuse_path = bpy.path.abspath(render_path_diffuse)
 
         # Albedo is intentionally controlled by the same "Bake Normal" option.
@@ -1036,8 +1036,8 @@ def render_all_groups(op, context):
 
         for i, scenario in enumerate(light_scenarios, start=1):
             name, is_lightmap, light_col, lights = scenario
-            render_path = f'{bakepath}{scenario[0]} - Bake - {obj.name}.exr'
-            influence_path = f'{bakepath}{scenario[0]} - Influence - {obj.name}.exr'
+            render_path = f'{bakepath}{scenario[0]} - Bake - {vlm_utils.clean_filename(obj.name)}.exr'
+            influence_path = f'{bakepath}{scenario[0]} - Influence - {vlm_utils.clean_filename(obj.name)}.exr'
             msg = f". Baking '{obj.name}' for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
 
 
@@ -1088,7 +1088,7 @@ def render_all_groups(op, context):
                     
                     with context.temp_override(scene=temp_denoise_scene):
                         denoise_file_output_node.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
-                        render_path_denoise = f'{bakepath}{scenario[0]} - Bake - {obj.name}'
+                        render_path_denoise = f'{bakepath}{scenario[0]} - Bake - {vlm_utils.clean_filename(obj.name)}'
                         denoise_image_node.image = bake_img
 
                         denoise_normal_map_node.image = bake_img_normal
