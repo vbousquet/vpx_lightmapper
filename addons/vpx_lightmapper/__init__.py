@@ -249,6 +249,7 @@ class VLM_Collection_props(PropertyGroup):
         default='group'
     )
     is_opaque: BoolProperty(name="Opaque", description="Wether this collection only contains opaque objects which do not require blending", default = True)
+    is_moveable: BoolProperty(name="Moveable", description="Keep object location, rotation and scale on generated VLM.Result meshes for this bake collection. Enable this for collections whose result meshes must retain their transforms for runtime movement in VPX.", default=False)
     use_static_rendering: BoolProperty(name="Static Rendering", description="Mark this baked part to be statically pre-rendered in VPX", default = True)
     depth_bias: IntProperty(name="Depth Bias", description="Depth Bias applied to the layer when exported to VPX. Set to 0 for playfield, Negative for layer above playfield, positive for layers under playfield.", default = 0)
     refraction_probe: StringProperty(name="Refraction Probe", description="Identifier of the refraction probe to be used on export", default = '')
@@ -1313,6 +1314,7 @@ class VLM_PT_Col_Props(bpy.types.Panel):
         light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
         if bake_col and col.name in bake_col.children:
             layout.prop(col.vlmSettings, 'bake_mode', expand=True)
+            layout.prop(col.vlmSettings, 'is_moveable')
             layout.prop(col.vlmSettings, 'vpx_material', expand=True)
             layout.prop(col.vlmSettings, 'is_opaque', expand=True)
             if col.vlmSettings.is_opaque:

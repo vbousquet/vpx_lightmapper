@@ -156,6 +156,41 @@ def create_bake_meshes(op, context):
             hdr_range = max(hdr_range, gmap[4 * xy + 1]) # HDR Range is maximum of channels
         bake_hdr_range[light_name] = hdr_range
 
+    # STATIC TRANSFORM APPLY (3.3)
+    #
+    # Static-vs-moveable is a property of the bake COLLECTION, not of the
+    # per-object "Use as pivot" / "Use Obj Pos" flags. Those object flags
+    # keep their original VPX pivot/export semantics but no longer decide
+    # whether transforms are applied to generated VLM.Result meshes.
+    #
+    # For a normal (Moveable disabled) bake collection, the authoritative
+    # transform computed by Meshes is baked into the generated BM/LM geometry
+    # and the VLM.Result object transform is reset to identity. If Moveable is
+    # enabled on the bake collection, every generated result for that collection
+    # keeps its transform untouched.
+    def _vlm_apply_static_result_transform(result_obj, transform, bake_col):
+        if bake_col.vlmSettings.is_moveable:
+            logger.info(
+                f". Static transform apply skipped for {result_obj.name}: "
+                f"bake collection '{bake_col.name}' is marked Moveable"
+            )
+            return False
+
+        # Use the transform calculated during Meshes construction, rather than
+        # re-reading result_obj.matrix_world later. Some VLM.Result objects can
+        # have valid transform channels / matrix_basis while matrix_world is
+        # stale or identity during later export stages.
+        apply_matrix = Matrix(transform).copy()
+        result_obj.data.transform(apply_matrix)
+        result_obj.matrix_world.identity()
+        result_obj.data.update()
+        logger.info(
+            f". Static transform applied to {result_obj.name}: "
+            f"collection '{bake_col.name}' is not Moveable; "
+            f"location/rotation/scale baked into mesh and result transform reset to identity"
+        )
+        return True
+
     # Prepare the list of solid bake mesh to produce
     to_bake = []
     for bake_col in root_bake_col.children:
@@ -423,6 +458,7 @@ def create_bake_meshes(op, context):
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             result_col.objects.link(bake_instance)
             bake_instance.matrix_world = transform
+            _vlm_apply_static_result_transform(bake_instance, transform, bake_col)
             adapt_materials(bake_instance.data, light_name, is_lightmap)
             bake_instance.vlmSettings.bake_lighting = light_name
             bake_instance.vlmSettings.bake_collections = bake_col.name
@@ -480,6 +516,7 @@ def create_bake_meshes(op, context):
             else:
                 logger.info(f'. {len(bake_instance.data.polygons):>6} faces out of {n_faces:>6} kept (HDR range: {hdr_range:>5.2f}) for {obj_name}')
                 bake_instance.matrix_world = transform
+                _vlm_apply_static_result_transform(bake_instance, transform, bake_col)
                 bake_instance.vlmSettings.is_lightmap = True
                 bake_instance.vlmSettings.bake_lighting = light_name
                 bake_instance.vlmSettings.bake_nestmap = prev_nestmap
