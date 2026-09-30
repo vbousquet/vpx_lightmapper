@@ -1041,27 +1041,227 @@ def render_all_groups(op, context):
             msg = f". Baking '{obj.name}' for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
 
 
+            # Light Linking (3.3): preserve the current master behavior, but
+            # resolve CollectionObject membership safely and independently for
+            # receiver and blocker hierarchies.
+            #
+            # The current upstream master intends to copy the source object's
+            # INCLUDE/EXCLUDE state to the temporary bake duplicate. However it
+            # enumerates `all_objects` and then indexes `collection_objects` with
+            # the same integer. Those collections are not index-compatible for
+            # nested collection hierarchies. The upstream blocker branch also
+            # accidentally enumerates the receiver collection.
+            #
+            # Here we keep upstream semantics, while finding every *direct*
+            # membership of the source object below the relevant root. Linking
+            # the duplicate into the same direct owner preserves parent/child
+            # collection states, and copying that direct CollectionObject state
+            # preserves the leaf INCLUDE/EXCLUDE state.
             light_linking_collections = []
+            light_linking_collection_ptrs = set()
+
+            def _collection_ptr(collection):
+                try:
+                    return collection.as_pointer()
+                except Exception:
+                    return id(collection)
+
+            def _is_direct_member(collection, member_obj):
+                """Blender-safe direct object membership test.
+
+                Collection.objects is a bpy_prop_collection whose __contains__ expects
+                a name string in Blender 4.5/5.x. Passing an Object instance raises
+                TypeError and previously caused every Light Linking lookup to fail.
+                """
+                if collection is None or member_obj is None:
+                    return False
+                objects = getattr(collection, 'objects', None)
+                if objects is None:
+                    return False
+
+                # Fast/API-native path: bpy_prop_collection lookup by object name.
+                try:
+                    found = objects.get(member_obj.name)
+                    if found is member_obj:
+                        return True
+                    if found is not None and getattr(found, 'name', None) == member_obj.name:
+                        return True
+                except Exception:
+                    pass
+
+                # Defensive fallback for API/version differences.
+                try:
+                    return any(candidate is member_obj for candidate in objects)
+                except Exception:
+                    return False
+
+            def _find_direct_owners(root_collection, source_obj):
+                """Return all descendant collections that directly contain source_obj."""
+                if root_collection is None or source_obj is None:
+                    return []
+
+                owners = []
+                visited = set()
+
+                def visit(collection):
+                    ptr = _collection_ptr(collection)
+                    if ptr in visited:
+                        return
+                    visited.add(ptr)
+
+                    if _is_direct_member(collection, source_obj):
+                        owners.append(collection)
+
+                    try:
+                        children = list(collection.children)
+                    except Exception as exc:
+                        logger.warning(
+                            f"Light Linking: unable to inspect child collections of "
+                            f"{getattr(collection, 'name', '<unknown>')!r}: {exc}"
+                        )
+                        children = []
+
+                    for child in children:
+                        visit(child)
+
+                visit(root_collection)
+                return owners
+
+            def _get_collection_object_entry(owner_collection, member_obj):
+                """Resolve a direct CollectionObject entry without all_objects indexing."""
+                if owner_collection is None or member_obj is None:
+                    return None
+
+                collection_objects = getattr(owner_collection, 'collection_objects', None)
+                if collection_objects is None:
+                    return None
+
+                # Blender's bpy_prop_collection normally supports name lookup.
+                # Prefer it because it directly expresses the intended mapping.
+                try:
+                    entry = collection_objects.get(member_obj.name)
+                    if entry is not None:
+                        return entry
+                except Exception:
+                    pass
+
+                # Compatibility fallback: pair only the two *direct membership*
+                # collections, never collection.all_objects.
+                try:
+                    direct_objects = list(owner_collection.objects)
+                    entries = list(collection_objects)
+                except Exception:
+                    return None
+
+                for index, direct_obj in enumerate(direct_objects):
+                    if direct_obj is member_obj:
+                        return entries[index] if index < len(entries) else None
+                return None
+
+            def _read_link_state(owner_collection, source_obj, kind, root_collection):
+                entry = _get_collection_object_entry(owner_collection, source_obj)
+                if entry is None:
+                    logger.warning(
+                        f"Light Linking: {kind} source CollectionObject entry for "
+                        f"{source_obj.name!r} was not found in {owner_collection.name!r} "
+                        f"(root {root_collection.name!r})."
+                    )
+                    return None
+                try:
+                    settings = entry.light_linking
+                    if settings is None:
+                        return None
+                    return settings.link_state
+                except Exception as exc:
+                    logger.warning(
+                        f"Light Linking: could not read {kind.lower()} link_state for "
+                        f"{source_obj.name!r} in {owner_collection.name!r}: {exc}"
+                    )
+                    return None
+
+            def _write_link_state(owner_collection, duplicate_obj, source_state, kind):
+                if source_state is None:
+                    return
+                entry = _get_collection_object_entry(owner_collection, duplicate_obj)
+                if entry is None:
+                    logger.warning(
+                        f"Light Linking: duplicate CollectionObject entry for "
+                        f"{duplicate_obj.name!r} was not found in {owner_collection.name!r}."
+                    )
+                    return
+                try:
+                    settings = entry.light_linking
+                    if settings is None:
+                        logger.warning(
+                            f"Light Linking: duplicate entry for {duplicate_obj.name!r} in "
+                            f"{owner_collection.name!r} has no light_linking settings."
+                        )
+                        return
+                    settings.link_state = source_state
+                except Exception as exc:
+                    logger.warning(
+                        f"Light Linking: could not copy {kind.lower()} link_state for "
+                        f"{duplicate_obj.name!r} in {owner_collection.name!r}: {exc}"
+                    )
+
+            def _link_bake_copy(root_collection, kind):
+                if root_collection is None:
+                    return
+
+                owners = _find_direct_owners(root_collection, obj)
+                if not owners:
+                    return
+
+                for owner_collection in owners:
+                    source_state = _read_link_state(owner_collection, obj, kind, root_collection)
+                    owner_ptr = _collection_ptr(owner_collection)
+
+                    already_linked = _is_direct_member(owner_collection, dup)
+
+                    if not already_linked:
+                        logger.info(
+                            f"Linking light for {obj.name} to {kind} Collection "
+                            f"{root_collection.name} (direct owner: {owner_collection.name}, "
+                            f"state: {source_state if source_state is not None else 'DEFAULT'})"
+                        )
+                        try:
+                            owner_collection.objects.link(dup)
+                        except Exception as exc:
+                            logger.warning(
+                                f"Light Linking: could not link temporary bake copy "
+                                f"{dup.name!r} to {owner_collection.name!r}: {exc}"
+                            )
+                            continue
+
+                        # Only unlink memberships that this scenario created.
+                        if owner_ptr not in light_linking_collection_ptrs:
+                            light_linking_collection_ptrs.add(owner_ptr)
+                            light_linking_collections.append(owner_collection)
+
+                    # A duplicate can already have been linked by another light
+                    # sharing the same collection. Re-applying the same source
+                    # state is harmless and keeps behavior deterministic.
+                    _write_link_state(owner_collection, dup, source_state, kind)
+                    logger.info(
+                        f"Light Linking: {kind} applied for source {obj.name!r} -> "
+                        f"duplicate {dup.name!r} in {owner_collection.name!r} "
+                        f"(emitter root {root_collection.name!r}, state="
+                        f"{source_state if source_state is not None else 'DEFAULT'})"
+                    )
 
             for light_obj in light_col.all_objects:
-                if hasattr(light_obj, 'light_linking'):
-                    receiver_collection = light_obj.light_linking.receiver_collection
-                    if receiver_collection:
-                        for index, link_obj in enumerate(receiver_collection.all_objects):
-                            if link_obj.name == obj.name and dup.name not in receiver_collection.all_objects:  
-                                logger.info(f'Linking light for {obj.name} to Recevier Collection {receiver_collection.name}')
-                                light_linking_collections.append(receiver_collection)
-                                receiver_collection.objects.link(dup)
-                                receiver_collection.collection_objects[-1].light_linking.link_state = receiver_collection.collection_objects[index].light_linking.link_state
+                light_linking = getattr(light_obj, 'light_linking', None)
+                if light_linking is None:
+                    continue
 
-                blocker_collection = light_obj.light_linking.blocker_collection
-                if blocker_collection:
-                    for index, link_obj in enumerate(receiver_collection.all_objects):
-                        if link_obj.name == obj.name and dup.name not in blocker_collection.all_objects:
-                            logger.info(f'Linking light for {obj.name} to Blocker Collection {blocker_collection.name}')
-                            light_linking_collections.append(blocker_collection)
-                            blocker_collection.objects.link(dup)
-                            blocker_collection.collection_objects[-1].light_linking.link_state = blocker_collection.collection_objects[index].light_linking.link_state
+                _link_bake_copy(
+                    getattr(light_linking, 'receiver_collection', None),
+                    'Receiver'
+                )
+                _link_bake_copy(
+                    getattr(light_linking, 'blocker_collection', None),
+                    'Blocker'
+                )
 
 
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)) or not os.path.exists(bpy.path.abspath(influence_path)):
@@ -1162,7 +1362,14 @@ def render_all_groups(op, context):
                 n_existing += 1
                 
             for light_collection in light_linking_collections:
-                light_collection.objects.unlink(dup)
+                try:
+                    if _is_direct_member(light_collection, dup):
+                        light_collection.objects.unlink(dup)
+                except Exception as exc:
+                    logger.warning(
+                        f"Light Linking cleanup: could not unlink temporary bake object "
+                        f"{dup.name!r} from {getattr(light_collection, 'name', '<unknown>')!r}: {exc}"
+                    )
 
 
         for mat in dup.data.materials:
