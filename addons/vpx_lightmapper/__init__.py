@@ -719,12 +719,12 @@ class VLM_OT_batch_bake(Operator):
         for obj in bake_col.all_objects:
             if not obj.vlmSettings.use_bake:
                 continue
-            artifacts = [os.path.isfile(bpy.path.abspath(f'{bakepath}{sc[0]} - Bake - {obj.name}.exr')) for sc in scenarios]
+            artifacts = [os.path.isfile(bpy.path.abspath(f'{bakepath}{sc[0]} - Bake - {vlm_utils.clean_filename(obj.name)}.exr')) for sc in scenarios]
             if not any(artifacts):
                 return False
-            if obj.vlmSettings.bake_normalmap and not os.path.isfile(bpy.path.abspath(f'{bakepath}NormalMap - Bake - {obj.name}.exr')):
+            if obj.vlmSettings.bake_normalmap and not os.path.isfile(bpy.path.abspath(f'{bakepath}NormalMap - Bake - {vlm_utils.clean_filename(obj.name)}.exr')):
                 return False
-            if obj.vlmSettings.bake_normalmap and not os.path.isfile(bpy.path.abspath(f'{bakepath}DiffuseColor - Bake - {obj.name}.exr')):
+            if obj.vlmSettings.bake_normalmap and not os.path.isfile(bpy.path.abspath(f'{bakepath}DiffuseColor - Bake - {vlm_utils.clean_filename(obj.name)}.exr')):
                 return False
         return True
 
