@@ -1310,7 +1310,10 @@ def render_all_groups(op, context):
                             denoise_file_output_node.base_path = os.path.dirname(bpy.path.relpath(render_path_denoise))
                             denoise_file_output_node.file_slots[0].path = os.path.basename(bpy.path.relpath(render_path_denoise))
                         bpy.ops.render.render(use_viewport=False, write_still=False)
-                        os.rename(bpy.path.abspath(f'{render_path_denoise}0001.exr'), bpy.path.abspath(f'{render_path_denoise}.exr'))
+                        # Blender 5.x File Output names vary (e.g. '<name>Image' with no frame number or extension)
+                        denoise_base = bpy.path.abspath(render_path_denoise)
+                        denoise_out = next((c for c in (f'{denoise_base}0001.exr', f'{denoise_base}Image0001.exr', f'{denoise_base}Image.exr', f'{denoise_base}Image', f'{denoise_base}0001') if os.path.isfile(c)), f'{denoise_base}0001.exr')
+                        os.replace(denoise_out, f'{denoise_base}.exr')
                         
                     restore_func(state)
                     # Render for influence map
