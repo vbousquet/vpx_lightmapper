@@ -183,6 +183,9 @@ def create_bake_meshes(op, context):
         # stale or identity during later export stages.
         apply_matrix = Matrix(transform).copy()
         result_obj.data.transform(apply_matrix)
+        if apply_matrix.determinant() < 0:
+            # Mirrored transform reverses face winding: flip so normals stay outward
+            result_obj.data.flip_normals()
         result_obj.matrix_world.identity()
         result_obj.data.update()
         logger.info(
