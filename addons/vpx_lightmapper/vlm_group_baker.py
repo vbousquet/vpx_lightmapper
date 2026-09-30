@@ -25,6 +25,206 @@ from PIL import Image # External dependency
 
 logger = vlm_utils.logger
 
+
+def validate_object_names(op, bake_col):
+    """
+    Scene-wide, conservative filename preflight.
+
+    VLM is allowed to sanitize names (for example by removing #, quotes,
+    apostrophes or non-ASCII characters). That sanitizing is not an error by
+    itself. We only abort Groups for cases that can still create a real
+    filesystem/cache problem after sanitizing.
+    """
+    import os
+    import re
+    import string
+    import unicodedata
+
+    relevant = []
+    seen_ptrs = set()
+
+    def add_relevant(obj):
+        if obj is None:
+            return
+        try:
+            ptr = obj.as_pointer()
+        except Exception:
+            return
+        if ptr in seen_ptrs:
+            return
+        seen_ptrs.add(ptr)
+        relevant.append(obj)
+
+    # Check every object in the active scene, not just VLM.Bake. This includes
+    # Layer Separator objects and other helper collections that can still feed
+    # names into render/cache paths.
+    for obj in bpy.context.scene.objects:
+        add_relevant(obj)
+        try:
+            add_relevant(obj.vlmSettings.bake_to)
+        except Exception:
+            pass
+
+    # Also keep VLM.Bake and external Bake-To targets covered explicitly.
+    for obj in bake_col.all_objects:
+        add_relevant(obj)
+        try:
+            add_relevant(obj.vlmSettings.bake_to)
+        except Exception:
+            pass
+
+    problems = []
+    by_cleaned = {}
+
+    reserved_re = re.compile(
+        r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$',
+        re.IGNORECASE
+    )
+    whitelist = "-_.() %s%s" % (string.ascii_letters, string.digits)
+
+    for obj in relevant:
+        original = obj.name
+        cleaned = vlm_utils.clean_filename(original)
+
+        # Recreate the pre-truncation sanitized name so truncation itself can
+        # be detected rather than silently accepted.
+        normalized = unicodedata.normalize('NFKD', original).encode('ASCII', 'ignore').decode()
+        cleaned_full = ''.join(c for c in normalized if c in whitelist)
+
+        # Ordinary sanitizing is allowed. Only these residual hazards abort.
+        if cleaned == "":
+            problems.append(
+                ("INVALID OBJECT NAME", original, cleaned,
+                 "the name becomes empty after VLM filename cleaning")
+            )
+            continue
+
+        if any(ord(c) < 32 for c in original):
+            problems.append(
+                ("INVALID OBJECT NAME", original, cleaned,
+                 "the original name contains a Windows control character")
+            )
+
+        if len(cleaned_full) > 255:
+            problems.append(
+                ("NAME TOO LONG", original, cleaned,
+                 "the sanitized name exceeds 255 characters and VLM would truncate it")
+            )
+
+        windows_trimmed = cleaned.rstrip(" .")
+        if windows_trimmed == "":
+            problems.append(
+                ("INVALID OBJECT NAME", original, cleaned,
+                 "the filename becomes empty after Windows trims trailing spaces/dots")
+            )
+        elif windows_trimmed != cleaned:
+            problems.append(
+                ("INVALID OBJECT NAME", original, cleaned,
+                 "Windows would trim trailing spaces/dots from the generated filename")
+            )
+
+        stem = os.path.splitext(windows_trimmed)[0]
+        if reserved_re.match(stem):
+            problems.append(
+                ("INVALID OBJECT NAME", original, cleaned,
+                 "the generated filename is a reserved Windows device name")
+            )
+
+        # Windows/cache comparison: case-insensitive and with trailing
+        # spaces/dots normalized away.
+        key = windows_trimmed.casefold()
+        by_cleaned.setdefault(key, []).append((obj, original, cleaned))
+
+    # Detect real cache aliases after sanitizing, e.g.
+    #   BumperCab 3" -> BumperCab 3
+    #   BumperCab 3  -> BumperCab 3
+    collisions = []
+    for items in by_cleaned.values():
+        unique_ptrs = {item[0].as_pointer() for item in items}
+        if len(unique_ptrs) > 1:
+            collisions.append(items)
+
+    # Conservative generated-path length guard. The 240-character threshold
+    # leaves headroom for Windows/API differences and VLM's added subfolders
+    # and suffixes, preventing a mid-render failure.
+    try:
+        blend_path = bpy.data.filepath
+        blend_dir = os.path.dirname(blend_path) if blend_path else os.getcwd()
+        blend_base = os.path.splitext(os.path.basename(blend_path))[0] if blend_path else "Untitled"
+        bake_root = os.path.join(blend_dir, f"{blend_base} - Bakes", "Renders")
+    except Exception:
+        bake_root = ""
+
+    representative_names = (
+        "NormalMap - Bake - {name}.exr",
+        "DiffuseColor - Bake - {name}.exr",
+        "ScenarioName - Influence - {name}.exr",
+        "ScenarioName - Bake - {name}.exr",
+        "{name}.png",
+        "{name}.obj",
+    )
+
+    if bake_root:
+        for obj in relevant:
+            cleaned = vlm_utils.clean_filename(obj.name)
+            for pattern in representative_names:
+                candidate = os.path.abspath(os.path.join(
+                    bake_root, pattern.format(name=cleaned)
+                ))
+                if len(candidate) >= 240:
+                    problems.append(
+                        ("PATH TOO LONG", obj.name, cleaned,
+                         f"a generated VLM path may reach {len(candidate)} characters")
+                    )
+                    break
+
+    if not problems and not collisions:
+        logger.info(
+            f"[VLM] Object name preflight: OK "
+            f"({len(relevant)} scene objects/targets checked; "
+            f"collisions, Windows filename hazards and path lengths checked)."
+        )
+        return True
+
+    print("")
+    print("=" * 72)
+    print("[VLM] OBJECT NAME PREFLIGHT FAILED")
+    print("=" * 72)
+    print("Groups was stopped BEFORE creating/updating render groups or masks.")
+    print("Ordinary VLM name sanitizing (#, quotes, apostrophes, etc.) is allowed.")
+    print("Only real post-sanitizing filename/cache/path hazards are reported.")
+    print("")
+
+    for kind, original, cleaned, reason in problems:
+        print(f'{kind}: "{original}"')
+        print(f"  VLM cleaned name : {cleaned!r}")
+        print(f"  Problem          : {reason}")
+        print("")
+
+    for items in collisions:
+        print("CLEANED NAME COLLISION:")
+        for _obj, original, cleaned in items:
+            print(f'  "{original}" -> "{cleaned}"')
+        print("  Problem          : multiple objects/targets resolve to the same")
+        print("                     VLM cache filename after sanitizing")
+        print("")
+
+    print("GROUPS ABORTED - fix only the names listed above and rerun Groups.")
+    print("=" * 72)
+    print("")
+
+    try:
+        op.report(
+            {'ERROR'},
+            "VLM object-name preflight found a real filename/cache/path hazard. "
+            "Groups aborted - see System Console / VLM log."
+        )
+    except Exception:
+        pass
+
+    return False
+
+
 def projected_bounds_area(mvp_matrix, obj):
     max_x = max_y = -10000000
     min_x = min_y = 10000000
@@ -88,6 +288,12 @@ def compute_render_groups(op, context):
     bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
     if not bake_col:
         op.report({'ERROR'}, "No 'VLM.Bake' collection to process")
+        return {'CANCELLED'}
+
+    # Filename/object-name preflight is part of the Groups step itself.
+    # This runs for both the standalone "1. Groups" button and Batch All.
+    # Abort before any group IDs, masks, cache files or temporary scenes are changed.
+    if not validate_object_names(op, bake_col):
         return {'CANCELLED'}
 
     camera_object = context.scene.camera
