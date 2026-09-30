@@ -37,6 +37,7 @@ import importlib
 import subprocess
 import hashlib
 import json
+import shutil
 from bpy_extras.io_utils import (ImportHelper, axis_conversion)
 from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty, FloatVectorProperty, EnumProperty, PointerProperty)
 from bpy.types import (Panel, Menu, Operator, PropertyGroup, AddonPreferences, Collection)
@@ -1458,6 +1459,9 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         row.label(text='Batch options:')
         row.prop(vlmProps, "force_open_console", text='Console')
         row.prop(vlmProps, "batch_shutdown", text='Shutdown')
+        row = layout.row()
+        row.scale_y = 1.25
+        row.operator(VLM_OT_clear_entire_batch.bl_idname, icon='TRASH', text='Clear Entire Batch')
 
 
 class VLM_OT_assign_vpx_light_names(Operator):
@@ -1968,6 +1972,146 @@ class VLM_OT_reset_batch_state(Operator):
             return {'CANCELLED'}
 
 
+class VLM_OT_clear_entire_batch(Operator):
+    bl_idname = "vlm.clear_entire_batch"
+    bl_label = "Clear Entire Batch"
+    bl_description = (
+        "Delete all generated VLM batch data (Groups, Renders, Meshes, Nestmaps, Export), "
+        "clear resume/checkpoint state, and reset the bake pipeline to a clean start"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.blend_data.filepath != ''
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(
+            self,
+            event,
+            title="Clear Entire VLM Batch?",
+            message="This removes all generated batch data and cached bake files. VLM.Bake source objects are kept.",
+            confirm_text="Clear Entire Batch",
+            icon='ERROR',
+        )
+
+    def execute(self, context):
+        try:
+            scene = context.scene
+            bake_root = bpy.path.abspath(vlm_utils.get_bakepath(context))
+
+            logger.info("\\nClearing entire VLM batch...")
+
+            # 1) Reset nesting checkpoint / per-result nestmap assignments first.
+            try:
+                vlm_nestmap_baker.clear_nesting_checkpoint(context, reset_assignments=True)
+            except Exception as err:
+                logger.warning(f"Could not clear nesting checkpoint cleanly: {err}")
+
+            # 2) Reset render grouping state on source bake objects.
+            bake_col = vlm_collections.get_collection(scene.collection, 'VLM.Bake', create=False)
+            reset_groups = 0
+            if bake_col:
+                for obj in bake_col.all_objects:
+                    try:
+                        if obj.vlmSettings.render_group != -1:
+                            obj.vlmSettings.render_group = -1
+                            reset_groups += 1
+                    except Exception:
+                        pass
+
+            # 3) Remove generated VLM.Result objects and collection hierarchy.
+            result_col = vlm_collections.get_collection(scene.collection, 'VLM.Result', create=False)
+            removed_objects = 0
+            generated_meshes = set()
+            generated_materials = set()
+            if result_col:
+                result_objects = list(result_col.all_objects)
+                for obj in result_objects:
+                    try:
+                        if obj.type == 'MESH' and obj.data:
+                            generated_meshes.add(obj.data)
+                            for mat in obj.data.materials:
+                                if mat:
+                                    generated_materials.add(mat)
+                    except Exception:
+                        pass
+                # Remove generated objects from bpy.data too, not just collection links.
+                for obj in result_objects:
+                    try:
+                        bpy.data.objects.remove(obj, do_unlink=True)
+                        removed_objects += 1
+                    except Exception as err:
+                        logger.warning(f"Could not remove generated result object '{obj.name}': {err}")
+                try:
+                    vlm_collections.delete_collection(result_col)
+                except Exception:
+                    # If object removal already detached parts of the hierarchy, remove any
+                    # remaining collections defensively.
+                    for col in list(bpy.data.collections):
+                        if col.name == 'VLM.Result' or col.name.startswith('VLM.Result.'):
+                            try:
+                                bpy.data.collections.remove(col)
+                            except Exception:
+                                pass
+
+            # 4) Unload generated images that point inside this project's bake directory.
+            # This prevents Windows file locks from blocking the directory deletion.
+            removed_images = 0
+            root_norm = os.path.normcase(os.path.normpath(bake_root))
+            for image in list(bpy.data.images):
+                try:
+                    if not image.filepath:
+                        continue
+                    image_path = os.path.normcase(os.path.normpath(bpy.path.abspath(image.filepath)))
+                    if image_path == root_norm or image_path.startswith(root_norm + os.sep):
+                        bpy.data.images.remove(image)
+                        removed_images += 1
+                except Exception:
+                    pass
+
+            # 5) Remove all on-disk batch outputs: Object Masks, Renders, Export,
+            # batch_manifest.json, nesting checkpoint artifacts, etc.
+            if os.path.isdir(bake_root):
+                shutil.rmtree(bake_root)
+            elif os.path.isfile(bake_root):
+                os.remove(bake_root)
+
+            # 6) Clear any batch/nesting custom properties that may survive an older build.
+            for key in list(scene.keys()):
+                if str(key).startswith('_vlm_nesting_checkpoint') or str(key).startswith('_vlm_batch'):
+                    try:
+                        del scene[key]
+                    except Exception:
+                        pass
+
+            # 7) Purge only datablocks that belonged to deleted VLM.Result objects.
+            # Unrelated orphaned data elsewhere in the project is intentionally untouched.
+            for mesh in list(generated_meshes):
+                try:
+                    if mesh.users == 0:
+                        bpy.data.meshes.remove(mesh)
+                except Exception:
+                    pass
+            for mat in list(generated_materials):
+                try:
+                    if mat.users == 0:
+                        bpy.data.materials.remove(mat)
+                except Exception:
+                    pass
+
+            logger.info(
+                f"Clear Entire Batch complete. Reset render groups: {reset_groups}; "
+                f"removed result objects: {removed_objects}; unloaded generated images: {removed_images}."
+            )
+            self.report({'INFO'}, 'Entire VLM batch cleared. The next batch will start from Groups.')
+            return {'FINISHED'}
+        except Exception as err:
+            logger.exception("Clear Entire Batch failed")
+            self.report({'ERROR'}, f'Could not clear entire batch: {err}')
+            return {'CANCELLED'}
+
+
 class VLM_OT_clear_nesting_checkpoint(Operator):
     bl_idname = "vlm.clear_nesting_checkpoint"
     bl_label = "Clear Nesting Checkpoint"
@@ -2041,6 +2185,7 @@ classes = (
     VLM_OT_create_bake_meshes,
     VLM_OT_render_nestmaps,
     VLM_OT_reset_batch_state,
+    VLM_OT_clear_entire_batch,
     VLM_OT_clear_nesting_checkpoint,
     VLM_OT_batch_bake,
     VLM_OT_state_import_mesh,
