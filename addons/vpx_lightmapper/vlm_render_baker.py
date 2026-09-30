@@ -1312,7 +1312,8 @@ def render_all_groups(op, context):
                         bpy.ops.render.render(use_viewport=False, write_still=False)
                         # Blender 5.x File Output names vary (e.g. '<name>Image' with no frame number or extension)
                         denoise_base = bpy.path.abspath(render_path_denoise)
-                        denoise_out = next((c for c in (f'{denoise_base}0001.exr', f'{denoise_base}Image0001.exr', f'{denoise_base}Image.exr', f'{denoise_base}Image', f'{denoise_base}0001') if os.path.isfile(c)), f'{denoise_base}0001.exr')
+                        denoise_outs = [c for c in (f'{denoise_base}0001.exr', f'{denoise_base}Image0001.exr', f'{denoise_base}Image.exr', f'{denoise_base}Image', f'{denoise_base}0001') if os.path.isfile(c)]
+                        denoise_out = max(denoise_outs, key=os.path.getmtime) if denoise_outs else f'{denoise_base}0001.exr'
                         os.replace(denoise_out, f'{denoise_base}.exr')
                         
                     restore_func(state)
