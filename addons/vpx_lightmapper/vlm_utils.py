@@ -553,7 +553,7 @@ def get_packmap_bakepath(context, mat):
     bakepath = get_bakepath(context, type='RENDERS')
     if bakepath is None or render is None or light is None:
         return None
-    return f'{bakepath}{light} - Group {render}.exr' if isinstance(render, int) else f'{bakepath}{light} - Bake - {render}.exr'
+    return f'{bakepath}{light} - Group {render}.exr' if isinstance(render, int) else f'{bakepath}{light} - Bake - {clean_filename(render)}.exr'
 
 
 def get_packmap_normalmappath(context, mat):
@@ -561,7 +561,7 @@ def get_packmap_normalmappath(context, mat):
     bakepath = get_bakepath(context, type='RENDERS')
     if bakepath is None or render is None:
         return None
-    return f'{bakepath}NormalMap - Group {render}.exr' if isinstance(render, int) else f'{bakepath}NormalMap - Bake - {render}.exr'
+    return f'{bakepath}NormalMap - Group {render}.exr' if isinstance(render, int) else f'{bakepath}NormalMap - Bake - {clean_filename(render)}.exr'
 
 
 def set_selected_and_active(context, obj):
