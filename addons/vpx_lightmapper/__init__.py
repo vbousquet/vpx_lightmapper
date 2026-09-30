@@ -1062,8 +1062,15 @@ class VLM_OT_batch_bake(Operator):
                 vlm_utils.run_with_logger(lambda label=label: logger.info(f"\nSkipping batch step: {label}"))
                 continue
             vlm_utils.run_with_logger(lambda label=label: logger.info(f"\nBatch step: {label}"))
+            # Keep the crash-diagnostic stage file synchronized with the real
+            # top-level batch pipeline. Nested render/nestmap code may publish
+            # more detailed temporary stages while it runs; the next selected
+            # batch step and the final completion marker always take ownership
+            # again afterwards.
+            vlm_utils.set_diagnostic_stage(f"Batch: {label}")
             result = vlm_utils.run_with_logger(operations[step])
             if 'FINISHED' not in result:
+                vlm_utils.set_diagnostic_stage(f"Batch: {label} failed/cancelled")
                 return self.do_shutdown(context, result)
 
             # The popup may have cached the step as incomplete before execution.
@@ -1082,6 +1089,7 @@ class VLM_OT_batch_bake(Operator):
                         json.dump(data, f, indent=2, sort_keys=True)
                 except Exception:
                     pass
+                vlm_utils.set_diagnostic_stage(f"Batch: {label} validation failed")
                 self.report({'ERROR'}, f'{label} finished but validation failed. The batch was stopped.')
                 vlm_utils.run_with_logger(lambda label=label, step=step: logger.error(
                     f'\n{label} reported FINISHED, but its outputs/state are not valid. '
@@ -1089,11 +1097,57 @@ class VLM_OT_batch_bake(Operator):
                 return self.do_shutdown(context, {'CANCELLED'})
 
             if step in autosave_after:
+                # Batch autosave must not fail just because the .blend has
+                # "Automatically Pack Resources" enabled and an unrelated
+                # external asset path is stale/missing.
+                old_autopack = None
                 try:
+                    try:
+                        old_autopack = bool(bpy.data.use_autopack)
+                        bpy.data.use_autopack = False
+                    except Exception:
+                        old_autopack = None
+
                     bpy.ops.wm.save_mainfile()
                 except Exception as e:
                     logger.warning(f'Autosave after {label.lower()} failed: {e}')
 
+                    # Add useful diagnostics for stale external image paths.
+                    # This does not modify the image/material; it only reports
+                    # which datablock/path is missing.
+                    try:
+                        missing = []
+                        for image in bpy.data.images:
+                            if getattr(image, 'source', '') not in {'FILE', 'SEQUENCE', 'MOVIE'}:
+                                continue
+                            raw_path = getattr(image, 'filepath', '') or ''
+                            if not raw_path:
+                                continue
+                            try:
+                                abs_path = bpy.path.abspath(raw_path, library=image.library)
+                            except Exception:
+                                abs_path = bpy.path.abspath(raw_path)
+                            if abs_path and not os.path.exists(abs_path):
+                                missing.append((image.name, raw_path, abs_path))
+                        for image_name, raw_path, abs_path in missing[:50]:
+                            logger.warning(
+                                f'Missing external image during autosave diagnostics: '
+                                f'image={image_name!r}, filepath={raw_path!r}, resolved={abs_path!r}'
+                            )
+                        if len(missing) > 50:
+                            logger.warning(
+                                f'Autosave diagnostics: {len(missing) - 50} additional missing external images omitted.'
+                            )
+                    except Exception as diag_error:
+                        logger.warning(f'Autosave missing-file diagnostics failed: {diag_error}')
+                finally:
+                    if old_autopack is not None:
+                        try:
+                            bpy.data.use_autopack = old_autopack
+                        except Exception:
+                            pass
+
+        vlm_utils.set_diagnostic_stage("Batch: Completed")
         vlm_utils.run_with_logger(lambda : logger.info(f"\nSelected batch performed in {vlm_utils.format_time(time.time() - start_time)}"))
         return self.do_shutdown(context, result)
 
