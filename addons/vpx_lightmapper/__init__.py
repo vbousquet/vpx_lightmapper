@@ -1460,6 +1460,64 @@ class VLM_PT_Lightmapper(bpy.types.Panel):
         row.prop(vlmProps, "batch_shutdown", text='Shutdown')
 
 
+class VLM_OT_assign_vpx_light_names(Operator):
+    bl_idname = "vlm.assign_vpx_light_names"
+    bl_label = "Assign VPX Light Names"
+    bl_description = (
+        "Assign each object in VLM.Lights (including all nested collections) "
+        "its Blender object name as VPX Light name. Blender duplicate suffixes "
+        "such as .001, .002, ... are removed"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
+        return light_col is not None and context.collection == light_col
+
+    @staticmethod
+    def _base_vpx_name(name):
+        # Blender-generated duplicate names end in a numeric suffix such as
+        # "L120.001".  Strip only a terminal numeric suffix of at least
+        # three digits so ordinary names containing dots/numbers are preserved.
+        base, sep, suffix = name.rpartition('.')
+        if sep and base and suffix.isdigit() and len(suffix) >= 3:
+            return base
+        return name
+
+    def execute(self, context):
+        light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
+        if light_col is None:
+            self.report({'ERROR'}, "VLM.Lights collection was not found")
+            return {'CANCELLED'}
+
+        objects = sorted(list(light_col.all_objects), key=lambda obj: obj.name)
+        assigned = 0
+        normalized = 0
+        unchanged = 0
+        for obj in objects:
+            target_name = self._base_vpx_name(obj.name)
+            if target_name != obj.name:
+                normalized += 1
+            if obj.vlmSettings.vpx_object == target_name:
+                unchanged += 1
+                continue
+            obj.vlmSettings.vpx_object = target_name
+            assigned += 1
+
+        logger.info(
+            f"Assign VPX Light Names: processed {len(objects)} object(s) recursively "
+            f"under VLM.Lights; changed={assigned}, normalized_suffixes={normalized}, "
+            f"already_matching={unchanged}"
+        )
+        self.report(
+            {'INFO'},
+            f"VPX Light names: {assigned} changed, {normalized} duplicate suffix(es) normalized, "
+            f"{unchanged} already matching"
+        )
+        return {'FINISHED'}
+
+
 class VLM_PT_Col_Props(bpy.types.Panel):
     bl_label = "Visual Pinball X Light Mapper"
     bl_category = "VLM"
@@ -1473,7 +1531,13 @@ class VLM_PT_Col_Props(bpy.types.Panel):
         col = context.collection
         bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
         light_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Lights', create=False)
-        if bake_col and col.name in bake_col.children:
+        if light_col and col == light_col:
+            # Root VLM.Lights utility. The operator itself processes all objects
+            # recursively, including objects in nested light collections.
+            row = layout.row()
+            row.scale_y = 1.25
+            row.operator(VLM_OT_assign_vpx_light_names.bl_idname, icon='LIGHT', text='Assign VPX Light Names')
+        elif bake_col and col.name in bake_col.children:
             layout.prop(col.vlmSettings, 'bake_mode', expand=True)
             layout.prop(col.vlmSettings, 'is_moveable')
             layout.prop(col.vlmSettings, 'vpx_material', expand=True)
@@ -1989,6 +2053,7 @@ classes = (
     VLM_OT_select_occluded,
     VLM_OT_toggle_no_exp_modifier,
     VLM_OT_apply_aoi,
+    VLM_OT_assign_vpx_light_names,
     VLM_OT_table_uv,
     VLM_OT_render_blueprint,
     VLM_OT_fit_camera,
