@@ -290,8 +290,9 @@ def export_vpx(op, context):
                     # Don't move under playfield, it makes the ball reflection wrong. Instead let the table creator hide the lamps
                     #elif item_data.tag == 'BHHI': # Move under playfield to make it invisible
                     #    item_data.put_float(-2800)
-                    elif item_data.tag == 'TRMS':
-                        item_data.put_float(0) # Set transmission to 0 to skip rendering this light to transmission buffer
+                    # Preserve TRMS (Transmission) from the source VPX table.
+                    # VLM previously forced baked lights to 0 here, silently
+                    # overwriting author-defined values such as Transmission=3.
             if item_type == 20:
                 table_flashers.append(name)
                 if is_baked_light:
