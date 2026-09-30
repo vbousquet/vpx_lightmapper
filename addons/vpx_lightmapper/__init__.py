@@ -1514,7 +1514,7 @@ class VLM_OT_assign_vpx_light_names(Operator):
     bl_description = (
         "Assign each object in VLM.Lights (including all nested collections) "
         "its Blender object name as VPX Light name. Blender duplicate suffixes "
-        "such as .001, .002, ... are removed"
+        "such as .001, .002, ... are removed. Existing VPX Light names are overwritten"
     )
     bl_options = {"REGISTER", "UNDO"}
 
