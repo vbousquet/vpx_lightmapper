@@ -41,6 +41,39 @@ def projected_bounds_area(mvp_matrix, obj):
     return (max_x - min_x) * (max_y - min_y)
 
 
+def _force_bake_target_mask_visibility(obj):
+    """Temporarily make a Bake To proxy visible to mask renders.
+
+    Bake-target proxy meshes are commonly hidden from normal camera renders so
+    they do not appear together with their source mesh.  VLM deliberately uses
+    the Bake To geometry for group masks, however, so carrying that hidden
+    state into the temporary mask scene produces an empty mask and the
+    corresponding pixels are multiplied away while building nestmaps.
+
+    Returns a small state tuple that must be passed to
+    _restore_bake_target_mask_visibility().
+    """
+    state = {"hide_render": obj.hide_render}
+    obj.hide_render = False
+
+    # Cycles camera-ray visibility is another common way to hide proxy meshes.
+    # Blender 4.5/5.x exposes it directly as Object.visible_camera.  Keep this
+    # guarded so the addon remains compatible with builds where it is absent.
+    if hasattr(obj, "visible_camera"):
+        state["visible_camera"] = obj.visible_camera
+        obj.visible_camera = True
+
+    return state
+
+
+def _restore_bake_target_mask_visibility(obj, state):
+    if not state:
+        return
+    if "visible_camera" in state and hasattr(obj, "visible_camera"):
+        obj.visible_camera = state["visible_camera"]
+    obj.hide_render = state["hide_render"]
+
+
 def compute_render_groups(op, context):
     """Evaluate the set of render groups (groups of objects that do not overlap when rendered 
     from the camera point of view) and store the result in the 'group' property of objects.
@@ -115,11 +148,13 @@ def compute_render_groups(op, context):
         assert not obj.vlmSettings.use_bake
         if obj.vlmSettings.render_group != -1: # Render group already defined (may happen when multipe objects have the same 'bake_to' property)
             continue
+        bake_target = None
         if obj.vlmSettings.bake_to:
-            scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(obj.vlmSettings.bake_to.name)}.png"
-            obj_group = [o for _, o in all_objects if o.vlmSettings.bake_to == obj.vlmSettings.bake_to]
-            obj_group.append(obj.vlmSettings.bake_to)
-            logger.info(f". Evaluating object mask #{i:>3}/{len(all_objects)} for bake target '{obj.vlmSettings.bake_to.name}' ({[o.name for o in obj_group]} with a total projected area of {area})")
+            bake_target = obj.vlmSettings.bake_to
+            scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(bake_target.name)}.png"
+            obj_group = [o for _, o in all_objects if o.vlmSettings.bake_to == bake_target]
+            obj_group.append(bake_target)
+            logger.info(f". Evaluating object mask #{i:>3}/{len(all_objects)} for bake target '{bake_target.name}' ({[o.name for o in obj_group]} with a total projected area of {area})")
         else:
             scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(obj.name)}.png"
             obj_group = [obj]
@@ -129,9 +164,22 @@ def compute_render_groups(op, context):
             im = Image.open(bpy.path.abspath(scene.render.filepath))
             need_render = im.size[0] != scene.render.resolution_x or im.size[1] != scene.render.resolution_y
         if need_render:
-            for o in obj_group: scene.collection.objects.link(o)
-            bpy.ops.render.render(write_still=True, scene=scene.name)
-            for o in obj_group: scene.collection.objects.unlink(o)
+            # Bake To proxy meshes are frequently hidden from camera/render.
+            # They nevertheless must contribute to the proxy/object mask.
+            target_visibility = None
+            if bake_target is not None:
+                target_visibility = _force_bake_target_mask_visibility(bake_target)
+                if target_visibility.get("hide_render") or target_visibility.get("visible_camera") is False:
+                    logger.info(f". Bake target mask visibility temporarily enabled for '{bake_target.name}'")
+            try:
+                for o in obj_group: scene.collection.objects.link(o)
+                bpy.ops.render.render(write_still=True, scene=scene.name)
+            finally:
+                for o in obj_group:
+                    if o.name in scene.collection.objects:
+                        scene.collection.objects.unlink(o)
+                if bake_target is not None:
+                    _restore_bake_target_mask_visibility(bake_target, target_visibility)
             im = Image.open(bpy.path.abspath(scene.render.filepath))
         # Evaluate if this object can be grouped with previous renders (no overlaps)
         for p in range(opt_mask_pad):
@@ -228,6 +276,7 @@ def render_group_masks(op, context):
     bakepath = vlm_utils.get_bakepath(context, type='MASKS')
     for group_index in range(n_render_groups):
         linked_objects = []
+        bake_targets = set()
         for obj in bake_col.all_objects:
             if obj.vlmSettings.render_group == group_index and not obj.vlmSettings.indirect_only and not obj.vlmSettings.use_bake:
                 # if obj.vlmSettings.bake_mask and obj.vlmSettings.bake_mask not in linked_objects:
@@ -235,6 +284,7 @@ def render_group_masks(op, context):
                     # linked_objects.append(obj.vlmSettings.bake_mask)
                 if obj.vlmSettings.bake_to:
                     obj = obj.vlmSettings.bake_to
+                    bake_targets.add(obj)
                 if obj not in linked_objects:
                     scene.collection.objects.link(obj)
                     linked_objects.append(obj)
@@ -244,10 +294,26 @@ def render_group_masks(op, context):
         scene.render.image_settings.file_format = 'PNG'
         scene.render.image_settings.color_mode = 'RGBA'
         scene.render.image_settings.color_depth = '8'
-        bpy.ops.render.render(write_still=True, scene=scene.name)
 
-        for obj in linked_objects:
-            scene.collection.objects.unlink(obj)
+        # The high-resolution group mask is the mask consumed by vlm_nest.py.
+        # For Bake To faces it intentionally uses the target/proxy geometry.
+        # Do not inherit the proxy's normal render/camera-hidden state here,
+        # otherwise the mask is blank and nestmap rendering removes every
+        # Bake To pixel even though the source render and preview are valid.
+        target_visibility = {}
+        try:
+            for bake_target in bake_targets:
+                state = _force_bake_target_mask_visibility(bake_target)
+                target_visibility[bake_target] = state
+                if state.get("hide_render") or state.get("visible_camera") is False:
+                    logger.info(f". Bake target group-mask visibility temporarily enabled for '{bake_target.name}'")
+            bpy.ops.render.render(write_still=True, scene=scene.name)
+        finally:
+            for bake_target, state in target_visibility.items():
+                _restore_bake_target_mask_visibility(bake_target, state)
+            for obj in linked_objects:
+                if obj.name in scene.collection.objects:
+                    scene.collection.objects.unlink(obj)
 
     bpy.data.materials.remove(mask_mat)
     bpy.data.scenes.remove(scene)
