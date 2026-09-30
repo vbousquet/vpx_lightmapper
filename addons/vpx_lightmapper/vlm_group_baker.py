@@ -365,7 +365,9 @@ def compute_render_groups(op, context):
             scene.render.filepath = f"{bakepath}{vlm_utils.clean_filename(obj.name)}.png"
             obj_group = [obj]
             logger.info(f". Evaluating object mask #{i:>3}/{len(all_objects)} for '{obj.name}' (projected area of {area})")
-        need_render = opt_force_render or not os.path.exists(bpy.path.abspath(scene.render.filepath))
+        # Bake To masks are always re-rendered: a cached mask may predate the forced
+        # visibility of hidden proxies and be blank.
+        need_render = opt_force_render or bake_target is not None or not os.path.exists(bpy.path.abspath(scene.render.filepath))
         if not need_render:
             im = Image.open(bpy.path.abspath(scene.render.filepath))
             need_render = im.size[0] != scene.render.resolution_x or im.size[1] != scene.render.resolution_y
