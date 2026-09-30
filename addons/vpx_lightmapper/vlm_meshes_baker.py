@@ -748,7 +748,7 @@ def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, 
         if isinstance(render, int):
             ids.append(f'Group {render}')
         else:
-            ids.append(f'Influence - {render}')
+            ids.append(f'Influence - {vlm_utils.clean_filename(render)}')
     
     # Mark faces that are actually influenced
     hdr_range = 0.0
