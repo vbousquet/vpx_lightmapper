@@ -2044,7 +2044,7 @@ class VLM_OT_clear_entire_batch(Operator):
             scene = context.scene
             bake_root = bpy.path.abspath(vlm_utils.get_bakepath(context))
 
-            logger.info("\\nClearing entire VLM batch...")
+            logger.info("\nClearing entire VLM batch...")
 
             # 1) Reset nesting checkpoint / per-result nestmap assignments first.
             try:
