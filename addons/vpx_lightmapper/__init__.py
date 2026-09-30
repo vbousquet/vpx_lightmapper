@@ -593,52 +593,200 @@ class VLM_OT_batch_bake(Operator):
     def _hash_update(self, h, value):
         h.update(repr(value).encode('utf-8', 'replace'))
 
+    _MANIFEST_SIGNATURE_VERSION = 2
+
     def _scene_signature(self, context, step):
+        """Hash only inputs that can actually affect *step*.
+
+        Export-only settings (table path/mode/prefix) must never invalidate
+        Groups, Render, Meshes or Nestmaps. This is especially important when
+        the VPX table is selected only after the bake has already finished.
+        """
         h = hashlib.sha256()
         scene = context.scene
         self._hash_update(h, ('blend', os.path.abspath(context.blend_data.filepath)))
         self._hash_update(h, ('step', step))
+        self._hash_update(h, ('signature_version', self._MANIFEST_SIGNATURE_VERSION))
+
+        # Implementation revisions invalidate only the stages whose generated
+        # data format/semantics changed.  3.3 changes VLM.Result transforms, so
+        # old Groups/Render caches remain reusable while Meshes and everything
+        # derived from them must be regenerated.
+        implementation_revision = {
+            'groups': 1,      # 3.3 Bake To proxy visibility fix for render-group masks
+            'meshes': 3,      # 3.3 collection-level Moveable transform policy
+            'nestmaps': 4,    # Bake To group-mask semantics changed; rebuild packed textures
+            'export': 3,      # depends on collection-level Moveable transform policy
+        }.get(step)
+        if implementation_revision is not None:
+            self._hash_update(h, ('implementation_revision', implementation_revision))
         props = scene.vlmSettings
-        for name in (
-            'table_file', 'render_height', 'render_ratio', 'padding',
-            'tex_size', 'remove_backface', 'keep_pf_reflection_faces',
-            'denoise_prefilter', 'max_lighting', 'hdr_auto',
-            'hdr_custom_range', 'export_mode', 'export_prefix'
-        ):
+
+        settings_by_step = {
+            'groups': ('render_height', 'render_ratio'),
+            'render': ('render_height', 'render_ratio', 'denoise_prefilter', 'max_lighting'),
+            'meshes': (
+                'render_height', 'render_ratio', 'remove_backface',
+                'keep_pf_reflection_faces', 'max_lighting', 'hdr_auto',
+                'hdr_custom_range',
+            ),
+            'nestmaps': (
+                'render_height', 'render_ratio', 'padding', 'tex_size',
+                'remove_backface', 'keep_pf_reflection_faces',
+                'max_lighting', 'hdr_auto', 'hdr_custom_range',
+            ),
+            'export': ('table_file', 'export_mode', 'export_prefix'),
+        }
+        for name in settings_by_step.get(step, ()):
             if hasattr(props, name):
-                self._hash_update(h, (name, getattr(props, name)))
+                value = getattr(props, name)
+                if name == 'table_file' and value:
+                    value = os.path.normcase(os.path.abspath(bpy.path.abspath(value)))
+                self._hash_update(h, (name, value))
 
         cam = scene.camera
-        if cam:
+        if cam and step != 'export':
             self._hash_update(h, ('camera', cam.name, tuple(round(x, 7) for row in cam.matrix_world for x in row)))
 
         bake_col = vlm_collections.get_collection(scene.collection, 'VLM.Bake', create=False)
         if bake_col:
+            # Collection-level transform policy. Changing Moveable only affects
+            # generated VLM.Result meshes and downstream output, not Groups or Render.
+            if step in ('meshes', 'nestmaps', 'export'):
+                for child_col in sorted(bake_col.children, key=lambda c: c.name):
+                    self._hash_update(h, ('bake_collection', child_col.name, 'moveable', bool(child_col.vlmSettings.is_moveable)))
             for obj in sorted(bake_col.all_objects, key=lambda o: o.name):
                 self._hash_update(h, ('obj', obj.name, obj.type))
                 if obj.type == 'MESH' and obj.data:
                     mesh = obj.data
                     self._hash_update(h, ('mesh', len(mesh.vertices), len(mesh.edges), len(mesh.polygons), len(mesh.loops)))
-                    # Topology/geometry is important for mesh/render cache validity.
                     for v in mesh.vertices:
                         self._hash_update(h, tuple(round(c, 6) for c in v.co))
                 for name in ('render_group', 'indirect_only', 'use_bake', 'bake_normalmap',
-                             'is_lightmap', 'is_movable', 'hide_from_others'):
+                             'is_lightmap', 'is_movable', 'use_obj_pos',
+                             'hide_from_others', 'no_mesh_optimization'):
                     if hasattr(obj.vlmSettings, name):
                         self._hash_update(h, (name, getattr(obj.vlmSettings, name)))
+                # Object references affect grouping/baking/export semantics but
+                # were not represented by the old resume signature.
+                for name in ('bake_to', 'bake_mask'):
+                    if hasattr(obj.vlmSettings, name):
+                        ref = getattr(obj.vlmSettings, name)
+                        self._hash_update(h, (name, ref.name if ref else None))
                 self._hash_update(h, ('world_matrix', tuple(round(x, 7) for row in obj.matrix_world for x in row)))
 
-        light_col = vlm_collections.get_collection(scene.collection, 'VLM.Lights', create=False)
-        if light_col:
-            for col in sorted(light_col.children, key=lambda c: c.name):
-                if col.hide_render:
-                    continue
-                self._hash_update(h, ('lightcol', col.name, col.vlmSettings.light_mode))
-                for obj in sorted(col.all_objects, key=lambda o: o.name):
-                    self._hash_update(h, ('light', obj.name, obj.type))
-                    if obj.type == 'LIGHT':
-                        self._hash_update(h, ('energy', getattr(obj.data, 'energy', None), 'color', tuple(getattr(obj.data, 'color', (0,0,0)))))
-                    self._hash_update(h, ('matrix', tuple(round(x, 7) for row in obj.matrix_world for x in row)))
+        if step != 'export':
+            light_col = vlm_collections.get_collection(scene.collection, 'VLM.Lights', create=False)
+            if light_col:
+                for col in sorted(light_col.children, key=lambda c: c.name):
+                    if col.hide_render:
+                        continue
+                    self._hash_update(h, ('lightcol', col.name, col.vlmSettings.light_mode))
+                    for obj in sorted(col.all_objects, key=lambda o: o.name):
+                        self._hash_update(h, ('light', obj.name, obj.type))
+                        # VPX light assignment controls split-light grouping, generated
+                        # scenario names and later VPX synchronization.  Include it in
+                        # the resume signature so Assign VPX Light Names cannot reuse
+                        # stale render/mesh/nest results.
+                        self._hash_update(h, (
+                            'light_vpx_mapping',
+                            obj.name,
+                            obj.vlmSettings.vpx_object,
+                            bool(obj.vlmSettings.is_rgb_led),
+                            bool(obj.vlmSettings.enable_aoi),
+                        ))
+                        if obj.type == 'LIGHT':
+                            self._hash_update(h, ('energy', getattr(obj.data, 'energy', None), 'color', tuple(getattr(obj.data, 'color', (0,0,0)))))
+                        self._hash_update(h, ('matrix', tuple(round(x, 7) for row in obj.matrix_world for x in row)))
+
+                        # Light-linking membership and INCLUDE/EXCLUDE states
+                        # materially affect rendered/baked lighting.  Hash the
+                        # complete hierarchy so a changed receiver/blocker setup
+                        # cannot silently reuse stale Render/Mesh/Nest caches.
+                        if step in ('render', 'meshes', 'nestmaps'):
+                            linking = getattr(obj, 'light_linking', None)
+                            if linking is not None:
+                                def hash_link_collection(kind, root):
+                                    if root is None:
+                                        self._hash_update(h, ('light_link', obj.name, kind, None))
+                                        return
+                                    visited = set()
+                                    def visit(collection, path):
+                                        try:
+                                            ptr = collection.as_pointer()
+                                        except Exception:
+                                            ptr = id(collection)
+                                        if ptr in visited:
+                                            return
+                                        visited.add(ptr)
+                                        self._hash_update(h, ('light_link_collection', obj.name, kind, path, collection.name))
+
+                                        try:
+                                            direct_objects = list(collection.objects)
+                                        except Exception:
+                                            direct_objects = []
+                                        entries = getattr(collection, 'collection_objects', None)
+                                        for direct_obj in sorted(direct_objects, key=lambda o: o.name):
+                                            state = None
+                                            if entries is not None:
+                                                try:
+                                                    entry = entries.get(direct_obj.name)
+                                                except Exception:
+                                                    entry = None
+                                                if entry is None:
+                                                    try:
+                                                        direct_list = list(collection.objects)
+                                                        entry_list = list(entries)
+                                                        idx = next((i for i, x in enumerate(direct_list) if x is direct_obj), -1)
+                                                        entry = entry_list[idx] if 0 <= idx < len(entry_list) else None
+                                                    except Exception:
+                                                        entry = None
+                                                if entry is not None:
+                                                    try:
+                                                        ll_settings = entry.light_linking
+                                                        state = ll_settings.link_state if ll_settings is not None else None
+                                                    except Exception:
+                                                        state = None
+                                            self._hash_update(h, ('light_link_member', obj.name, kind, path, direct_obj.name, state))
+
+                                        try:
+                                            children = sorted(list(collection.children), key=lambda c: c.name)
+                                        except Exception:
+                                            children = []
+
+                                        # Child collections can themselves carry
+                                        # a Light Linking INCLUDE/EXCLUDE state.
+                                        # Preserve that in the resume signature as
+                                        # well, since the temporary duplicate is
+                                        # deliberately linked beneath this path.
+                                        child_entries = getattr(collection, 'collection_children', None)
+                                        for child in children:
+                                            child_state = None
+                                            if child_entries is not None:
+                                                try:
+                                                    child_entry = child_entries.get(child.name)
+                                                except Exception:
+                                                    child_entry = None
+                                                if child_entry is None:
+                                                    try:
+                                                        child_list = list(collection.children)
+                                                        child_entry_list = list(child_entries)
+                                                        idx = next((i for i, x in enumerate(child_list) if x is child), -1)
+                                                        child_entry = child_entry_list[idx] if 0 <= idx < len(child_entry_list) else None
+                                                    except Exception:
+                                                        child_entry = None
+                                                if child_entry is not None:
+                                                    try:
+                                                        child_ll = child_entry.light_linking
+                                                        child_state = child_ll.link_state if child_ll is not None else None
+                                                    except Exception:
+                                                        child_state = None
+                                            self._hash_update(h, ('light_link_child', obj.name, kind, path, child.name, child_state))
+                                            visit(child, f'{path}/{child.name}')
+                                    visit(root, root.name)
+
+                                hash_link_collection('receiver', getattr(linking, 'receiver_collection', None))
+                                hash_link_collection('blocker', getattr(linking, 'blocker_collection', None))
 
         return h.hexdigest()
 
@@ -668,14 +816,13 @@ class VLM_OT_batch_bake(Operator):
             cache.clear()
 
     def _write_manifest(self, context, step):
-        # The operation may have changed render groups, meshes, files, etc.
-        # Invalidate any status that was calculated while the dialog was drawn.
         self._invalidate_batch_status_cache(step)
         path = self._manifest_path(context)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         data = self._read_manifest(context)
         data[step] = {
             'signature': self._scene_signature(context, step),
+            'signature_version': self._MANIFEST_SIGNATURE_VERSION,
             'time': time.time(),
         }
         with open(path, 'w', encoding='utf-8') as f:
@@ -683,7 +830,21 @@ class VLM_OT_batch_bake(Operator):
 
     def _manifest_valid(self, context, step):
         entry = self._read_manifest(context).get(step)
-        return bool(entry and entry.get('signature') == self._scene_signature(context, step))
+        if not entry:
+            return False
+        if entry.get('signature_version') != self._MANIFEST_SIGNATURE_VERSION:
+            return False
+        return entry.get('signature') == self._scene_signature(context, step)
+
+    def _legacy_manifest_entry(self, context, step):
+        """Accept v1 checkpoints once when their concrete outputs still exist.
+
+        The old signature included export-only settings in every stage. Selecting
+        a VPX table after nesting could therefore invalidate a perfectly valid
+        Nestmaps checkpoint. Newly executed steps are always upgraded to v2.
+        """
+        entry = self._read_manifest(context).get(step)
+        return bool(entry and 'signature_version' not in entry)
 
     def _groups_complete(self, context):
         bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
@@ -700,7 +861,7 @@ class VLM_OT_batch_bake(Operator):
             for suffix in (f'Mask - Group {i}.png', f'Mask - Group {i} (Padded LD).png'):
                 if not os.path.isfile(bpy.path.abspath(f'{mask_path}{suffix}')):
                     return False
-        return self._manifest_valid(context, 'groups')
+        return self._manifest_valid(context, 'groups') or self._legacy_manifest_entry(context, 'groups')
 
     def _render_cache_complete(self, context):
         if not self._manifest_valid(context, 'render'):
@@ -730,7 +891,7 @@ class VLM_OT_batch_bake(Operator):
         return True
 
     def _meshes_complete(self, context):
-        if not self._manifest_valid(context, 'meshes'):
+        if not (self._manifest_valid(context, 'meshes') or self._legacy_manifest_entry(context, 'meshes')):
             return False
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         if not result_col or len(result_col.all_objects) == 0:
@@ -743,7 +904,7 @@ class VLM_OT_batch_bake(Operator):
         return True
 
     def _nestmaps_complete(self, context):
-        if not self._manifest_valid(context, 'nestmaps'):
+        if not (self._manifest_valid(context, 'nestmaps') or self._legacy_manifest_entry(context, 'nestmaps')):
             return False
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         if not result_col or len(result_col.all_objects) == 0:
