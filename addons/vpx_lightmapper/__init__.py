@@ -837,16 +837,6 @@ class VLM_OT_batch_bake(Operator):
             return False
         return entry.get('signature') == self._scene_signature(context, step)
 
-    def _legacy_manifest_entry(self, context, step):
-        """Accept v1 checkpoints once when their concrete outputs still exist.
-
-        The old signature included export-only settings in every stage. Selecting
-        a VPX table after nesting could therefore invalidate a perfectly valid
-        Nestmaps checkpoint. Newly executed steps are always upgraded to v2.
-        """
-        entry = self._read_manifest(context).get(step)
-        return bool(entry and 'signature_version' not in entry)
-
     def _groups_complete(self, context):
         bake_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Bake', create=False)
         if not bake_col or not context.scene.camera or context.blend_data.filepath == '':
@@ -862,7 +852,7 @@ class VLM_OT_batch_bake(Operator):
             for suffix in (f'Mask - Group {i}.png', f'Mask - Group {i} (Padded LD).png'):
                 if not os.path.isfile(bpy.path.abspath(f'{mask_path}{suffix}')):
                     return False
-        return self._manifest_valid(context, 'groups') or self._legacy_manifest_entry(context, 'groups')
+        return self._manifest_valid(context, 'groups')
 
     def _render_cache_complete(self, context):
         if not self._manifest_valid(context, 'render'):
@@ -892,7 +882,7 @@ class VLM_OT_batch_bake(Operator):
         return True
 
     def _meshes_complete(self, context):
-        if not (self._manifest_valid(context, 'meshes') or self._legacy_manifest_entry(context, 'meshes')):
+        if not self._manifest_valid(context, 'meshes'):
             return False
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         if not result_col or len(result_col.all_objects) == 0:
@@ -905,7 +895,7 @@ class VLM_OT_batch_bake(Operator):
         return True
 
     def _nestmaps_complete(self, context):
-        if not (self._manifest_valid(context, 'nestmaps') or self._legacy_manifest_entry(context, 'nestmaps')):
+        if not self._manifest_valid(context, 'nestmaps'):
             return False
         result_col = vlm_collections.get_collection(context.scene.collection, 'VLM.Result', create=False)
         if not result_col or len(result_col.all_objects) == 0:
