@@ -163,11 +163,12 @@ def create_bake_meshes(op, context):
     # keep their original VPX pivot/export semantics but no longer decide
     # whether transforms are applied to generated VLM.Result meshes.
     #
-    # For a normal (Moveable disabled) bake collection, the authoritative
-    # transform computed by Meshes is baked into the generated BM/LM geometry
-    # and the VLM.Result object transform is reset to identity. If Moveable is
-    # enabled on the bake collection, every generated result for that collection
-    # keeps its transform untouched.
+    # Moveable is enabled by default: every generated result for the bake
+    # collection keeps its transform untouched (original VLM behaviour, needed
+    # for parts rotated/moved by VPX scripts). If Moveable is disabled on the
+    # bake collection, the authoritative transform computed by Meshes is baked
+    # into the generated BM/LM geometry and the VLM.Result object transform is
+    # reset to identity.
     def _vlm_apply_static_result_transform(result_obj, transform, bake_col):
         if bake_col.vlmSettings.is_moveable:
             logger.info(
