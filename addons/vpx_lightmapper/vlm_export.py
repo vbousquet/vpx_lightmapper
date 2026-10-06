@@ -297,7 +297,6 @@ def export_vpx(op, context):
                 table_flashers.append(name)
                 if is_baked_light:
                     if item_data.tag == 'FHEI':
-                        item_data.skip(-4)
                         item_data.put_float(-2800)
             # Hide baked parts
             if (is_part_baked or is_playfield_mesh) and visibility_field:
