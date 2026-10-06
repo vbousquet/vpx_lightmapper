@@ -277,7 +277,12 @@ def create_bake_meshes(op, context):
                 for obj in [obj for obj in bake_col.all_objects if obj.vlmSettings.render_group == dup.vlmSettings.render_group and not obj.vlmSettings.use_bake]:
                     use_normalmap = use_normalmap or obj.vlmSettings.bake_normalmap
             dup.data.materials.append(get_material('Default', False, not is_bake, use_normalmap, obj_name if is_bake else dup.vlmSettings.render_group))
-            
+
+            # Remove source color attributes: the bake mesh gets its own white color layer for lightmap seam fading (see below). A source
+            # color attribute would prevent its creation and, after joining, would be filled with black for all the other objects.
+            for attr in [attr.name for attr in dup.data.color_attributes]:
+                dup.data.color_attributes.remove(dup.data.color_attributes[attr])
+
             # Create UV layers: 'UVMap' is the render projection, 'UVMap Projected' is the camera projection (identical for camera render)
             for uv in [uv.name for uv in dup.data.uv_layers if not (is_bake and uv.name == 'UVMap')]:
                 dup.data.uv_layers.remove(dup.data.uv_layers[uv])
