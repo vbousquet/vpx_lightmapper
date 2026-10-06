@@ -107,6 +107,31 @@ def get_script_arrays(bake_col, result_col):
     return code
 
 
+def get_vpx_material_record(name, is_active):
+    """Data of a VPX 10.8+ MATR material record, with the same values as the legacy MATE/PHMA materials added by the exporter"""
+    writer = biff_io.BIFF_writer()
+    writer.write_tagged_u32(b'TYPE', 0) # Basic
+    writer.write_tagged_string(b'NAME', name)
+    writer.write_tagged_float(b'WLIG', 0.0) # Wrap lighting
+    writer.write_tagged_float(b'ROUG', 0.0) # Shininess
+    writer.write_tagged_float(b'GIML', 1.0) # Glossy image lerp
+    writer.write_tagged_float(b'THCK', 0x0c / 255.0) # Thickness
+    writer.write_tagged_float(b'EDGE', 0.0) # Edge
+    writer.write_tagged_float(b'EALP', 0.0) # Edge alpha
+    writer.write_tagged_float(b'OPAC', 1.0) # Opacity
+    writer.write_tagged_u32(b'BASE', 0x7F7F7F) # Base color (it's white divided by 2 since VPX multiply it by 2 when rendering...)
+    writer.write_tagged_u32(b'GLOS', 0x000000) # Glossy color
+    writer.write_tagged_u32(b'COAT', 0x000000) # Clearcoat color
+    writer.write_tagged_u32(b'RTNT', 0xFFFFFF) # Refraction tint
+    writer.write_tagged_u32(b'EOPA', 1 if is_active else 0) # Opacity active (written as 0/1 like VPX does)
+    writer.write_tagged_float(b'ELAS', 0.0) # Elasticity
+    writer.write_tagged_float(b'ELFO', 0.0) # Elasticity falloff
+    writer.write_tagged_float(b'FRIC', 0.0) # Friction
+    writer.write_tagged_float(b'SCAT', 0.0) # Scatter angle
+    writer.close()
+    return writer.get_data()
+
+
 def export_vpx(op, context):
     """Export bakes by updating the reference VPX file:
     . Remove all items in 'VLM.Visuals' and 'VLM.Lightmaps' layer which match the export prefix
@@ -297,7 +322,6 @@ def export_vpx(op, context):
                 table_flashers.append(name)
                 if is_baked_light:
                     if item_data.tag == 'FHEI':
-                        item_data.skip(-4)
                         item_data.put_float(-2800)
             # Hide baked parts
             if (is_part_baked or is_playfield_mesh) and visibility_field:
@@ -667,6 +691,8 @@ def export_vpx(op, context):
             data = bytearray(data)
             br = biff_io.BIFF_reader(data)
             has_solid_bake_mat = has_active_bake_mat = has_light_mat = False
+            matr_names = []
+            matr_end_pos = None
             while not br.is_eof():
                 br.next()
                 if br.tag == "SIMG": # Number of textures
@@ -689,6 +715,15 @@ def export_vpx(op, context):
                         br.skip(11 * 4)
                 elif br.tag == "PHMA":
                     phma_pos = br.pos
+                elif br.tag == "MATR": # VPX 10.8+ materials (one record per material)
+                    mr = biff_io.BIFF_reader(br.get(br.bytes_in_record_remaining))
+                    while not mr.is_eof():
+                        mr.next()
+                        if mr.tag == "NAME":
+                            matr_names.append(mr.get_string())
+                        else:
+                            mr.skip_tag()
+                    matr_end_pos = br.pos
                 elif br.tag == "CODE":
                     code_pos = br.pos
                     code = br.get_string()
@@ -791,6 +826,18 @@ def export_vpx(op, context):
             br.put_u32((n_materials + n_material_to_add) * 48 + 4)
             for i, d in enumerate(pr.get_data()):
                 br.data.insert(phma_pos + i, d)
+            # VPX 10.8+ discards all legacy materials when it loads the first MATR record, so if the table uses the new
+            # material format, the missing VLM materials must also be added as MATR records (after the existing ones)
+            if matr_end_pos is not None:
+                if matr_end_pos > mate_pos:
+                    matr_end_pos += len(wr.get_data())
+                if matr_end_pos > phma_pos:
+                    matr_end_pos += len(pr.get_data())
+                mr = biff_io.BIFF_writer()
+                for name, is_active in [('VLM.Bake.Solid', False), ('VLM.Bake.Active', True), ('VLM.Lightmap', True)]:
+                    if name not in matr_names:
+                        mr.write_tagged_data(b'MATR', get_vpx_material_record(name, is_active))
+                br.data[matr_end_pos:matr_end_pos] = mr.get_data()
             data = bytes(br.data)
         if hashed:
             if mode == 0:
