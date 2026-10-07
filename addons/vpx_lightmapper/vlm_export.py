@@ -21,6 +21,8 @@ import struct
 import re
 import itertools
 from . import biff_io
+from . import vlm_cfb
+from . import vlm_md2
 from . import vlm_utils
 from . import vlm_collections
 
@@ -28,10 +30,6 @@ logger = vlm_utils.logger
 
 # Dependencies which need a custom install (not included in the Blender install)
 import olefile
-import pythoncom
-import win32crypt
-import win32cryptcon
-from win32com import storagecon
 
 
 def export_name(object_name):
@@ -148,35 +146,19 @@ def export_vpx(op, context):
     src_storage = olefile.OleFileIO(input_path)
     version = biff_io.BIFF_reader(src_storage.openstream('GameStg/Version').read()).get_32()
     
-    dst_storage = pythoncom.StgCreateStorageEx(output_path, storagecon.STGM_TRANSACTED | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, storagecon.STGFMT_DOCFILE, 0, pythoncom.IID_IStorage, None, None)
-    dst_gamestg = dst_storage.CreateStorage("GameStg", storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-    dst_tableinfo = dst_storage.CreateStorage("TableInfo", storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
+    dst_storage = vlm_cfb.create_writer(output_path)
+    dst_gamestg = dst_storage.create_storage("GameStg")
+    dst_tableinfo = dst_storage.create_storage("TableInfo")
 
-    crypt_context = win32crypt.CryptAcquireContext(None, None, win32cryptcon.PROV_RSA_FULL, win32cryptcon.CRYPT_VERIFYCONTEXT | win32cryptcon.CRYPT_NEWKEYSET)
-    data_hash = crypt_context.CryptCreateHash(win32cryptcon.CALG_MD2)
-    data_hash.CryptHashData(b'Visual Pinball')
+    data_hash = vlm_md2.new()
+    data_hash.update(b'Visual Pinball')
     def append_structure(src_path, mode, hashed):
         index = 0
         while src_storage.exists(f'{src_path}{index}'):
             file_structure.append((f'{src_path}{index}', mode, hashed))
             index = index + 1
   
-    file_structure = [ # path, 0=unstructured bytes/1=BIFF, hashed ?
-        ('GameStg/Version', 0, True),
-        ('TableInfo/TableName', 0, True),
-        ('TableInfo/AuthorName', 0, True),
-        ('TableInfo/TableVersion', 0, True),
-        ('TableInfo/ReleaseDate', 0, True),
-        ('TableInfo/AuthorEmail', 0, True),
-        ('TableInfo/AuthorWebSite', 0, True),
-        ('TableInfo/TableBlurb', 0, True),
-        ('TableInfo/TableDescription', 0, True),
-        ('TableInfo/TableRules', 0, True),
-        ('TableInfo/TableSaveDate', 0, False),
-        ('TableInfo/TableSaveRev', 0, False),
-        ('TableInfo/Screenshot', 1, True),
-        ('GameStg/CustomInfoTags', 1, True), # custom info tags must be hashed just after this stream
-        ('GameStg/GameData', 1, True),]
+    file_structure = list(biff_io.MAC_FILE_STRUCTURE) # path, 0=unstructured bytes/1=BIFF, hashed ?
     #append_structure('GameStg/GameItem', 1, False),
     append_structure('GameStg/Sound', 1, False),
     #append_structure('GameStg/Image', 1, False),
@@ -202,8 +184,8 @@ def export_vpx(op, context):
         item_type = item_data.get_32()
         if item_type < 0 or item_type >= len(prefix):
             logger.info(f'Unsupported item #{n_read_item} type #{item_type}')
-            dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-            dst_stream.Write(data)
+            dst_stream = dst_gamestg.create_stream(f'GameItem{n_game_items}')
+            dst_stream.write(data)
             n_game_items += 1
             n_read_item += 1
             continue
@@ -315,8 +297,8 @@ def export_vpx(op, context):
         if remove:
             logger.info(f'. Item {name:>21s} was removed from export table')
         else:
-            dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-            dst_stream.Write(data)
+            dst_stream = dst_gamestg.create_stream(f'GameItem{n_game_items}')
+            dst_stream.write(data)
             n_game_items += 1
         # Mark images as used or not (if baked)
         if remove or ((export_mode == 'remove' or export_mode == 'remove_all') and is_baked):
@@ -516,8 +498,8 @@ def export_vpx(op, context):
         writer.write_tagged_string(b'REFR', '' if is_lightmap or (obj == pfobj) or col.vlmSettings.is_opaque else col.vlmSettings.refraction_probe)
         writer.write_tagged_float(b'RTHI', 10. if is_lightmap or (obj == pfobj) or col.vlmSettings.is_opaque else col.vlmSettings.refraction_thickness)
         writer.close()
-        dst_stream = dst_gamestg.CreateStream(f'GameItem{n_game_items}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-        dst_stream.Write(writer.get_data())
+        dst_stream = dst_gamestg.create_stream(f'GameItem{n_game_items}')
+        dst_stream.write(writer.get_data())
         n_game_items += 1
             
     # Remove previous nestmaps
@@ -539,8 +521,8 @@ def export_vpx(op, context):
             logger.info(f'. Image {name:>20s} was removed from export table')
         else:
             logger.info(f'. Image {name:>20s} was kept (known users: {used_images.get(name)})')
-            dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-            dst_stream.Write(data)
+            dst_stream = dst_gamestg.create_stream(f'Image{n_images}')
+            dst_stream.write(data)
             n_images += 1
         n_read_images = n_read_images + 1
 
@@ -592,8 +574,8 @@ def export_vpx(op, context):
         writer.write_data(img_writer.get_data())
         writer.write_tagged_float(b'ALTV', 1.0) # Limit for pixel cut and z write
         writer.close()
-        dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-        dst_stream.Write(writer.get_data())
+        dst_stream = dst_gamestg.create_stream(f'Image{n_images}')
+        dst_stream.write(writer.get_data())
         logger.info(f'. Adding Nestmap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
         n_images += 1
         nestmap_index += 1
@@ -642,8 +624,8 @@ def export_vpx(op, context):
             writer.write_data(img_writer.get_data())
             writer.write_tagged_float(b'ALTV', 1.0) # Limit for pixel cut and z write
             writer.close()
-            dst_stream = dst_gamestg.CreateStream(f'Image{n_images}', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-            dst_stream.Write(writer.get_data())
+            dst_stream = dst_gamestg.create_stream(f'Image{n_images}')
+            dst_stream.write(writer.get_data())
             logger.info(f'. Adding NestNormalMap #{nestmap_index} as a {width:>4} x {height:>4} image (HDR: {is_hdr})')
             n_images += 1
 
@@ -794,42 +776,33 @@ def export_vpx(op, context):
             data = bytes(br.data)
         if hashed:
             if mode == 0:
-                data_hash.CryptHashData(data)
+                data_hash.update(data)
             elif mode == 1:
-                br = biff_io.BIFF_reader(data)
-                while not br.is_eof():
-                    br.next()
-                    if br.tag == "CODE": # For some reason, the code length info is not hashed, just the tag and code string
-                        data_hash.CryptHashData(b'CODE')
-                        code_length = br.get_u32() 
-                        data_hash.CryptHashData(br.get(code_length))
-                    else: # Biff tags and data are hashed but not their size
-                        data_hash.CryptHashData(br.get_record_data(True))
-        dst_stream = dst_st.CreateStream(src_path.split('/')[-1], storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-        dst_stream.Write(data)
+                biff_io.hash_biff_stream(data_hash, data)
+        dst_stream = dst_st.create_stream(src_path.split('/')[-1])
+        dst_stream.write(data)
         if src_path == 'GameStg/CustomInfoTags': # process the custom info tags since they need to be hashed
-            br = biff_io.BIFF_reader(data)
-            while not br.is_eof():
-                br.next()
-                if br.tag == "CUST":
-                    cust_name = br.get_string()
-                    logger.info(f'Hashing custom information block {cust_name}')
-                    if src_storage.exists(f'TableInfo/f{cust_name}'):
-                        data = src_storage.openstream(f'TableInfo/f{cust_name}').read()
-                        data_hash.CryptHashData(data)
-                        dst_stream = dst_tableinfo.CreateStream(cust_name, storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-                        dst_stream.Write(data)
-                else:
-                    br.skip_tag()
+            for cust_name in biff_io.iter_custom_info_tags(data):
+                logger.info(f'Hashing custom information block {cust_name}')
+                cust_path = biff_io.custom_info_path(cust_name)
+                if src_storage.exists(cust_path):
+                    data = src_storage.openstream(cust_path).read()
+                    data_hash.update(data)
+                    # A tag may repeat, or collide (case insensitively) with a
+                    # standard TableInfo stream.  Visual Pinball overwrites in
+                    # that case; creating it twice would abort the export.
+                    try:
+                        dst_stream = dst_tableinfo.create_stream(cust_name)
+                    except vlm_cfb.DuplicateEntryError:
+                        logger.info(f'Custom information block {cust_name} already written, skipping')
+                        continue
+                    dst_stream.write(data)
 
 
-    hash_size = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHSIZE)
-    file_hash = data_hash.CryptGetHashParam(win32cryptcon.HP_HASHVAL)
-    data_hash.CryptDestroyHash()
-    crypt_context.CryptReleaseContext()
-    dst_stream = dst_gamestg.CreateStream('MAC', storagecon.STGM_DIRECT | storagecon.STGM_READWRITE | storagecon.STGM_SHARE_EXCLUSIVE | storagecon.STGM_CREATE, 0, 0)
-    dst_stream.Write(file_hash)
-    dst_storage.Commit(storagecon.STGC_DEFAULT)
+    dst_stream = dst_gamestg.create_stream('MAC')
+    dst_stream.write(data_hash.digest())
+    dst_storage.commit()
+    dst_storage.close()
     src_storage.close()
 
     logger.info(f'. {n_images} images exported in table files')

@@ -274,3 +274,111 @@ class BIFF_writer:
         if write_endb:
             self.new_tag(b'ENDB')
         self.end_tag()
+
+
+# Streams hashed into GameStg/MAC, in the order Visual Pinball hashes them.
+# Tuples are (path, 0 = raw bytes / 1 = BIFF records, hashed?).  The non hashed
+# entries are listed too because vlm_export uses this as its copy order.
+MAC_FILE_STRUCTURE = (
+    ('GameStg/Version', 0, True),
+    ('TableInfo/TableName', 0, True),
+    ('TableInfo/AuthorName', 0, True),
+    ('TableInfo/TableVersion', 0, True),
+    ('TableInfo/ReleaseDate', 0, True),
+    ('TableInfo/AuthorEmail', 0, True),
+    ('TableInfo/AuthorWebSite', 0, True),
+    ('TableInfo/TableBlurb', 0, True),
+    ('TableInfo/TableDescription', 0, True),
+    ('TableInfo/TableRules', 0, True),
+    ('TableInfo/TableSaveDate', 0, False),
+    ('TableInfo/TableSaveRev', 0, False),
+    # Raw bytes, not BIFF records: PinTable::SaveInfo writes the screenshot with
+    # BiffWriter::WriteBytes, which hands the bytes straight to CryptHashData with
+    # no record framing (media/fileio.cpp), and WriteRecordSize does not hash at all.
+    ('TableInfo/Screenshot', 0, True),
+    ('GameStg/CustomInfoTags', 1, True),  # custom info tags are hashed just after this stream
+    ('GameStg/GameData', 1, True),
+)
+
+
+def hash_biff_stream(hasher, data):
+    """Feed a BIFF stream to the MAC hasher the way Visual Pinball does.
+
+    Record tags and payloads are hashed, record sizes are not.  The CODE record
+    is the exception: its tag is hashed, then the script text, but neither the
+    record size nor the length prefix of the string.
+    """
+    br = BIFF_reader(data)
+    while not br.is_eof():
+        br.next()
+        if br.tag == 'CODE':
+            hasher.update(b'CODE')
+            code_length = br.get_u32()
+            hasher.update(br.get(code_length))
+        else:
+            hasher.update(br.get_record_data(True))
+
+
+def iter_custom_info_tags(data):
+    """Yield the custom info tag names held in a GameStg/CustomInfoTags stream.
+
+    Visual Pinball stores each tag's value in a TableInfo/<tag> stream and hashes
+    it right after CustomInfoTags itself (see PinTable::LoadInfo in
+    src/parts/pintable.cpp, which reads "TableInfo/" + tag).  Both the exporter
+    and compute_table_mac() below walk the stream through this helper so the two
+    can never disagree on the rule.
+    """
+    br = BIFF_reader(data)
+    while not br.is_eof():
+        br.next()
+        if br.tag == 'CUST':
+            yield br.get_string()
+        else:
+            br.skip_tag()
+
+
+def custom_info_path(cust_name):
+    """The TableInfo stream holding the value of a custom info tag."""
+    return f'TableInfo/{cust_name}'
+
+
+def compute_table_mac(path):
+    """Recompute the GameStg/MAC digest of an existing .vpx file.
+
+    Used by the test suite to check the hashing rules against tables written by
+    Visual Pinball itself.
+    """
+    import olefile
+    from . import vlm_md2
+
+    src = olefile.OleFileIO(path)
+    try:
+        hasher = vlm_md2.new()
+        hasher.update(b'Visual Pinball')
+        structure = list(MAC_FILE_STRUCTURE)
+        for prefix in ('GameStg/Sound', 'GameStg/Font'):
+            index = 0
+            while src.exists(f'{prefix}{index}'):
+                structure.append((f'{prefix}{index}', 1, False))
+                index += 1
+        index = 0
+        while src.exists(f'GameStg/Collection{index}'):
+            structure.append((f'GameStg/Collection{index}', 1, True))
+            index += 1
+        for src_path, mode, hashed in structure:
+            if not src.exists(src_path):
+                continue
+            data = src.openstream(src_path).read()
+            if hashed:
+                if mode == 0:
+                    hasher.update(data)
+                else:
+                    hash_biff_stream(hasher, data)
+            if src_path == 'GameStg/CustomInfoTags':
+                for cust_name in iter_custom_info_tags(data):
+                    cust_path = custom_info_path(cust_name)
+                    if src.exists(cust_path):
+                        hasher.update(src.openstream(cust_path).read())
+        return hasher.digest()
+    finally:
+        src.close()
