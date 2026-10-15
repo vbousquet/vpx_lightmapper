@@ -41,6 +41,23 @@ from PIL import Image # External dependency
 
 logger = vlm_utils.logger
 
+# Optional bake behaviours, read once per render run from custom properties of the scene being baked
+# (for example bpy.context.scene['vlm_area_aoi'] = True). With every property unset, VLM bakes exactly as before.
+bake_options = {
+    'area_aoi': False, # AREA lights get an area of influence (point light formula x AREA_AOI_SCALE) instead of the full frame
+}
+AREA_AOI_SCALE = 2.0 # An area emitter is ~4x brighter along its normal than a point light of the same power => x2 radius
+
+
+def read_bake_options(scene, log=True):
+    """Read the optional bake behaviours from the scene custom properties 'vlm_<name>' and log their effective state"""
+    for name, default in (('area_aoi', False),):
+        value = scene.get(f'vlm_{name}', default)
+        bake_options[name] = type(default)(value)
+    if not log:
+        return
+    logger.info('. Bake options: ' + ', '.join(f'vlm_{name}={value}' for name, value in bake_options.items()))
+
 
 def project_point(proj, p):
     p1 = proj @ Vector((p.x, p.y, p.z, 1)) # projected coordinates (range [-1, 1]x[-1, 1])
@@ -66,11 +83,12 @@ def get_light_influence_radius(light):
                 has_emission = True
                 emission_strength += n.inputs['Strength'].default_value
         if not has_emission: emission_strength = 1
-        if light.data.type == 'POINT' or light.data.type == 'SPOT':
-            radius = light.data.shadow_soft_size
+        if light.data.type == 'POINT' or light.data.type == 'SPOT' or (light.data.type == 'AREA' and bake_options['area_aoi']):
             power = emission_strength * light.data.energy
             threshold = vlm_utils.get_lm_threshold()
             aoi_radius = math.sqrt(0.0254 * power / threshold)
+            if light.data.type == 'AREA':
+                aoi_radius *= AREA_AOI_SCALE
             return (light.matrix_world @ mathutils.Vector((0,0,0)), aoi_radius)
     elif light.type == 'MESH' or light.type == 'CURVE':
         mesh_aois = {
@@ -267,6 +285,7 @@ def render_all_groups(op, context):
         return {'CANCELLED'}
 
     start_time = time.time()
+    read_bake_options(context.scene)
     bakepath = vlm_utils.get_bakepath(context, type='RENDERS')
     vlm_utils.mkpath(bakepath)
     opt_render_width, opt_render_height = vlm_utils.get_render_size(context)

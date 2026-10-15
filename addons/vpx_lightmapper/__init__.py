@@ -1306,6 +1306,7 @@ class VLM_OT_apply_aoi(Operator):
         return context.scene.camera and context.selected_objects
 
     def execute(self, context):
+        vlm_render_baker.read_bake_options(context.scene, log=False)
         influence = None
         for light in context.selected_objects:
             light_influence = vlm_render_baker.get_light_influence(context.scene, context.view_layer.depsgraph, context.scene.camera, light, None)
