@@ -300,6 +300,20 @@ def get_lm_threshold():
     return 0.01
 
 
+AOI_OVERRIDE_PROP = 'vlm_aoi_radius_in'
+
+
+def get_light_aoi_override(light):
+    """Hand-set radius of influence of a light, in meters, from the custom property 'vlm_aoi_radius_in' (inches)
+    of the light object or of its data. Returns None if not set.
+    """
+    for holder in (light, getattr(light, 'data', None)):
+        value = holder.get(AOI_OVERRIDE_PROP) if holder is not None else None
+        if value is not None:
+            return max(0.0, float(value)) * 0.0254
+    return None
+
+
 def get_render_size(context):
     # render height apply to projected playfield, so upscale accordingly, keeping user defined aspect ratio
     camera = context.scene.camera
