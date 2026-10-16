@@ -57,6 +57,9 @@ def get_light_influence_radius(light):
     if not light.vlmSettings.enable_aoi:
         return (None, None)
     if light.type == 'LIGHT':
+        aoi_radius = vlm_utils.get_light_aoi_override(light)
+        if aoi_radius is not None:
+            return (light.matrix_world @ mathutils.Vector((0,0,0)), aoi_radius)
         emission_strength = 0
         has_emission = False
         if light.data.use_nodes:
@@ -278,6 +281,9 @@ def render_all_groups(op, context):
     opt_force_render = False # Force rendering even if cache is available
     n_render_groups = vlm_utils.get_n_render_groups(context)
     light_scenarios = vlm_utils.get_lightings(context)
+    aoi_overrides = [o.name for o in context.scene.objects if o.type == 'LIGHT' and vlm_utils.get_light_aoi_override(o) is not None]
+    if aoi_overrides:
+        logger.info(f'. {len(aoi_overrides)} lights use a hand-set area of influence ({vlm_utils.AOI_OVERRIDE_PROP}): {aoi_overrides}')
     bake_info_group = bpy.data.node_groups.get('VLM.BakeInfo')
 
     denoise_prefilter = context.scene.vlmSettings.denoise_prefilter
