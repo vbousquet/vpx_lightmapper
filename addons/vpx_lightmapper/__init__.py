@@ -106,6 +106,10 @@ if dependencies_installed:
         importlib.reload(vlm_group_baker)
     else:
         from . import vlm_group_baker
+    if "vlm_influence_first" in locals():
+        importlib.reload(vlm_influence_first)
+    else:
+        from . import vlm_influence_first
     if "vlm_render_baker" in locals():
         importlib.reload(vlm_render_baker)
     else:

@@ -37,6 +37,7 @@ from .vlm_compat52 import (
     set_diffuse_color_pass_enabled,
 )
 from . import vlm_collections
+from . import vlm_influence_first
 from PIL import Image # External dependency
 
 logger = vlm_utils.logger
@@ -883,6 +884,8 @@ def render_all_groups(op, context):
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 2.0
+    vlm_influence_first.begin_run(context.scene)
+    vlm_influence_first.influence_first(scene, render_col, indirect_col, bake_col, light_scenarios, bakepath, mask_scene, mask_path, opt_mask_size, opt_mask_pad, opt_ar, opt_force_render)
     for obj in [obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake]:
         if obj.vlmSettings.bake_mask:
             render_col.objects.link(obj.vlmSettings.bake_mask)
@@ -1358,7 +1361,7 @@ def render_all_groups(op, context):
 
 
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)) or not os.path.exists(bpy.path.abspath(influence_path)):
-                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, obj_mask, render_col, [obj])
+                state, restore_func = (None, None) if vlm_influence_first.skip_pair(obj, scenario) else setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, obj_mask, render_col, [obj])
                 elapsed = time.time() - start_time
                 if elapsed > 0 and n_render_performed > 0:
                     elapsed_per_render = elapsed / n_render_performed
@@ -1498,6 +1501,7 @@ def render_all_groups(op, context):
         with context.temp_override(active_object=dup, selected_objects=[dup]):
             bpy.ops.object.delete()
 
+    vlm_influence_first.end_run()
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 0.0
     compositor_trees = []
     for temp_scene in (scene, mask_scene, temp_denoise_scene):
