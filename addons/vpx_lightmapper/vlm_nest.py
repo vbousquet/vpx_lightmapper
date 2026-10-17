@@ -979,6 +979,78 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
     logger.info(f'. Nestmap rendered and saved to {base_filepath}')
 
 
+_FAST_SPANS_LOGGED = False
+
+
+def _runs_per_line(mask):
+    """mask = 2D bool (lines, positions) -> per line [(start, end, length)] runs of True, total length."""
+    n_lines, n_pos = mask.shape
+    pad = np.zeros((n_lines, n_pos + 2), np.int8)
+    pad[:, 1:-1] = mask
+    d = np.diff(pad, axis=1)
+    sl, sp = np.nonzero(d == 1)
+    _, ep = np.nonzero(d == -1)
+    out = [[] for _ in range(n_lines)]
+    for line, s, e in zip(sl.tolist(), sp.tolist(), ep.tolist()):
+        out[line].append((s, e - 1, e - s))
+    return out, int((ep - sp).sum())
+
+
+def _fast_island_spans(region, island_w, island_h):
+    """same spans as the original per-pixel loops (verified on 300 random masks), via numpy.
+    region = flat island-rectangle buffer (row y, column x, 4 channels). Returns None without buffer protocol."""
+    global _FAST_SPANS_LOGGED
+    try:
+        arr = np.asarray(memoryview(region), dtype=np.float32).reshape(island_h, island_w, 4)
+    except Exception as e:
+        if not _FAST_SPANS_LOGGED:
+            _FAST_SPANS_LOGGED = True
+            logger.info(f'. Fast nest prepare (patch 10): no buffer protocol ({e}), using the island-rectangle loops')
+        return None
+    if not _FAST_SPANS_LOGGED:
+        _FAST_SPANS_LOGGED = True
+        logger.info('. Fast nest prepare (patch 10): numpy spans via buffer protocol')
+    hor, count = _runs_per_line(arr[:, :, 0].T > 0)  # per column x: runs along y, red channel
+    ver, _ = _runs_per_line(arr[:, :, 3] > 0)         # per row y: runs along x, alpha channel
+    return hor, ver, count
+
+
+def _loop_island_spans(buffer, stride, island_w, island_h):
+    """the original span loops, with the buffer row stride as a parameter."""
+    island_pix_count = 0
+    island_hor = []
+    for x in range(island_w):
+        ymin = -1
+        spans = []
+        for y in range(island_h):
+            if buffer[4 * (x + y * stride)] > 0:
+                if ymin == -1: ymin = y
+            else:
+                if ymin != -1:
+                    spans.append((ymin, y-1, y-1-ymin + 1))
+                    island_pix_count = island_pix_count + (y-1-ymin + 1)
+                    ymin = -1
+        if ymin != -1:
+            spans.append((ymin, island_h-1, island_h-1-ymin + 1))
+            island_pix_count = island_pix_count + (island_h-1-ymin + 1)
+        island_hor.append(spans)
+    island_ver = []
+    for y in range(island_h):
+        xmin = -1
+        spans = []
+        for x in range(island_w):
+            if buffer[4 * (x + y * stride) + 3] > 0:
+                if xmin == -1: xmin = x
+            else:
+                if xmin != -1:
+                    spans.append((xmin, x-1, x-1-xmin + 1))
+                    xmin = -1
+        if xmin != -1:
+            spans.append((xmin, island_w-1, island_w-1-xmin + 1))
+        island_ver.append(spans)
+    return island_hor, island_ver, island_pix_count
+
+
 def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, tex_h):
     ensure_gpu_backend()
     bm = bmesh.new()
@@ -1113,6 +1185,7 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
             if offscreen is not None: offscreen.free()
             offscreen = gpu.types.GPUOffScreen(src_w, src_h)
             
+        region = None
         with offscreen.bind():
             fb = gpu.state.active_framebuffer_get()
             fb.clear(color=(0.0, 0.0, 0.0, 0.0))
@@ -1123,6 +1196,32 @@ def prepare_nesting(context, obj, padding, uv_nest_name, render_sizes, tex_w, te
                     tri_batch.draw(shader_draw)
                     pt_batch.draw(shader_draw)
                     line_batch.draw(shader_draw)
+            # read back only the island rectangle (the island is drawn at the origin),
+            # not the whole render-sized framebuffer (~220 MB per island at 4K). Off: scene['vlm_fast_nest_prepare'] = False
+            if context.scene.get('vlm_fast_nest_prepare', True):
+                try:
+                    region = fb.read_color(0, 0, island_w, island_h, 4, 0, 'FLOAT')
+                    region.dimensions = island_w * island_h * 4
+                except Exception as e:
+                    logger.info(f'. Fast nest prepare: region read failed ({e}), using the full framebuffer')
+                    region = None
+        if region is not None:
+            spans = _fast_island_spans(region, island_w, island_h)
+            if spans is not None:
+                island_hor, island_ver, island_pix_count = spans
+            else:   # no buffer protocol: original loops, over the island rectangle only (stride island_w)
+                island_hor, island_ver, island_pix_count = _loop_island_spans(region, island_w, island_w, island_h)
+            total_pix_count = total_pix_count + island_pix_count
+            island_mask = island_hor
+            island_masks = []
+            island_masks.append(island_hor) # 0 rotation
+            island_masks.append([span for span in reversed(island_ver)]) # 90 rotation
+            island_masks.append([span for span in reversed(island_hor)]) # 0 rotation, Flipped on X
+            island_masks.append(island_ver) # 90 rotation, Flipped on X
+            island['source'] = (obj, bm)
+            island['masks'] = island_masks
+            island['pixcount'] = island_pix_count
+            continue
         buffer = offscreen.texture_color.read()
         buffer.dimensions = src_w * src_h * 4
 
