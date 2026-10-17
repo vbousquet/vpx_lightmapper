@@ -593,6 +593,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
         uniform vec2 src_size;
         uniform int padding;
         uniform float hdr_scale;
+        uniform int keep_thin;
         void main() {
             if (uv.x < 0.0 || uv.x >= 1.0 || uv.y < 0.0 || uv.y >= 1.0)
                 FragColor = vec4(0.0);
@@ -631,7 +632,16 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                 }
                 if (padding_sum == 0.0)
                 { // Fully outside, with not a single pixel of the island => discard texel
-                    FragColor = vec4(0.0);
+                    // thin parts (wires under ~1 px) never reach full mask coverage, so the
+                    // whole part was discarded. Keep the texel's own render where the mask has any coverage.
+                    if (keep_thin != 0 && texture(render_mask, clamp(uv, min_uv, max_uv)).a > 0.0)
+                    {
+                        seam = seam / seam_sum;
+                        seam.a = step(0.001, seam.a);
+                        FragColor = clamp(seam * texture(render, uv) * rescale, vec4(0.), vec4(1000., 1000., 1000., 1000.));
+                    }
+                    else
+                        FragColor = vec4(0.0);
                 }
                 else
                 { // Either inside (if inside == 1), or in the border area (if 0 < inside < 1) => lerp between inside color and padding color
@@ -806,6 +816,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                     render_shader.uniform_float("pos_dec", (x, y))
                     render_shader.uniform_int("rot", rot)
                     render_shader.uniform_int("padding", padding)
+                    render_shader.uniform_int("keep_thin", 1 if context.scene.get('vlm_keep_thin_wires', False) else 0)
                     render_shader.uniform_sampler("render_mask", gpu.texture.from_image(island_render_mask))
                     render_shader.uniform_sampler("seam_mask", offscreen_seams.texture_color)
                     render_shader.uniform_sampler("render", gpu.texture.from_image(island_render))
@@ -833,6 +844,7 @@ def render_nestmap(context, selection, uv_bake_name, nestmap, nestmap_name, nest
                     render_shader.uniform_float("pos_dec", (x, y))
                     render_shader.uniform_int("rot", rot)
                     render_shader.uniform_int("padding", padding)
+                    render_shader.uniform_int("keep_thin", 1 if context.scene.get('vlm_keep_thin_wires', False) else 0)
                     render_shader.uniform_sampler("render_mask", gpu.texture.from_image(island_render_mask))
                     render_shader.uniform_sampler("seam_mask", offscreen_seams.texture_color)
                     render_shader.uniform_sampler("render", gpu.texture.from_image(island_normalmap))
