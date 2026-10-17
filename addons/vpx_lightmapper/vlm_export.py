@@ -309,10 +309,14 @@ def export_vpx(op, context):
             if (is_part_baked or is_playfield_mesh) and visibility_field:
                 item_data.put_bool(False)
             item_data.skip_tag()
-        if is_playfield_mesh and not layer_name == f'VLM.{export_prefix}Visuals':
+        # VPX 10.8 renames layers to part groups without dots ('VLM.Visuals' -> 'VLM_Visuals')
+        # when it saves a table; accept both spellings, else a re-export duplicates every BM/LM item.
+        vlm_visuals_layers = (f'VLM.{export_prefix}Visuals', f'VLM_{export_prefix}Visuals')
+        vlm_lightmaps_layers = (f'VLM.{export_prefix}Lightmaps', f'VLM_{export_prefix}Lightmaps')
+        if is_playfield_mesh and layer_name not in vlm_visuals_layers:
             needs_playfield_physics = False
         # Filters out objects
-        remove = (layer_name == f'VLM.{export_prefix}Visuals') or (layer_name == f'VLM.{export_prefix}Lightmaps')
+        remove = (layer_name in vlm_visuals_layers) or (layer_name in vlm_lightmaps_layers)
         if export_mode == 'remove' or export_mode == 'remove_all':
             # Baked objects are only kept if contributing to physics
             if is_baked and not is_physics: remove = True
