@@ -332,7 +332,7 @@ def create_bake_meshes(op, context):
                         bpy.ops.object.mode_set(mode = 'OBJECT')
                     logger.info(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was decimated using a ratio of {ratio:.2%} from {len(areas)} to {len(dup.data.polygons)} faces')
                 else:
-                    logger.info(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added (no LOD since max face size is {max_size:>8}px² with a threshold of {opt_lod_threshold}px²)')
+                    logger.info(f'. Object #{i+1:>3}/{len(bake_col_object_set):>3}: {obj_name} was added (no LOD since max face size is {max_size:>8}pxÂ² with a threshold of {opt_lod_threshold}pxÂ²)')
             
             # Reveal any hidden part
             with context.temp_override(active_object=dup, selected_objects=[dup]):
@@ -491,13 +491,27 @@ def create_bake_meshes(op, context):
         vmaps.append(lightmap_vmap)
         result_col.objects.unlink(obj)
 
+    # decide lit faces with numpy and skip lightmaps VLM would discard anyway, before
+    # copying the mesh / shade_flat / edit-mode round trips (4K test table: 620 of 11,753 mesh x scenario pairs kept,
+    # Meshes took 2h21m). Off switch: scene['vlm_fast_lightmaps'] = False.
+    fast_lm = context.scene.get('vlm_fast_lightmaps', True)
+    lm_stats = {'influence': 0.0, 'tags': 0.0, 'kept': 0.0, 'n_kept': 0, 'n_skipped': 0, 'np_path': '?'}
+    lm_pairs = [_lm_pairs(vm, bm_[2]) for vm, bm_ in zip(vmaps, bake_meshes)] if fast_lm else None
+
     # Process each of the bake meshes according to the light scenario, pruning unneeded faces
     for i, light_scenario in enumerate(light_scenarios):
         light_name, is_lightmap, _, lights = light_scenario
         if not is_lightmap: continue
+        t0 = time.time()
         influence = build_influence_map(render_path, light_name, prunemap_width, prunemap_height)
+        if fast_lm:
+            inf_np = {}
+            for key, buf in influence.items():
+                a = _buffer_to_np(buf, lm_stats).reshape(-1, 4)
+                inf_np[key] = (a[:, 0], a[:, 1])
+        lm_stats['influence'] += time.time() - t0
         logger.info(f'\nProcessing lightmaps for {light_name} [{i+1}/{len(light_scenarios)}]')
-        for (bake_col, bake_name, bake_mesh, transform, pivot_obj), lightmap_vmap in zip(bake_meshes, vmaps):
+        for k, ((bake_col, bake_name, bake_mesh, transform, pivot_obj), lightmap_vmap) in enumerate(zip(bake_meshes, vmaps)):
             obj_name = f'LM.{light_name}.{bake_name}'
             prev_nestmap = -1
             if bpy.data.objects.get(obj_name): # Expert mode: if regenerating meshes with previous nestmapping result, just reuse them
@@ -505,6 +519,14 @@ def create_bake_meshes(op, context):
                 prev_nestmap = bpy.data.objects[obj_name].vlmSettings.bake_nestmap
                 bpy.data.objects.remove(bpy.data.objects[obj_name], do_unlink=True)
             prev_nestmap = bpy.data.objects[obj_name].vlmSettings.bake_nestmap if bpy.data.objects.get(obj_name) else -1
+            if fast_lm:
+                t0 = time.time()
+                fast_hdr, fast_tags = _lm_fast_tags(lm_pairs[k], inf_np, lm_threshold)
+                lm_stats['tags'] += time.time() - t0
+                if not fast_tags.any() or fast_hdr <= 2 * lm_threshold:
+                    lm_stats['n_skipped'] += 1
+                    continue   # VLM would build this lightmap, prune it and then discard it (empty or below threshold)
+                t0 = time.time()
             bake_instance = bpy.data.objects.new(obj_name, bake_mesh.copy())
             # Remove face shading (lightmap are not made to be shaded and the pruning process breaks the shading)
             if bpy.app.version < (4, 1, 0): # FIXME Remove for Blender 4.1
@@ -518,7 +540,13 @@ def create_bake_meshes(op, context):
             bpy.ops.object.select_all(action='DESELECT')
             context.view_layer.objects.active = bake_instance
             bake_instance.select_set(True)
-            hdr_range = prune_lightmap_by_visibility_map(bake_instance.data, bake_name, light_name, lightmap_vmap, influence, prunemap_width, prunemap_height)
+            if fast_lm:   # same tags/hdr as the per-pixel loop, computed above
+                prune_lightmap_with_tags(bake_instance.data, fast_tags)
+                hdr_range = fast_hdr
+                lm_stats['kept'] += time.time() - t0
+                lm_stats['n_kept'] += 1
+            else:
+                hdr_range = prune_lightmap_by_visibility_map(bake_instance.data, bake_name, light_name, lightmap_vmap, influence, prunemap_width, prunemap_height)
             if not bake_instance.data.polygons or hdr_range <= 2 * lm_threshold:
                 result_col.objects.unlink(bake_instance)
                 #logger.info(f". Mesh {bake_name} has no more faces after optimization for {light_name} lighting")
@@ -533,6 +561,11 @@ def create_bake_meshes(op, context):
                 bake_instance.vlmSettings.bake_hdr_range = hdr_range
                 bake_instance.vlmSettings.bake_sync_light = ';'.join([l.name for l in lights]) if lights else ''
                 bake_instance.vlmSettings.bake_sync_trans = pivot_obj if pivot_obj is not None else ''
+
+    if fast_lm:
+        logger.info(f"\n. Fast lightmaps (patch 11): {lm_stats['n_kept']} built, {lm_stats['n_skipped']} skipped; "
+                    f"influence maps {lm_stats['influence']:.0f} s, tagging {lm_stats['tags']:.0f} s, "
+                    f"building kept lightmaps {lm_stats['kept']:.0f} s; buffer->numpy: {lm_stats['np_path']}")
 
     # Perform sanity check on the result
     for obj in result_col.all_objects:
@@ -740,6 +773,88 @@ def build_influence_map(render_path, name, w, h):
         image.save()
         bpy.data.images.remove(image)
     return imaps
+
+
+def _buffer_to_np(buf, stats=None):
+    """gpu Buffer -> flat float64 numpy array (buffer protocol, else to_list)."""
+    try:
+        a = np.asarray(memoryview(buf), dtype=np.float32).reshape(-1)
+        if stats is not None: stats['np_path'] = 'buffer protocol'
+    except Exception:
+        a = np.asarray(buf.to_list() if hasattr(buf, 'to_list') else list(buf), dtype=np.float32).reshape(-1)
+        if stats is not None: stats['np_path'] = 'to_list fallback'
+    return a.astype(np.float64)
+
+
+def _lm_pairs(vmaps, mesh):
+    """visibility map -> (pixel, face) pair arrays + per-face material slot + render ids."""
+    import itertools
+    lens = np.fromiter((len(v) for v in vmaps), np.int64, len(vmaps))
+    face_idx = np.fromiter(itertools.chain.from_iterable(vmaps), np.int64, int(lens.sum()))
+    pix_idx = np.repeat(np.arange(len(vmaps), dtype=np.int64), lens)
+    mat_of_face = np.zeros(len(mesh.polygons), np.int64)
+    if len(mesh.polygons):
+        mesh.polygons.foreach_get('material_index', mat_of_face)
+    ids = []
+    for mat in mesh.materials:   # same ids as prune_lightmap_by_visibility_map (VLM.Render survives adapt_materials)
+        render = mat.get('VLM.Render')
+        ids.append(f'Group {render}' if isinstance(render, int) else f'Influence - {vlm_utils.clean_filename(render)}')
+    return {'pix': pix_idx, 'face': face_idx, 'has': lens > 0, 'mat': mat_of_face, 'ids': ids, 'n_faces': len(mesh.polygons)}
+
+
+def _lm_fast_tags(pairs, inf_np, thr):
+    """same hdr_range and face tags as the per-pixel loop of prune_lightmap_by_visibility_map
+    (verified on 400 random cases). inf_np[id] = (channel0, channel1) float64 arrays."""
+    g1 = inf_np['Global'][1]
+    P = pairs['has'] & (g1 > thr)
+    tags = np.zeros(pairs['n_faces'], bool)
+    if not P.any():
+        return 0.0, tags
+    hdr = float(g1[P].max())
+    if len(pairs['face']):
+        ids = pairs['ids']
+        stack = np.full((max(1, len(ids)), len(g1)), -np.inf)
+        for m, key in enumerate(ids):
+            a = inf_np.get(key)
+            if a is not None: stack[m] = a[0]
+        sel = P[pairs['pix']]
+        pf, ff = pairs['pix'][sel], pairs['face'][sel]
+        mats = pairs['mat'][ff]
+        valid = mats < len(ids)
+        ok = np.zeros(len(ff), bool)
+        ok[valid] = stack[mats[valid], pf[valid]] > thr
+        tags[ff[ok]] = True
+    return hdr, tags
+
+
+def prune_lightmap_with_tags(bake_instance_mesh, tags):
+    """prune_lightmap_by_visibility_map with the face tags already computed; the rest is unchanged."""
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(bake_instance_mesh)
+    bm.faces.ensure_lookup_table()
+    for face in bm.faces:
+        face.tag = False
+    for fi in np.flatnonzero(tags).tolist():
+        bm.faces[fi].tag = True
+    kept_faces = [face for face in bm.faces if face.tag]
+    color_layer = bm.loops.layers.color.verify()
+    for face in kept_faces:
+        for loop in face.loops:
+            for neighbor_face in loop.vert.link_faces:
+                if not neighbor_face.tag:
+                    neighbor_face.tag = True
+    delete_faces = [face for face in bm.faces if not face.tag]
+    if delete_faces:
+        for face in bm.faces:
+            for loop in face.loops:
+                loop[color_layer] = (0, 0, 0, 1)
+        for face in kept_faces:
+            for vert in face.verts:
+                for loop in vert.link_loops:
+                    loop[color_layer] = (1, 1, 1, 1)
+        bmesh.ops.delete(bm, geom=delete_faces, context='FACES')
+    bmesh.update_edit_mesh(bake_instance_mesh)
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 
 def prune_lightmap_by_visibility_map(bake_instance_mesh, bake_name, light_name, vmaps, imaps, w, h):
