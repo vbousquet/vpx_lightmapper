@@ -870,18 +870,319 @@ def render_all_groups(op, context):
     scene.view_settings.view_transform = 'Raw'
     scene.view_settings.look = 'None'
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 2.0
+
+    # ---- joined bakes of unwrapped objects ---------------------------------------------------------------------------
+    # Every bpy.ops.object.bake call pays a fixed Cycles scene setup (~13-17 s on a 4K test table, even for a 128 px texture),
+    # and baking several selected objects in one call still pays it once per object. A single joined mesh pays it once.
+    # So the loop is turned around: each unwrapped object is prepared once (duplicate with applied modifiers, own
+    # material copies pointing to its own bake images, mask, normal/albedo maps), then for each lighting scenario the
+    # objects that need it are baked together:
+    #  - static objects (not 'hide from others') that are not in any light-linking collection of the scenario's lights
+    #    are joined into one temporary mesh; each keeps its own materials, so each one bakes into its own image,
+    #  - 'hide from others' objects (alternate poses of movables) and light-linked objects are baked alone, as before.
+    # Then each object's bake is denoised, saved and its influence map rendered exactly as before (same files).
+    render_ratio = context.scene.vlmSettings.render_ratio / 100.0
+    depsgraph = context.view_layer.depsgraph
+
+    def _collection_ptr(collection):
+        try:
+            return collection.as_pointer()
+        except Exception:
+            return id(collection)
+
+    def _is_direct_member(collection, member_obj):
+        """Blender-safe direct object membership test (Collection.objects lookup is by name in 4.5/5.x)."""
+        if collection is None or member_obj is None:
+            return False
+        objects = getattr(collection, 'objects', None)
+        if objects is None:
+            return False
+        try:
+            found = objects.get(member_obj.name)
+            if found is member_obj:
+                return True
+            if found is not None and getattr(found, 'name', None) == member_obj.name:
+                return True
+        except Exception:
+            pass
+        try:
+            return any(candidate is member_obj for candidate in objects)
+        except Exception:
+            return False
+
+    def _find_direct_owners(root_collection, source_obj):
+        """Return all descendant collections that directly contain source_obj."""
+        if root_collection is None or source_obj is None:
+            return []
+        owners = []
+        visited = set()
+        def visit(collection):
+            ptr = _collection_ptr(collection)
+            if ptr in visited:
+                return
+            visited.add(ptr)
+            if _is_direct_member(collection, source_obj):
+                owners.append(collection)
+            try:
+                children = list(collection.children)
+            except Exception as exc:
+                logger.warning(f"Light Linking: unable to inspect child collections of {getattr(collection, 'name', '<unknown>')!r}: {exc}")
+                children = []
+            for child in children:
+                visit(child)
+        visit(root_collection)
+        return owners
+
+    def _get_collection_object_entry(owner_collection, member_obj):
+        """Resolve a direct CollectionObject entry without all_objects indexing."""
+        if owner_collection is None or member_obj is None:
+            return None
+        collection_objects = getattr(owner_collection, 'collection_objects', None)
+        if collection_objects is None:
+            return None
+        try:
+            entry = collection_objects.get(member_obj.name)
+            if entry is not None:
+                return entry
+        except Exception:
+            pass
+        try:
+            direct_objects = list(owner_collection.objects)
+            entries = list(collection_objects)
+        except Exception:
+            return None
+        for index, direct_obj in enumerate(direct_objects):
+            if direct_obj is member_obj:
+                return entries[index] if index < len(entries) else None
+        return None
+
+    def _read_link_state(owner_collection, source_obj, kind, root_collection):
+        entry = _get_collection_object_entry(owner_collection, source_obj)
+        if entry is None:
+            logger.warning(f"Light Linking: {kind} source CollectionObject entry for {source_obj.name!r} was not found in {owner_collection.name!r} (root {root_collection.name!r}).")
+            return None
+        try:
+            settings = entry.light_linking
+            return None if settings is None else settings.link_state
+        except Exception as exc:
+            logger.warning(f"Light Linking: could not read {kind.lower()} link_state for {source_obj.name!r} in {owner_collection.name!r}: {exc}")
+            return None
+
+    def _write_link_state(owner_collection, duplicate_obj, source_state, kind):
+        if source_state is None:
+            return
+        entry = _get_collection_object_entry(owner_collection, duplicate_obj)
+        if entry is None:
+            logger.warning(f"Light Linking: duplicate CollectionObject entry for {duplicate_obj.name!r} was not found in {owner_collection.name!r}.")
+            return
+        try:
+            settings = entry.light_linking
+            if settings is None:
+                logger.warning(f"Light Linking: duplicate entry for {duplicate_obj.name!r} in {owner_collection.name!r} has no light_linking settings.")
+                return
+            settings.link_state = source_state
+        except Exception as exc:
+            logger.warning(f"Light Linking: could not copy {kind.lower()} link_state for {duplicate_obj.name!r} in {owner_collection.name!r}: {exc}")
+
+    def _link_bake_copy(root_collection, kind, obj, dup, created):
+        """Link the bake duplicate wherever the source object sits below a light-linking root (same state)."""
+        if root_collection is None:
+            return
+        for owner_collection in _find_direct_owners(root_collection, obj):
+            source_state = _read_link_state(owner_collection, obj, kind, root_collection)
+            if not _is_direct_member(owner_collection, dup):
+                logger.info(f"Linking light for {obj.name} to {kind} Collection {root_collection.name} (direct owner: {owner_collection.name}, state: {source_state if source_state is not None else 'DEFAULT'})")
+                try:
+                    owner_collection.objects.link(dup)
+                except Exception as exc:
+                    logger.warning(f"Light Linking: could not link temporary bake copy {dup.name!r} to {owner_collection.name!r}: {exc}")
+                    continue
+                if _collection_ptr(owner_collection) not in {_collection_ptr(c) for c in created}:
+                    created.append(owner_collection)
+            _write_link_state(owner_collection, dup, source_state, kind)
+
+    def _light_linking_roots(light_objs):
+        roots = []
+        for light_obj in light_objs:
+            light_linking = getattr(light_obj, 'light_linking', None)
+            if light_linking is None:
+                continue
+            for kind, attr in (('Receiver', 'receiver_collection'), ('Blocker', 'blocker_collection')):
+                root = getattr(light_linking, attr, None)
+                if root is not None:
+                    roots.append((root, kind))
+        return roots
+
+    def _part_influenced(scenario, part):
+        """Same influence test as setup_light_scenario, for one object (its mask + light-linking targets)."""
+        name, is_lightmap, light_col, lights = scenario
+        if not is_lightmap or light_col.vlmSettings.world:
+            return True
+        influence = None
+        for light in lights:
+            light_influence = get_light_influence(scene, depsgraph, camera_object, light, part['mask'], [part['obj']])
+            if light_influence:
+                if influence:
+                    influence = (min(influence[0], light_influence[0]), max(influence[1], light_influence[1]),
+                                 min(influence[2], light_influence[2]), max(influence[3], light_influence[3]))
+                else:
+                    influence = light_influence
+        if not influence:
+            return False
+        return int((influence[1] - influence[0]) * scene.render.resolution_x) >= 1 and int((influence[3] - influence[2]) * scene.render.resolution_y) >= 1
+
+    def _setup_bake_lights(scenario):
+        name, is_lightmap, light_col, lights = scenario
+        prev_world = scene.world
+        scene.world = light_col.vlmSettings.world
+        if is_lightmap and vlm_utils.is_rgb_led(lights):
+            colored_lights = [o for o in lights if o.type == 'LIGHT']
+            prev_colors = [o.data.color for o in colored_lights]
+            for o in colored_lights: o.data.color = (1.0, 1.0, 1.0)
+            initial_state = (2, lights, colored_lights, prev_colors)
+        else:
+            initial_state = (1 if is_lightmap else 0, lights)
+        for light in lights:
+            render_col.objects.link(light)
+        return initial_state, prev_world
+
+    def _progress(msg):
+        elapsed = time.time() - start_time
+        msg = f"{msg} Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+        if elapsed > 0 and n_render_performed > 0:
+            remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
+            msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed / n_render_performed)} for {remaining_render} renders'
+        return msg
+
+    def _finish_part(part, scenario):
+        """Denoise + save the part's bake and render its influence map (unchanged VLM outputs)."""
+        name, is_lightmap, light_col, lights = scenario
+        obj, dup, bake_img = part['obj'], part['dup'], part['img']
+        render_path = f'{bakepath}{name} - Bake - {vlm_utils.clean_filename(obj.name)}.exr'
+        influence_path = f'{bakepath}{name} - Influence - {vlm_utils.clean_filename(obj.name)}.exr'
+        with context.temp_override(scene=temp_denoise_scene):
+            denoise_file_output_node.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
+            render_path_denoise = f'{bakepath}{name} - Bake - {vlm_utils.clean_filename(obj.name)}'
+            denoise_image_node.image = bake_img
+            denoise_normal_map_node.image = part['img_nm']
+            denoise_albedo_map_node.image = part['img_alb']
+            if bpy.app.version >= (5, 0, 0):
+                configure_file_output_node_52(
+                    denoise_file_output_node,
+                    socket_name='Image',
+                    directory=os.path.dirname(bpy.path.abspath(render_path_denoise)),
+                    file_name=os.path.basename(render_path_denoise),
+                    file_format='OPEN_EXR',
+                    color_mode='RGB' if is_lightmap else 'RGBA',
+                    color_depth='16',
+                    exr_codec='ZIP',
+                    use_file_extension=False,
+                )
+            else:
+                denoise_file_output_node.base_path = os.path.dirname(bpy.path.relpath(render_path_denoise))
+                denoise_file_output_node.file_slots[0].path = os.path.basename(bpy.path.relpath(render_path_denoise))
+            bpy.ops.render.render(use_viewport=False, write_still=False)
+            # Blender 5.x File Output names vary (e.g. '<name>Image' with no frame number or extension)
+            denoise_base = bpy.path.abspath(render_path_denoise)
+            denoise_outs = [c for c in (f'{denoise_base}0001.exr', f'{denoise_base}Image0001.exr', f'{denoise_base}Image.exr', f'{denoise_base}Image', f'{denoise_base}0001') if os.path.isfile(c)]
+            denoise_out = max(denoise_outs, key=os.path.getmtime) if denoise_outs else f'{denoise_base}0001.exr'
+            os.replace(denoise_out, f'{denoise_base}.exr')
+        # Render for influence map
+        dup2 = dup.copy()
+        dup2.data = dup2.data.copy()
+        for poly in dup2.data.polygons:
+            poly.material_index = 0
+        dup2.data.materials.clear()
+        mat = bpy.data.materials.new(name)
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        nodes.clear()
+        links = mat.node_tree.links
+        node_emission = nodes.new('ShaderNodeEmission')
+        node_transparent = nodes.new('ShaderNodeBsdfTransparent')
+        node_add = nodes.new('ShaderNodeAddShader')
+        node_output = nodes.new(type='ShaderNodeOutputMaterial')
+        node_tex = nodes.new(type='ShaderNodeTexImage')
+        node_tex.image = bake_img
+        node_uvmap = nodes.new(type='ShaderNodeUVMap')
+        node_uvmap.uv_map = 'UVMap'
+        links.new(node_uvmap.outputs[0], node_tex.inputs[0])
+        links.new(node_tex.outputs[0], node_emission.inputs[0])
+        links.new(node_tex.outputs[1], node_emission.inputs[1])
+        links.new(node_emission.outputs[0], node_add.inputs[0])
+        links.new(node_transparent.outputs[0], node_add.inputs[1])
+        links.new(node_add.outputs[0], node_output.inputs[0])
+        set_material_surface_render_method(mat, 'BLEND')
+        dup2.data.materials.append(mat)
+        mask_scene.render.filepath = influence_path
+        mask_scene.collection.objects.link(dup2)
+        mask_scene.render.image_settings.file_format = "OPEN_EXR"
+        mask_scene.render.image_settings.color_mode = 'RGB'
+        mask_scene.render.image_settings.exr_codec = 'DWAA'
+        mask_scene.render.image_settings.color_depth = '16'
+        bpy.ops.render.render(write_still=True, scene=mask_scene.name)
+        mask_scene.collection.objects.unlink(dup2)
+        mask_scene.render.image_settings.file_format = "PNG"
+        bpy.data.materials.remove(mat)
+        dup2_mesh = dup2.data
+        bpy.data.objects.remove(dup2)
+        if dup2_mesh.users == 0:
+            bpy.data.meshes.remove(dup2_mesh)
+
+    def _fill_image_margin(img, margin):
+        """Joined bakes: Blender's adjacent-faces margin leaves the texels empty where another joined object's UV islands
+        overlap. Fill the empty texels next to baked ones with the mean of their baked 8-neighbours, margin times
+        (like the 'Extend' margin). Only the padding ring can differ from a single bake, never the baked surface."""
+        w, h = img.size
+        px = np.empty(w * h * 4, dtype=np.float32)
+        img.pixels.foreach_get(px)
+        px = px.reshape(h, w, 4)
+        for _ in range(margin):
+            cov = px[:, :, 3] > 0
+            acc = np.zeros_like(px)
+            cnt = np.zeros(cov.shape, dtype=np.float32)
+            padded, padded_cov = np.pad(px, ((1, 1), (1, 1), (0, 0))), np.pad(cov, 1)
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if dy or dx:
+                        c = padded_cov[1+dy:1+dy+h, 1+dx:1+dx+w]
+                        acc += padded[1+dy:1+dy+h, 1+dx:1+dx+w] * c[:, :, None]
+                        cnt += c
+            new = ~cov & (cnt > 0)
+            if not new.any():
+                break
+            px[new] = acc[new] / cnt[new][:, None]
+        img.pixels.foreach_set(px.reshape(-1))
+        img.update()
+
+    def _bake(target):
+        scene.render.bake.view_from = 'ACTIVE_CAMERA'
+        scene.cycles.use_denoising = False
+        with context.temp_override(scene=scene, active_object=target, selected_objects=[target]):
+            bpy.ops.object.bake(type='COMBINED', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
+
+    def _enter_bake(group):
+        for p in group:
+            if not p['obj'].vlmSettings.hide_from_others:
+                indirect_col.objects.unlink(p['obj'])
+            if p['obj'].vlmSettings.bake_mask:
+                render_col.objects.link(p['obj'].vlmSettings.bake_mask)
+
+    def _leave_bake(group):
+        for p in group:
+            if not p['obj'].vlmSettings.hide_from_others:
+                indirect_col.objects.link(p['obj'])
+            if p['obj'].vlmSettings.bake_mask:
+                render_col.objects.unlink(p['obj'].vlmSettings.bake_mask)
+
+    # Phase 1: prepare every unwrapped object once
+    parts = []
     for obj in [obj for obj in bake_col.all_objects if obj.vlmSettings.use_bake]:
-        if obj.vlmSettings.bake_mask:
-            render_col.objects.link(obj.vlmSettings.bake_mask)
-        if not obj.vlmSettings.hide_from_others:
-            indirect_col.objects.unlink(obj)
-        
+        _enter_bake([{'obj': obj}])
+
         # Create a duplicate and apply modifiers since they can generate/modify the UV map
         dup = obj.copy()
         dup.data = dup.data.copy()
-        
-        
-
         render_col.objects.link(dup)
         with context.temp_override(active_object=dup, selected_objects=[dup]):
             for modifier in dup.modifiers:
@@ -891,9 +1192,14 @@ def render_all_groups(op, context):
                     except:
                         logger.info(f'. ERROR {obj.name} has an invalid modifier which was not applied')
             dup.modifiers.clear()
-        
-        elapsed = time.time() - start_time
-        
+        # Own material copies, so joined objects never share an image node (and the source materials stay untouched)
+        mat_copies = []
+        for i, mat in enumerate(dup.data.materials):
+            if mat is not None:
+                mat_copy = mat.copy()
+                dup.data.materials[i] = mat_copy
+                mat_copies.append(mat_copy)
+
         # Render object mask (or load from cache if available)
         mask_scene.render.resolution_y = opt_mask_size
         mask_scene.render.resolution_x = int(opt_mask_size * opt_ar)
@@ -915,58 +1221,35 @@ def render_all_groups(op, context):
             im.alpha_composite(im, (1, 0))
             im.alpha_composite(im, (-1, 0))
         obj_mask = (im.size[0], im.size[1], im.tobytes("raw", "A"))
-        
-        # Bake object for each lighting scenario
-        render_ratio = context.scene.vlmSettings.render_ratio / 100.0
-        bake_img = bpy.data.images.get('Bake')
-        if not bake_img:
-            bake_img = bpy.data.images.new('Bake', int(dup.vlmSettings.bake_width * render_ratio), int(dup.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
-        bake_img_albedo = bpy.data.images.get('Bake_Albedo')
-        if not bake_img_albedo:
-            bake_img_albedo = bpy.data.images.new('Bake_Albedo', int(dup.vlmSettings.bake_width * render_ratio), int(dup.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
-        bake_img_normal = bpy.data.images.get('Bake_Normal')
-        if not bake_img_normal:
-            bake_img_normal = bpy.data.images.new('Bake_Normal', int(dup.vlmSettings.bake_width * render_ratio), int(dup.vlmSettings.bake_height * render_ratio), alpha=True, float_buffer=True)
+
+        # Per object bake images (the joined bake writes each object into its own images)
+        bw, bh = int(dup.vlmSettings.bake_width * render_ratio), int(dup.vlmSettings.bake_height * render_ratio)
+        bake_img = bpy.data.images.new(f'VLM.Bake {obj.name}', bw, bh, alpha=True, float_buffer=True)
+        bake_img_albedo = bpy.data.images.new(f'VLM.Bake_Albedo {obj.name}', bw, bh, alpha=True, float_buffer=True)
+        bake_img_normal = bpy.data.images.new(f'VLM.Bake_Normal {obj.name}', bw, bh, alpha=True, float_buffer=True)
+        own_images = [bake_img, bake_img_albedo, bake_img_normal]
         mask_scene.render.resolution_x = opt_render_width
         mask_scene.render.resolution_y = opt_render_height
         for mat in dup.data.materials:
-            node_uvmap = mat.node_tree.nodes.get("VLM_UVMapNode")
-            if not node_uvmap:
-                node_uvmap = mat.node_tree.nodes.new(type='ShaderNodeAttribute')
-                node_uvmap.attribute_name = 'UVMap'
-                node_uvmap.name = "VLM_UVMapNode"
-
-            ti = mat.node_tree.nodes.get("VLM_BakeImage")
-            if not ti:
-                ti = mat.node_tree.nodes.new("ShaderNodeTexImage")
-                ti.name = "VLM_BakeImage"
-
-            ti_albedo = mat.node_tree.nodes.get("VLM_AlbedoImage")
-            if not ti_albedo:
-                ti_albedo = mat.node_tree.nodes.new("ShaderNodeTexImage")
-                ti_albedo.name = "VLM_AlbedoImage" 
-
-            ti_normal = mat.node_tree.nodes.get("VLM_NormalImage")
-            if not ti_normal:
-                ti_normal = mat.node_tree.nodes.new("ShaderNodeTexImage")
-                ti_normal.name = "VLM_NormalImage"
-
+            if mat is None:
+                continue
+            node_uvmap = mat.node_tree.nodes.new(type='ShaderNodeAttribute')
+            node_uvmap.attribute_name = 'UVMap'
+            node_uvmap.name = "VLM_UVMapNode"
+            ti = mat.node_tree.nodes.new("ShaderNodeTexImage")
+            ti.name = "VLM_BakeImage"
+            ti_albedo = mat.node_tree.nodes.new("ShaderNodeTexImage")
+            ti_albedo.name = "VLM_AlbedoImage"
+            ti_normal = mat.node_tree.nodes.new("ShaderNodeTexImage")
+            ti_normal.name = "VLM_NormalImage"
             ti.image = bake_img
             ti_albedo.image = bake_img_albedo
             ti_normal.image = bake_img_normal
-
-            if not any(link.to_node == ti for link in node_uvmap.outputs[0].links):
-                mat.node_tree.links.new(node_uvmap.outputs[0], ti.inputs[0])
-            
-            if not any(link.to_node == ti_albedo for link in node_uvmap.outputs[0].links):
-                mat.node_tree.links.new(node_uvmap.outputs[0], ti_albedo.inputs[0])
-            
-            if not any(link.to_node == ti_normal for link in node_uvmap.outputs[0].links):
-                mat.node_tree.links.new(node_uvmap.outputs[0], ti_normal.inputs[0])
-
+            mat.node_tree.links.new(node_uvmap.outputs[0], ti.inputs[0])
+            mat.node_tree.links.new(node_uvmap.outputs[0], ti_albedo.inputs[0])
+            mat.node_tree.links.new(node_uvmap.outputs[0], ti_normal.inputs[0])
             mat.node_tree.nodes.active = ti_normal
-
-        dup.data.uv_layers['UVMap'].active = True 
+        dup.data.uv_layers['UVMap'].active = True
 
         render_path_nm = f'{bakepath}NormalMap - Bake - {vlm_utils.clean_filename(obj.name)}.exr'
         normalmap_enabled = bool(dup.vlmSettings.bake_normalmap)
@@ -979,7 +1262,7 @@ def render_all_groups(op, context):
                 try:
                     bake_img_normal = bpy.data.images.load(abs_normal_path, check_existing=True)
                     for mat in dup.data.materials:
-                        ti_normal = mat.node_tree.nodes.get("VLM_NormalImage")
+                        ti_normal = mat.node_tree.nodes.get("VLM_NormalImage") if mat else None
                         if ti_normal:
                             ti_normal.image = bake_img_normal
                     logger.info(f"Baking {obj.name} normal map. - Skipped: cached EXR exists")
@@ -993,21 +1276,9 @@ def render_all_groups(op, context):
                 need_normal_bake = True
 
             if need_normal_bake:
-                elapsed = time.time() - start_time
-                msg = f". Baking '{obj.name}' normal map. Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
-                if elapsed > 0 and n_render_performed > 0:
-                    elapsed_per_render = elapsed / n_render_performed
-                    remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
-                    msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
-                logger.info(msg)
+                logger.info(_progress(f". Baking '{obj.name}' normal map."))
                 if bake_info_group and 'IsNormalMap' in bake_info_group.nodes:
                     bake_info_group.nodes['IsNormalMap'].outputs["Value"].default_value = 1.0
-                scene.render.filepath = render_path_nm
-                scene.render.image_settings.file_format = 'OPEN_EXR'
-                scene.render.image_settings.color_mode = 'RGB'
-                scene.render.image_settings.exr_codec = 'ZIP'
-                scene.render.image_settings.color_depth = '16'
-
                 with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
                     bpy.ops.object.bake(
                         type='NORMAL',
@@ -1019,17 +1290,12 @@ def render_all_groups(op, context):
                         use_selected_to_active=False,
                         use_clear=True
                     )
-
-                # Persist the actual baked image buffer to the Renders cache.
-                # Image.save_render can target the render buffer in some Blender versions;
-                # for baked images use the image datablock's own save() API explicitly.
                 os.makedirs(os.path.dirname(abs_normal_path), exist_ok=True)
                 bake_img_normal.filepath_raw = abs_normal_path
                 bake_img_normal.file_format = 'OPEN_EXR'
                 bake_img_normal.save()
                 if not os.path.isfile(abs_normal_path):
                     raise RuntimeError(f"Normal map bake completed but file was not created: {abs_normal_path}")
-
                 logger.info(f"Saved normal map: {abs_normal_path}")
                 n_render_performed += 1
                 if bake_info_group and 'IsNormalMap' in bake_info_group.nodes:
@@ -1041,18 +1307,14 @@ def render_all_groups(op, context):
         abs_diffuse_path = bpy.path.abspath(render_path_diffuse)
 
         # Albedo is intentionally controlled by the same "Bake Normal" option.
-        # If Bake Normal is disabled, do NOT load, bake, or save an albedo map.
-        # This prevents the diffuse/albedo bake from running independently.
         if not normalmap_enabled:
             logger.info(f"Baking {obj.name} diffuse color (albedo). - Skipped: bake_normalmap is disabled")
             need_diffuse_bake = False
-        # Albedo is also a persistent bake asset. Reuse the cached EXR instead
-        # of baking it again when a render is resumed.
         elif not opt_force_render and os.path.exists(abs_diffuse_path):
             try:
                 bake_img_albedo = bpy.data.images.load(abs_diffuse_path, check_existing=True)
                 for mat in dup.data.materials:
-                    ti_albedo = mat.node_tree.nodes.get("VLM_AlbedoImage")
+                    ti_albedo = mat.node_tree.nodes.get("VLM_AlbedoImage") if mat else None
                     if ti_albedo:
                         ti_albedo.image = bake_img_albedo
                 logger.info(f"Baking {obj.name} diffuse color (albedo). - Skipped: cached EXR exists")
@@ -1066,26 +1328,12 @@ def render_all_groups(op, context):
             need_diffuse_bake = True
 
         if need_diffuse_bake:
-            elapsed = time.time() - start_time
-            msg = f". Baking '{obj.name}' diffuse color (albedo). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
-            if elapsed > 0 and n_render_performed > 0:
-                elapsed_per_render = elapsed / n_render_performed
-                remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
-                msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
-            logger.info(msg)
-
+            logger.info(_progress(f". Baking '{obj.name}' diffuse color (albedo)."))
             if bake_info_group and 'IsDiffuse' in bake_info_group.nodes:
                 bake_info_group.nodes['IsDiffuse'].outputs["Value"].default_value = 1.0
-
-            scene.render.filepath = render_path_diffuse
-            scene.render.image_settings.file_format = 'OPEN_EXR'
-            scene.render.image_settings.color_mode = 'RGB'
-            scene.render.image_settings.exr_codec = 'ZIP'
-            scene.render.image_settings.color_depth = '16'
-
             for mat in dup.data.materials:
-                mat.node_tree.nodes.active = mat.node_tree.nodes.get("VLM_AlbedoImage")
-
+                if mat:
+                    mat.node_tree.nodes.active = mat.node_tree.nodes.get("VLM_AlbedoImage")
             with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
                 set_diffuse_color_pass_enabled(bpy.context.view_layer, True)
                 bpy.ops.object.bake(
@@ -1095,395 +1343,128 @@ def render_all_groups(op, context):
                     use_clear=True,
                     margin=context.scene.vlmSettings.padding
                 )
-
-            # Persist the actual baked image buffer to the Renders cache.
             os.makedirs(os.path.dirname(abs_diffuse_path), exist_ok=True)
             bake_img_albedo.filepath_raw = abs_diffuse_path
             bake_img_albedo.file_format = 'OPEN_EXR'
             bake_img_albedo.save()
             if not os.path.isfile(abs_diffuse_path):
                 raise RuntimeError(f"Albedo bake completed but file was not created: {abs_diffuse_path}")
-
             logger.info(f"Saved albedo: {abs_diffuse_path}")
             logger.info('\n')
             n_render_performed += 1
-
             if bake_info_group and 'IsDiffuse' in bake_info_group.nodes:
                 bake_info_group.nodes['IsDiffuse'].outputs["Value"].default_value = 0.0
 
         for mat in dup.data.materials:
-            mat.node_tree.nodes.active = mat.node_tree.nodes.get("VLM_BakeImage")
+            if mat:
+                mat.node_tree.nodes.active = mat.node_tree.nodes.get("VLM_BakeImage")
 
-        for i, scenario in enumerate(light_scenarios, start=1):
-            name, is_lightmap, light_col, lights = scenario
-            render_path = f'{bakepath}{scenario[0]} - Bake - {vlm_utils.clean_filename(obj.name)}.exr'
-            influence_path = f'{bakepath}{scenario[0]} - Influence - {vlm_utils.clean_filename(obj.name)}.exr'
-            msg = f". Baking '{obj.name}' for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
+        # Park the duplicate outside the scene until it is baked
+        render_col.objects.unlink(dup)
+        _leave_bake([{'obj': obj}])
+        parts.append({'obj': obj, 'dup': dup, 'mask': obj_mask, 'mats': mat_copies, 'img': bake_img,
+                      'img_alb': bake_img_albedo, 'img_nm': bake_img_normal,
+                      'own_images': own_images})
 
-
-            # Light Linking (3.3): preserve the current master behavior, but
-            # resolve CollectionObject membership safely and independently for
-            # receiver and blocker hierarchies.
-            #
-            # The current upstream master intends to copy the source object's
-            # INCLUDE/EXCLUDE state to the temporary bake duplicate. However it
-            # enumerates `all_objects` and then indexes `collection_objects` with
-            # the same integer. Those collections are not index-compatible for
-            # nested collection hierarchies. The upstream blocker branch also
-            # accidentally enumerates the receiver collection.
-            #
-            # Here we keep upstream semantics, while finding every *direct*
-            # membership of the source object below the relevant root. Linking
-            # the duplicate into the same direct owner preserves parent/child
-            # collection states, and copying that direct CollectionObject state
-            # preserves the leaf INCLUDE/EXCLUDE state.
-            light_linking_collections = []
-            light_linking_collection_ptrs = set()
-
-            def _collection_ptr(collection):
-                try:
-                    return collection.as_pointer()
-                except Exception:
-                    return id(collection)
-
-            def _is_direct_member(collection, member_obj):
-                """Blender-safe direct object membership test.
-
-                Collection.objects is a bpy_prop_collection whose __contains__ expects
-                a name string in Blender 4.5/5.x. Passing an Object instance raises
-                TypeError and previously caused every Light Linking lookup to fail.
-                """
-                if collection is None or member_obj is None:
-                    return False
-                objects = getattr(collection, 'objects', None)
-                if objects is None:
-                    return False
-
-                # Fast/API-native path: bpy_prop_collection lookup by object name.
-                try:
-                    found = objects.get(member_obj.name)
-                    if found is member_obj:
-                        return True
-                    if found is not None and getattr(found, 'name', None) == member_obj.name:
-                        return True
-                except Exception:
-                    pass
-
-                # Defensive fallback for API/version differences.
-                try:
-                    return any(candidate is member_obj for candidate in objects)
-                except Exception:
-                    return False
-
-            def _find_direct_owners(root_collection, source_obj):
-                """Return all descendant collections that directly contain source_obj."""
-                if root_collection is None or source_obj is None:
-                    return []
-
-                owners = []
-                visited = set()
-
-                def visit(collection):
-                    ptr = _collection_ptr(collection)
-                    if ptr in visited:
-                        return
-                    visited.add(ptr)
-
-                    if _is_direct_member(collection, source_obj):
-                        owners.append(collection)
-
-                    try:
-                        children = list(collection.children)
-                    except Exception as exc:
-                        logger.warning(
-                            f"Light Linking: unable to inspect child collections of "
-                            f"{getattr(collection, 'name', '<unknown>')!r}: {exc}"
-                        )
-                        children = []
-
-                    for child in children:
-                        visit(child)
-
-                visit(root_collection)
-                return owners
-
-            def _get_collection_object_entry(owner_collection, member_obj):
-                """Resolve a direct CollectionObject entry without all_objects indexing."""
-                if owner_collection is None or member_obj is None:
-                    return None
-
-                collection_objects = getattr(owner_collection, 'collection_objects', None)
-                if collection_objects is None:
-                    return None
-
-                # Blender's bpy_prop_collection normally supports name lookup.
-                # Prefer it because it directly expresses the intended mapping.
-                try:
-                    entry = collection_objects.get(member_obj.name)
-                    if entry is not None:
-                        return entry
-                except Exception:
-                    pass
-
-                # Compatibility fallback: pair only the two *direct membership*
-                # collections, never collection.all_objects.
-                try:
-                    direct_objects = list(owner_collection.objects)
-                    entries = list(collection_objects)
-                except Exception:
-                    return None
-
-                for index, direct_obj in enumerate(direct_objects):
-                    if direct_obj is member_obj:
-                        return entries[index] if index < len(entries) else None
-                return None
-
-            def _read_link_state(owner_collection, source_obj, kind, root_collection):
-                entry = _get_collection_object_entry(owner_collection, source_obj)
-                if entry is None:
-                    logger.warning(
-                        f"Light Linking: {kind} source CollectionObject entry for "
-                        f"{source_obj.name!r} was not found in {owner_collection.name!r} "
-                        f"(root {root_collection.name!r})."
-                    )
-                    return None
-                try:
-                    settings = entry.light_linking
-                    if settings is None:
-                        return None
-                    return settings.link_state
-                except Exception as exc:
-                    logger.warning(
-                        f"Light Linking: could not read {kind.lower()} link_state for "
-                        f"{source_obj.name!r} in {owner_collection.name!r}: {exc}"
-                    )
-                    return None
-
-            def _write_link_state(owner_collection, duplicate_obj, source_state, kind):
-                if source_state is None:
-                    return
-                entry = _get_collection_object_entry(owner_collection, duplicate_obj)
-                if entry is None:
-                    logger.warning(
-                        f"Light Linking: duplicate CollectionObject entry for "
-                        f"{duplicate_obj.name!r} was not found in {owner_collection.name!r}."
-                    )
-                    return
-                try:
-                    settings = entry.light_linking
-                    if settings is None:
-                        logger.warning(
-                            f"Light Linking: duplicate entry for {duplicate_obj.name!r} in "
-                            f"{owner_collection.name!r} has no light_linking settings."
-                        )
-                        return
-                    settings.link_state = source_state
-                except Exception as exc:
-                    logger.warning(
-                        f"Light Linking: could not copy {kind.lower()} link_state for "
-                        f"{duplicate_obj.name!r} in {owner_collection.name!r}: {exc}"
-                    )
-
-            def _link_bake_copy(root_collection, kind):
-                if root_collection is None:
-                    return
-
-                owners = _find_direct_owners(root_collection, obj)
-                if not owners:
-                    return
-
-                for owner_collection in owners:
-                    source_state = _read_link_state(owner_collection, obj, kind, root_collection)
-                    owner_ptr = _collection_ptr(owner_collection)
-
-                    already_linked = _is_direct_member(owner_collection, dup)
-
-                    if not already_linked:
-                        logger.info(
-                            f"Linking light for {obj.name} to {kind} Collection "
-                            f"{root_collection.name} (direct owner: {owner_collection.name}, "
-                            f"state: {source_state if source_state is not None else 'DEFAULT'})"
-                        )
-                        try:
-                            owner_collection.objects.link(dup)
-                        except Exception as exc:
-                            logger.warning(
-                                f"Light Linking: could not link temporary bake copy "
-                                f"{dup.name!r} to {owner_collection.name!r}: {exc}"
-                            )
-                            continue
-
-                        # Only unlink memberships that this scenario created.
-                        if owner_ptr not in light_linking_collection_ptrs:
-                            light_linking_collection_ptrs.add(owner_ptr)
-                            light_linking_collections.append(owner_collection)
-
-                    # A duplicate can already have been linked by another light
-                    # sharing the same collection. Re-applying the same source
-                    # state is harmless and keeps behavior deterministic.
-                    _write_link_state(owner_collection, dup, source_state, kind)
-                    logger.info(
-                        f"Light Linking: {kind} applied for source {obj.name!r} -> "
-                        f"duplicate {dup.name!r} in {owner_collection.name!r} "
-                        f"(emitter root {root_collection.name!r}, state="
-                        f"{source_state if source_state is not None else 'DEFAULT'})"
-                    )
-
-            for light_obj in light_col.all_objects:
-                light_linking = getattr(light_obj, 'light_linking', None)
-                if light_linking is None:
-                    continue
-
-                _link_bake_copy(
-                    getattr(light_linking, 'receiver_collection', None),
-                    'Receiver'
-                )
-                _link_bake_copy(
-                    getattr(light_linking, 'blocker_collection', None),
-                    'Blocker'
-                )
-
-
-            if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)) or not os.path.exists(bpy.path.abspath(influence_path)):
-                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, obj_mask, render_col, [obj])
-                elapsed = time.time() - start_time
-                if elapsed > 0 and n_render_performed > 0:
-                    elapsed_per_render = elapsed / n_render_performed
-                    remaining_render = n_total_render - (n_skipped+n_render_performed+n_existing)
-                    msg = f'{msg}, remaining: {vlm_utils.format_time(remaining_render * elapsed_per_render)} for {remaining_render} renders'
-                if state:
-                    logger.info(msg)
-                    scene.render.filepath = render_path
-                    scene.render.image_settings.file_format = 'OPEN_EXR'
-                    scene.render.image_settings.color_mode = 'RGB' if is_lightmap else 'RGBA'
-                    scene.render.image_settings.exr_codec = 'ZIP' # Lossless compression
-                    scene.render.image_settings.color_depth = '16'
-                    # Bake texture (context needs an active, linked, not hidden, mesh)
-                    with context.temp_override(scene=scene, active_object=dup, selected_objects=[dup]):
-                        scene.render.bake.view_from = 'ACTIVE_CAMERA'
-                        scene.cycles.use_denoising = False
-                        # Load the rendered image (make sure to set the correct path to the rendered image)
-                        bpy.ops.object.bake(type='COMBINED', margin=context.scene.vlmSettings.padding, use_selected_to_active=False, use_clear=True)
-                        #bake_img.save_render(bpy.path.abspath(render_path), scene=scene)                        
-                    
-                    with context.temp_override(scene=temp_denoise_scene):
-                        denoise_file_output_node.format.color_mode = 'RGB' if is_lightmap else 'RGBA'
-                        render_path_denoise = f'{bakepath}{scenario[0]} - Bake - {vlm_utils.clean_filename(obj.name)}'
-                        denoise_image_node.image = bake_img
-
-                        denoise_normal_map_node.image = bake_img_normal
-                        denoise_albedo_map_node.image = bake_img_albedo
-
-                        if bpy.app.version >= (5, 0, 0):
-                            configure_file_output_node_52(
-                                denoise_file_output_node,
-                                socket_name='Image',
-                                directory=os.path.dirname(bpy.path.abspath(render_path_denoise)),
-                                file_name=os.path.basename(render_path_denoise),
-                                file_format='OPEN_EXR',
-                                color_mode='RGB' if is_lightmap else 'RGBA',
-                                color_depth='16',
-                                exr_codec='ZIP',
-                                use_file_extension=False,
-                            )
-                        else:
-                            denoise_file_output_node.base_path = os.path.dirname(bpy.path.relpath(render_path_denoise))
-                            denoise_file_output_node.file_slots[0].path = os.path.basename(bpy.path.relpath(render_path_denoise))
-                        bpy.ops.render.render(use_viewport=False, write_still=False)
-                        # Blender 5.x File Output names vary (e.g. '<name>Image' with no frame number or extension)
-                        denoise_base = bpy.path.abspath(render_path_denoise)
-                        denoise_outs = [c for c in (f'{denoise_base}0001.exr', f'{denoise_base}Image0001.exr', f'{denoise_base}Image.exr', f'{denoise_base}Image', f'{denoise_base}0001') if os.path.isfile(c)]
-                        denoise_out = max(denoise_outs, key=os.path.getmtime) if denoise_outs else f'{denoise_base}0001.exr'
-                        os.replace(denoise_out, f'{denoise_base}.exr')
-                        
-                    restore_func(state)
-                    # Render for influence map
-                    dup2 = dup.copy()
-                    dup2.data = dup2.data.copy()
-                    for poly in dup2.data.polygons:
-                        poly.material_index = 0
-                    dup2.data.materials.clear()
-                    mat = bpy.data.materials.new(name)
-                    mat.use_nodes = True
-                    nodes = mat.node_tree.nodes
-                    nodes.clear()
-                    links = mat.node_tree.links
-                    node_emission = nodes.new('ShaderNodeEmission')
-                    node_transparent = nodes.new('ShaderNodeBsdfTransparent')
-                    node_add = nodes.new('ShaderNodeAddShader')
-                    node_output = nodes.new(type='ShaderNodeOutputMaterial')   
-                    node_tex = nodes.new(type='ShaderNodeTexImage')
-                    node_tex.image = bake_img
-                    node_uvmap = nodes.new(type='ShaderNodeUVMap')
-                    node_uvmap.uv_map = 'UVMap'
-                    links.new(node_uvmap.outputs[0], node_tex.inputs[0])
-                    links.new(node_tex.outputs[0], node_emission.inputs[0])
-                    links.new(node_tex.outputs[1], node_emission.inputs[1])
-                    links.new(node_emission.outputs[0], node_add.inputs[0])
-                    links.new(node_transparent.outputs[0], node_add.inputs[1])
-                    links.new(node_add.outputs[0], node_output.inputs[0])
-                    set_material_surface_render_method(mat, 'BLEND')
-                    dup2.data.materials.append(mat)
-                    mask_scene.render.filepath = influence_path
-                    mask_scene.collection.objects.link(dup2)
-                    mask_scene.render.image_settings.file_format = "OPEN_EXR"
-                    mask_scene.render.image_settings.color_mode = 'RGB'
-                    mask_scene.render.image_settings.exr_codec = 'DWAA'
-                    mask_scene.render.image_settings.color_depth = '16'
-                    bpy.ops.render.render(write_still=True, scene=mask_scene.name)
-                    mask_scene.collection.objects.unlink(dup2)
-                    mask_scene.render.image_settings.file_format = "PNG"
-                    bpy.data.materials.remove(mat)
-                    logger.info('\n')
-                    n_render_performed += 1
-                    with context.temp_override(active_object=dup2, selected_objects=[dup2]):
-                        bpy.ops.object.delete()
-                else:
-                    logger.info(f'{msg} - Skipped (no influence)')
-                    n_skipped += 1
-            else:
-                logger.info(f'{msg} - Skipped since it is already rendered and cached')
+    # Phase 2: bake each lighting scenario, joining the static objects that need it
+    n_joined_bakes = n_single_bakes = 0
+    # a part with a bake mask always bakes alone (its
+    # mask would shadow the other members, and a shared mask cannot be linked twice). scene['vlm_bake_alone'] = comma-separated
+    # object names that bake alone (e.g. transparent parts with other members beneath them: in a joined bake those members are
+    # the same object, so they show through and get baked into it). scene['vlm_joined_bake'] = True turns joining on.
+    join_on = bool(context.scene.get('vlm_joined_bake', False))   # opt-in until the joined-bake rules are settled
+    bake_alone = {n.strip() for n in str(context.scene.get('vlm_bake_alone', '')).split(',') if n.strip()}
+    logger.info(f". Joined bake {'on' if join_on else 'OFF'} (patch 12); always alone: masked parts"
+                + (f" + {sorted(bake_alone)}" if bake_alone else ''))
+    for i, scenario in enumerate(light_scenarios, start=1):
+        name, is_lightmap, light_col, lights = scenario
+        roots = _light_linking_roots(light_col.all_objects)   # dup linking: same lights as upstream
+        own_roots = _light_linking_roots(lights)               # join test: only this scenario's own lights matter
+        todo = []
+        for part in parts:
+            obj = part['obj']
+            render_path = f'{bakepath}{name} - Bake - {vlm_utils.clean_filename(obj.name)}.exr'
+            influence_path = f'{bakepath}{name} - Influence - {vlm_utils.clean_filename(obj.name)}.exr'
+            msg = f". Baking '{obj.name}' for '{name}' ({i}/{n_lighting_situations})."
+            if not opt_force_render and os.path.exists(bpy.path.abspath(render_path)) and os.path.exists(bpy.path.abspath(influence_path)):
+                logger.info(f'{_progress(msg)} - Skipped since it is already rendered and cached')
                 n_existing += 1
-                
-            for light_collection in light_linking_collections:
+            elif not _part_influenced(scenario, part):
+                logger.info(f'{_progress(msg)} - Skipped (no influence)')
+                n_skipped += 1
+            else:
+                todo.append(part)
+        if not todo:
+            continue
+        joinable = [p for p in todo if join_on and p['obj'].name not in bake_alone and not p['obj'].vlmSettings.bake_mask
+                    and not p['obj'].vlmSettings.hide_from_others and not any(_find_direct_owners(root, p['obj']) for root, kind in own_roots)]
+        groups = ([joinable] if len(joinable) > 1 else []) + [[p] for p in todo if p not in joinable or len(joinable) == 1]
+
+        for group in groups:
+            initial_state, prev_world = _setup_bake_lights(scenario)
+            _enter_bake(group)
+            created_link_cols = []
+            temp_meshes = []
+            if len(group) == 1:
+                part = group[0]
+                target = part['dup']
+                render_col.objects.link(target)
+                for root, kind in roots:
+                    _link_bake_copy(root, kind, part['obj'], target, created_link_cols)
+                logger.info(_progress(f". Baking '{part['obj'].name}' for '{name}' ({i}/{n_lighting_situations})."))
+                n_single_bakes += 1
+            else:
+                copies = []
+                for p in group:
+                    c = p['dup'].copy()
+                    c.data = p['dup'].data.copy()
+                    temp_meshes.append(c.data)
+                    render_col.objects.link(c)
+                    copies.append(c)
+                with context.temp_override(scene=scene, view_layer=render_view_layer, active_object=copies[0],
+                                           selected_objects=copies, selected_editable_objects=copies):
+                    bpy.ops.object.join()
+                target = copies[0]
+                target.data.uv_layers['UVMap'].active = True
+                logger.info(_progress(f". Joined bake of {len(group)} objects for '{name}' ({i}/{n_lighting_situations}): {', '.join(p['obj'].name for p in group)}."))
+                n_joined_bakes += 1
+            _bake(target)
+            if len(group) > 1:
+                for p in group:
+                    _fill_image_margin(p['img'], context.scene.vlmSettings.padding)
+            for owner_collection in created_link_cols:
                 try:
-                    if _is_direct_member(light_collection, dup):
-                        light_collection.objects.unlink(dup)
+                    if _is_direct_member(owner_collection, target):
+                        owner_collection.objects.unlink(target)
                 except Exception as exc:
-                    logger.warning(
-                        f"Light Linking cleanup: could not unlink temporary bake object "
-                        f"{dup.name!r} from {getattr(light_collection, 'name', '<unknown>')!r}: {exc}"
-                    )
+                    logger.warning(f"Light Linking cleanup: could not unlink temporary bake object {target.name!r} from {getattr(owner_collection, 'name', '<unknown>')!r}: {exc}")
+            if len(group) == 1:
+                render_col.objects.unlink(target)
+            else:
+                bpy.data.objects.remove(target)
+                for m in temp_meshes:
+                    if m.name in bpy.data.meshes and m.users == 0:
+                        bpy.data.meshes.remove(m)
+            restore_light_setup(initial_state, render_col, lights, scene, prev_world)
+            _leave_bake(group)
+            for p in group:
+                _finish_part(p, scenario)
+                logger.info('\n')
+                n_render_performed += 1
 
-
-        for mat in dup.data.materials:
-            node = mat.node_tree.nodes.get("VLM_UVMapNode")
-            if node:
-                mat.node_tree.nodes.remove(node)
-            node = mat.node_tree.nodes.get("VLM_BakeImage")
-            if node:
-                mat.node_tree.nodes.remove(node)
-            node = mat.node_tree.nodes.get("VLM_AlbedoImage")
-            if node:
-                mat.node_tree.nodes.remove(node)
-            node = mat.node_tree.nodes.get("VLM_NormalImage")
-            if node:
-                mat.node_tree.nodes.remove(node)
-
-        bpy.data.images.remove(bake_img)
-        bpy.data.images.remove(bake_img_albedo)
-        bpy.data.images.remove(bake_img_normal)
-
-        if not obj.vlmSettings.hide_from_others:
-            indirect_col.objects.link(obj)
-
-        if obj.vlmSettings.bake_mask:
-            render_col.objects.unlink(obj.vlmSettings.bake_mask)
-        
-        
-
-        with context.temp_override(active_object=dup, selected_objects=[dup]):
-            bpy.ops.object.delete()
+    # Cleanup of the prepared objects
+    for part in parts:
+        dup_mesh = part['dup'].data
+        bpy.data.objects.remove(part['dup'])
+        if dup_mesh.users == 0:
+            bpy.data.meshes.remove(dup_mesh)
+        for mat in part['mats']:
+            if mat.name in bpy.data.materials:
+                bpy.data.materials.remove(mat)
+        for img in part['own_images']:
+            if img.name in bpy.data.images:
+                bpy.data.images.remove(img)
+    logger.info(f". Unwrapped bakes: {n_joined_bakes} joined bakes and {n_single_bakes} single bakes")
 
     if bake_info_group: bake_info_group.nodes['IsBake'].outputs["Value"].default_value = 0.0
     compositor_trees = []
