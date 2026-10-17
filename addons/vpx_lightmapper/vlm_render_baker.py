@@ -293,6 +293,15 @@ def render_all_groups(op, context):
         if not prop.is_readonly and prop.identifier not in {'rna_type', 'denoiser', ''}:
             setattr(scene.cycles, prop.identifier, getattr(context.scene.cycles, prop.identifier))
     scene.render.engine = 'CYCLES'
+    # run the batch compositor (one Denoise node per lighting scenario, full frame) on the
+    # GPU. On CPU it was ~5 min of a ~6 min 4K pass on a 4K test table while the OptiX render itself took ~20-30 s.
+    # Only the temporary render scene is changed. Off switch: scene['vlm_gpu_denoise'] = False.
+    if context.scene.get('vlm_gpu_denoise', True):
+        for attr, val in (('compositor_device', 'GPU'), ('compositor_denoise_device', 'GPU')):
+            if hasattr(scene.render, attr):
+                setattr(scene.render, attr, val)
+        logger.info(f". Compositor forced to GPU (device={getattr(scene.render, 'compositor_device', '?')}, "
+                    f"denoise={getattr(scene.render, 'compositor_denoise_device', '?')})")
     scene.render.use_border = False
     scene.render.use_crop_to_border = False
     scene.render.resolution_x = opt_render_width
@@ -730,6 +739,10 @@ def render_all_groups(op, context):
 
     temp_denoise_scene = bpy.data.scenes.new(name="VLM.Tmp Denoise Scene")
     set_compositing_enabled(temp_denoise_scene, True)
+    if context.scene.get('vlm_gpu_denoise', True):  # unwrapped-bake denoise on the GPU too
+        for attr, val in (('compositor_device', 'GPU'), ('compositor_denoise_device', 'GPU')):
+            if hasattr(temp_denoise_scene.render, attr):
+                setattr(temp_denoise_scene.render, attr, val)
     denoise_nodetree = get_compositor_tree(temp_denoise_scene, create=True, clear=True)
     denoise_nodes = denoise_nodetree.nodes
     denoise_links = denoise_nodetree.links
