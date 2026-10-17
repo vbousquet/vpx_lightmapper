@@ -202,6 +202,16 @@ def render_nestmaps(op, context):
             if not objects:
                 logger.info(f'. {label}: all objects already completed; skipping.')
                 return
+        # nesting transforms 'UVMap Nested' in place, assuming it still holds the bake UVs.
+        # That is only true right after Meshes; re-running Nestmaps alone nested the already nested UVs a second time.
+        # Always restart the objects about to be nested from a fresh copy of 'UVMap'.
+        for obj in objects:
+            src = obj.data.uv_layers.get('UVMap')
+            dst = obj.data.uv_layers.get('UVMap Nested')
+            if src is not None and dst is not None:
+                uvs = [0.0] * (2 * len(src.data))
+                src.data.foreach_get('uv', uvs)
+                dst.data.foreach_set('uv', uvs)
         resume_index = 0
         if checkpoint_active:
             resume_index = max(0, n_nestmaps)
