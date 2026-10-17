@@ -108,7 +108,87 @@ def get_light_influence_radius(light):
     return (None, None)
 
 
-def get_light_influence(scene, depsgraph, camera, light, group_mask):
+# ---- light-linking aware area of influence ---------------------------------------------------------------------------
+# A light whose light linking receiver collection holds only INCLUDE entries can only light those objects, so:
+#  - it has no influence on a render group / bake object that holds none of its receivers (render skipped),
+#  - its AOI is cropped to the receivers' screen bounds (also gives area lights, which have no radius, an AOI).
+# Lights without light linking (or with EXCLUDE entries) go through the original, unchanged function.
+
+def get_light_receivers(light):
+    """Names of the objects a light-linked light can light, or None when the light is not restricted."""
+    ll = getattr(light, 'light_linking', None)
+    col = getattr(ll, 'receiver_collection', None) if ll else None
+    if col is None:
+        return None
+    names = set()
+    def walk(c):
+        # CollectionObject / CollectionChild entries carry no object reference; they pair by index with
+        # Collection.objects / Collection.children (direct members only)
+        objs, entries = list(c.objects), list(c.collection_objects)
+        if len(objs) != len(entries):
+            return False
+        for o, co in zip(objs, entries):
+            if co.light_linking.link_state != 'INCLUDE':
+                return False
+            names.add(o.name)
+        kids, kentries = list(c.children), list(c.collection_children)
+        if len(kids) != len(kentries):
+            return False
+        for k, cc in zip(kids, kentries):
+            if cc.light_linking.link_state != 'INCLUDE' or not walk(k):
+                return False
+        return True
+    if not walk(col) or not names:
+        return None
+    return names
+
+
+def get_light_influence(scene, depsgraph, camera, light, group_mask, targets=None):
+    """Light-linking aware wrapper of the original AOI computation. targets = objects being rendered/baked."""
+    receivers = get_light_receivers(light)
+    # Opt-in (scene['vlm_light_link_aoi'] = True): the linked receivers still bounce this light onto other objects in Cycles,
+    # and skipping/cropping drops that bounce, so leave it off until a test bake shows it is negligible for the table.
+    if receivers is None or not bpy.context.scene.get('vlm_light_link_aoi', False):
+        return _get_light_influence_orig(scene, depsgraph, camera, light, group_mask)
+    if targets is not None and not any(t.name in receivers for t in targets):
+        return None
+    proj = camera.calc_matrix_camera(depsgraph, x=scene.render.resolution_x, y=scene.render.resolution_y,
+        scale_x=scene.render.pixel_aspect_x, scale_y=scene.render.pixel_aspect_y) @ camera.matrix_world.inverted()
+    xs, ys = [], []
+    for name in receivers:
+        o = bpy.data.objects.get(name)
+        if o is None:
+            continue
+        for corner in o.bound_box:
+            p = project_point(proj, o.matrix_world @ Vector(corner))
+            xs.append(p.x); ys.append(p.y)
+    if not xs:
+        return None
+    m = 0.01
+    box = (max(0, min(xs) - m), min(1, max(xs) + m), max(0, min(ys) - m), min(1, max(ys) + m))
+    base = _get_light_influence_orig(scene, depsgraph, camera, light, None)
+    if base is None:
+        return None
+    aoi = (max(box[0], base[0]), min(box[1], base[1]), max(box[2], base[2]), min(box[3], base[3]))
+    if aoi[1] <= aoi[0] or aoi[3] <= aoi[2]:
+        return None
+    if not group_mask:
+        return aoi
+    w, h, mask = group_mask
+    x0, x1 = int(math.floor(aoi[0] * (w - 1))), int(math.ceil(aoi[1] * (w - 1)))
+    y0, y1 = int(math.floor(aoi[2] * (h - 1))), int(math.ceil(aoi[3] * (h - 1)))
+    bx0, bx1, by0, by1 = w - 1, 0, h - 1, 0
+    for y in range(y0, y1 + 1):
+        row = mask[y * w + x0: y * w + x1 + 1]
+        xs_on = [i for i, v in enumerate(row) if v > 0]
+        if xs_on:
+            bx0, bx1, by0, by1 = min(bx0, x0 + xs_on[0]), max(bx1, x0 + xs_on[-1]), min(by0, y), max(by1, y)
+    if bx0 < bx1 and by0 < by1:
+        return (bx0 / (w - 1), bx1 / (w - 1), by0 / (h - 1), by1 / (h - 1))
+    return None
+
+
+def _get_light_influence_orig(scene, depsgraph, camera, light, group_mask):
     """Compute area of influence of the given light
     If a group mask is provided, the AOI is filtered against it
     The implementation use a 2D ellipsoid influence bound computed by projecting a 3D sphere bound
@@ -181,7 +261,7 @@ def check_min_render_size(scene):
     return True
 
 
-def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_col):
+def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_col, targets=None):
     """Apply a light scenario for rendering, returning the previous state and a lambda to restore it
     """
     name, is_lightmap, light_col, lights = scenario
@@ -198,7 +278,7 @@ def setup_light_scenario(scene, depsgraph, camera, scenario, group_mask, render_
         else:
             influence = None
             for light in lights:
-                light_influence = get_light_influence(scene, depsgraph, camera, light, group_mask)
+                light_influence = get_light_influence(scene, depsgraph, camera, light, group_mask, targets)
                 if light_influence:
                     if influence:
                         min_x, max_x, min_y, max_y = influence
@@ -394,7 +474,7 @@ def render_all_groups(op, context):
                 else:
                     scenario_influence = None
                     for light in lights:
-                        light_influence = get_light_influence(scene, context.view_layer.depsgraph, camera_object, light, group_mask)
+                        light_influence = get_light_influence(scene, context.view_layer.depsgraph, camera_object, light, group_mask, objects)
                         if light_influence:
                             if scenario_influence:
                                 min_x, max_x, min_y, max_y = scenario_influence
@@ -690,7 +770,7 @@ def render_all_groups(op, context):
             name, is_lightmap, light_col, lights = scenario
             render_path = f'{bakepath}{scenario[0]} - Group {group_index}.exr'
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)):
-                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col)
+                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, group_mask, render_col, objects)
                 elapsed = time.time() - start_time
                 msg = f". Rendering group #{group_index+1}/{n_render_groups} ({n_objects} objects) for '{scenario[0]}' ({i}/{n_lighting_situations}). Progress is {((n_skipped+n_render_performed+n_existing)/n_total_render):5.2%}, elapsed: {vlm_utils.format_time(elapsed)}"
                 if elapsed > 0 and n_render_performed > 0:
@@ -1265,7 +1345,7 @@ def render_all_groups(op, context):
 
 
             if opt_force_render or not os.path.exists(bpy.path.abspath(render_path)) or not os.path.exists(bpy.path.abspath(influence_path)):
-                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, obj_mask, render_col)
+                state, restore_func = setup_light_scenario(scene, context.view_layer.depsgraph, camera_object, scenario, obj_mask, render_col, [obj])
                 elapsed = time.time() - start_time
                 if elapsed > 0 and n_render_performed > 0:
                     elapsed_per_render = elapsed / n_render_performed
